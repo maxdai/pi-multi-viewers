@@ -398,15 +398,19 @@ cmd_start() {
     # fork 模式（多视角）：主 pi 触发时（PI_SESSION_ID 存在）解析当前
     # session 文件绝对路径 → protocol.json → 各 agent 首唤 --fork 挂载
     # 主 session 全量上下文。解析不到（手动 shell 跑 wrapper）不传参，
-    # 退化为 legacy 形态。session 目录名编码：/root/x → --root-x--
+    # 退化为 legacy 形态。session 目录名编码（pi config.js）：
+    # "--" + 去首尾斜杠后内斜杠换 "-" + "--"（/root/x → --root-x--）
     local fork_args=()
     if [ -n "${PI_SESSION_ID:-}" ]; then
-        local enc="-${PWD//\//-}-"
+        local tmp="${PWD#/}"; tmp="${tmp%/}"
+        local enc="--${tmp//\//-}--"
         local fork_src
         fork_src="$(ls -t "$HOME/.pi/agent/sessions/$enc/"*"$PI_SESSION_ID".jsonl 2>/dev/null | head -1)"
         if [ -n "$fork_src" ]; then
             fork_args=(--fork-source "$fork_src")
             echo "[start] fork 源：$fork_src"
+        else
+            echo "[start] 警告：未找到主 session 文件（$enc/*_$PI_SESSION_ID.jsonl）——退化 legacy 形态" >&2
         fi
     fi
     if ! "$PYTHON" "$START_DISCUSSION" --dir "$dir_path" --spec "$spec_dir" --max-meeting "$DEFAULT_MAX_MEETING" --max-rr "$DEFAULT_MAX_RR" "${prepare_args[@]+"${prepare_args[@]}"}" "${fork_args[@]+"${fork_args[@]}"}"; then
