@@ -73,8 +73,8 @@ def _each_agent_messages(bare, agents):
     批量读（review5 M3）：git cat-file --batch 一次进程读全部，
     不用每消息一次 git_show（O(n) subprocess）。
     """
-    r = run_git(bare, "ls-tree", "-r", "--name-only", "HEAD", check=False)
-    files = [l.strip() for l in r.stdout.strip().splitlines() if l.strip()]
+    r = run_git(bare, "ls-tree", "-r", "-z", "--name-only", "HEAD", check=False)
+    files = [f for f in r.stdout.rstrip("\0").split("\0") if f]
     msg_files = [f for f in files if is_message_file(f)]
     if not msg_files:
         return {a: [] for a in agents}
@@ -193,7 +193,11 @@ def rr_next_speaker(bare, agents):
     ——原语义），仅 human 场景走逐 commit 回退路径。
     """
     # ① HEAD 是参与者消息 → 原实现语义不变（git log -1，取最后一个消息文件）
-    r = run_git(bare, "log", "-1", "--name-only", "--format=%H", check=False)
+    # --no-quotepath：git log --name-only 默认转义中文路径（quotepath，
+    # 带引号路径 is_message_file 不匹配 → msg_files 空 → next 解析失败
+    # → RR 死锁；2026-09-09 中文视角名实测）
+    r = run_git(bare, "log", "-1", "--name-only", "--format=%H",
+                check=False)
     lines = r.stdout.strip().splitlines()
     files = [l.strip() for l in lines[1:] if l.strip()]
     msg_files = [f for f in files if is_message_file(f)]
@@ -260,8 +264,8 @@ def human_msg_count(bare):
     用途：meeting 配额上限 = max_meeting + human_msg_count（human 每
     发言一次所有 agent 配额 +1，抵消响应消耗——helper 设计 4.1）。
     """
-    r = run_git(bare, "ls-tree", "-r", "--name-only", "HEAD", check=False)
-    files = [l.strip() for l in r.stdout.strip().splitlines() if l.strip()]
+    r = run_git(bare, "ls-tree", "-r", "-z", "--name-only", "HEAD", check=False)
+    files = [f for f in r.stdout.rstrip("\0").split("\0") if f]
     return sum(1 for f in files
                if f.startswith("human/") and is_message_file(f))
 
@@ -453,9 +457,11 @@ def _is_committed(workdir, path):
     status 会把"已提交但被 LLM 覆盖修改"的文件显示为 modified → 被当新
     消息重新提交 → 消息不可变（设计 3.1）被破坏（审核 G3）。
     tracked 文件即使 modified 也拒绝提交。
+    -z：中文路径不带引号转义（2026-09-09 引号 bug——git quotepath 默认
+    转义非 ASCII，引号路径永远不匹配 → 已提交文件被当新文件重复提交）。
     """
-    r = run_git(workdir, "ls-files", "--", path, check=False)
-    return path in r.stdout.split()
+    r = run_git(workdir, "ls-files", "-z", "--", path, check=False)
+    return path in r.stdout.rstrip("\0").split("\0")
 
 
 def _stall_elapsed(bare, agents, last_head, last_head_time, head):
@@ -471,8 +477,9 @@ def _stall_elapsed(bare, agents, last_head, last_head_time, head):
     看到的 HEAD 未变的等待累计"。仅当 bare 存在消息文件（讨论真正开始，
     setup commit 不算）后累计。返回 (累计秒, 新的 last_head, 新的起始时间)。
     """
-    r = run_git(bare, "ls-tree", "-r", "--name-only", "HEAD", check=False)
-    has_msg = any(is_message_file(f) for f in r.stdout.splitlines())
+    r = run_git(bare, "ls-tree", "-r", "-z", "--name-only", "HEAD", check=False)
+    has_msg = any(is_message_file(f)
+                  for f in r.stdout.rstrip("\0").split("\0"))
     if not has_msg:
         return 0.0, head, time.time()   # 讨论未开始（setup 阶段）→ 不累计
     if head == last_head:

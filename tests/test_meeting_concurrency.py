@@ -203,6 +203,39 @@ class TestConcurrency(unittest.TestCase):
                     p.kill()
         return base, bare, procs, all_exit, alive
 
+    def test_chinese_agent_names_converge(self):
+        """中文视角名（viewers 核心）全链路收敛——git quotepath 引号 bug
+        回归（2026-09-09）：ls-files 转义中文路径 → list_my_messages 恒空
+        → is_first 恒真 → 无限首启，讨论永不收敛。此测试确保中文名场景
+        正常走完 freeze 级联 + 收尾。"""
+        agents = ["性能", "可读性"]
+        base, bare, procs, all_exit, alive = self._run_scenario(
+            "chinese", agents, {}, {}, max_meeting=2, max_rr=5, timeout=90)
+        try:
+            self.assertTrue(all_exit, f"进程未退出: {alive}")
+            # 收尾完成：result.md 提交 + 参与者消息都在
+            r = run_git(bare, "show", "HEAD:result.md", check=False)
+            self.assertEqual(r.returncode, 0, "result.md 未提交（讨论未收尾）")
+            files = run_git(bare, "ls-tree", "-r", "-z", "--name-only",
+                            "HEAD").stdout.rstrip("\0").split("\0")
+            from meeting_fs import is_message_file
+            for a in agents:
+                a_files = [f for f in files if f.startswith(f"{a}/")
+                           and is_message_file(f)]
+                self.assertGreaterEqual(len(a_files), 1,
+                                        f"{a} 没有任何消息")
+        finally:
+            # 失败保留现场（2026-09-09 制度化）：断言失败/异常传播时
+            # sys.exc_info() 非空——保留目录 + fake-*.log 供调试；成功才
+            # 清理。不用 unittest 内省（_outcome.result 在 finally 时未
+            # 填充，addCleanup 在共享 result 下累积误判——两次实测）。
+            # 注意：此处不得 return（会吞正在传播的异常 → 假通过）。
+            if sys.exc_info()[0] is not None:
+                print(f"\n[TEST-FAILED] 现场保留: {base}"
+                      f"（含 fake-*.log；调试完手动清理）", flush=True)
+            else:
+                shutil.rmtree(base, ignore_errors=True)
+
     def test_balanced_concurrency(self):
         """场景 1：均衡并发（全体 0.5-3s）——基本并发正确性。"""
         agents = ["a", "b", "c"]
@@ -229,7 +262,16 @@ class TestConcurrency(unittest.TestCase):
             if r.returncode == 0:
                 self.assertNotIn("兜底代写", r.stdout)
         finally:
-            shutil.rmtree(base, ignore_errors=True)
+            # 失败保留现场（2026-09-09 制度化）：断言失败/异常传播时
+            # sys.exc_info() 非空——保留目录 + fake-*.log 供调试；成功才
+            # 清理。不用 unittest 内省（_outcome.result 在 finally 时未
+            # 填充，addCleanup 在共享 result 下累积误判——两次实测）。
+            # 注意：此处不得 return（会吞正在传播的异常 → 假通过）。
+            if sys.exc_info()[0] is not None:
+                print(f"\n[TEST-FAILED] 现场保留: {base}"
+                      f"（含 fake-*.log；调试完手动清理）", flush=True)
+            else:
+                shutil.rmtree(base, ignore_errors=True)
 
     def test_fast_slow_out_of_order(self):
         """场景 2：快慢对比（a 快 0.2-0.8s、b/c 慢 3-5s）——稳定乱序并发。"""
@@ -262,7 +304,16 @@ class TestConcurrency(unittest.TestCase):
                         self.assertIn("type", fm, f"{f} 缺 type")
                         self.assertIn("from", fm, f"{f} 缺 from")
         finally:
-            shutil.rmtree(base, ignore_errors=True)
+            # 失败保留现场（2026-09-09 制度化）：断言失败/异常传播时
+            # sys.exc_info() 非空——保留目录 + fake-*.log 供调试；成功才
+            # 清理。不用 unittest 内省（_outcome.result 在 finally 时未
+            # 填充，addCleanup 在共享 result 下累积误判——两次实测）。
+            # 注意：此处不得 return（会吞正在传播的异常 → 假通过）。
+            if sys.exc_info()[0] is not None:
+                print(f"\n[TEST-FAILED] 现场保留: {base}"
+                      f"（含 fake-*.log；调试完手动清理）", flush=True)
+            else:
+                shutil.rmtree(base, ignore_errors=True)
 
     def test_crash_recovery(self):
         """场景 3：崩溃恢复（a 崩溃率 30%——模拟 OOM 杀 agent）。"""
@@ -287,7 +338,16 @@ class TestConcurrency(unittest.TestCase):
             self.assertEqual(seqs, list(range(1, len(seqs) + 1)),
                              f"崩溃导致消息序号不连续: {a_files}")
         finally:
-            shutil.rmtree(base, ignore_errors=True)
+            # 失败保留现场（2026-09-09 制度化）：断言失败/异常传播时
+            # sys.exc_info() 非空——保留目录 + fake-*.log 供调试；成功才
+            # 清理。不用 unittest 内省（_outcome.result 在 finally 时未
+            # 填充，addCleanup 在共享 result 下累积误判——两次实测）。
+            # 注意：此处不得 return（会吞正在传播的异常 → 假通过）。
+            if sys.exc_info()[0] is not None:
+                print(f"\n[TEST-FAILED] 现场保留: {base}"
+                      f"（含 fake-*.log；调试完手动清理）", flush=True)
+            else:
+                shutil.rmtree(base, ignore_errors=True)
 
 
 if __name__ == "__main__":

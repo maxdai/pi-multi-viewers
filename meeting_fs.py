@@ -18,9 +18,17 @@ import time
 # ---------------------------------------------------------------
 
 def run_git(workdir, *args, check=True, timeout=30):
-    """执行 git 命令。"""
+    """执行 git 命令。
+
+    -c core.quotepath=false：所有输出（log/ls-tree/diff 的路径）原样
+    UTF-8 不带引号转义——中文视角名（viewers 核心）下 quotepath 默认
+    转义会让路径解析全部失效（is_message_file 不匹配带引号路径 → 消息
+    读不到 → 无限首启/RR 死锁，2026-09-09 实测）。一处统一，全部命令
+    生效（各调用点的 -z 双保险）。
+    """
     r = subprocess.run(
-        ["git", *args], cwd=workdir, capture_output=True, text=True, timeout=timeout
+        ["git", "-c", "core.quotepath=false", *args], cwd=workdir,
+        capture_output=True, text=True, timeout=timeout
     )
     if check and r.returncode != 0:
         raise RuntimeError(f"git {args} 失败: out={r.stdout.strip()[:200]!r} err={r.stderr.strip()[:200]!r}")
@@ -69,9 +77,17 @@ def git_push(workdir):
 
 
 def git_ls_files(workdir, agent_dir):
-    """列出某 agent 目录下已提交的消息文件（含序号排序）。"""
-    r = run_git(workdir, "ls-files", agent_dir, check=False)
-    return sorted(r.stdout.strip().splitlines()) if r.stdout.strip() else []
+    """列出某 agent 目录下已提交的消息文件（含序号排序）。
+
+    -z：git 默认转义非 ASCII 路径（quotepath，中文路径输出成
+    "\\346\\200..." 带引号）——中文视角名（viewers 核心）会拿到
+    带引号路径 → read_message 读不到 → list_my_messages 恒空 → is_first
+    恒 True → 无限首启（2026-09-09 实测：freezing 卡死根因）。-z
+    （NUL 分隔）不做引号转义，输出原始 UTF-8 路径。
+    """
+    r = run_git(workdir, "ls-files", "-z", agent_dir, check=False)
+    out = r.stdout.rstrip("\0")
+    return sorted(out.split("\0")) if out else []
 
 
 def git_show(workdir, commit, path):
@@ -265,11 +281,12 @@ def list_new_messages(workdir, since_ref):
     """
     if not since_ref:
         # 无读取点：列出全部消息文件
-        r = run_git(workdir, "ls-tree", "-r", "--name-only", "HEAD", check=False)
-        files = r.stdout.strip().splitlines() if r.stdout.strip() else []
+        r = run_git(workdir, "ls-tree", "-r", "-z", "--name-only", "HEAD", check=False)
+        files = r.stdout.rstrip("\0").split("\0") if r.stdout.strip() else []
     else:
-        r = run_git(workdir, "diff", "--name-only", f"{since_ref}..HEAD", check=False)
-        files = r.stdout.strip().splitlines() if r.stdout.strip() else []
+        r = run_git(workdir, "diff", "-z", "--name-only",
+                    f"{since_ref}..HEAD", check=False)
+        files = r.stdout.rstrip("\0").split("\0") if r.stdout.strip() else []
     # 只保留消息文件（作者目录/NNNN.md）
     return [f for f in files if is_message_file(f)]   # P7：统一（L8 漏 fs 这处）
 
@@ -301,8 +318,10 @@ def new_messages_with_meta(workdir, since_ref, me=None):
             # 注意：作者写消息时取 seen_at，自身 commit 紧随其后——自身 commit
             # 不算"后续更新"。判定：seen_at..HEAD 的 diff 中，除本消息外还有
             # 其他消息文件（别人的新消息或更新）→ stale。
-            r = run_git(workdir, "diff", "--name-only", f"{seen}..HEAD", check=False)
-            changed = r.stdout.strip().splitlines() if r.stdout.strip() else []
+            r = run_git(workdir, "diff", "-z", "--name-only",
+                        f"{seen}..HEAD", check=False)
+            changed = (r.stdout.rstrip("\0").split("\0")
+                       if r.stdout.strip() else [])
             others = [f for f in changed
                       if is_message_file(f) and f != p]
             stale = bool(others)
@@ -318,8 +337,13 @@ def new_messages_with_meta(workdir, since_ref, me=None):
 
 
 def is_message_file(path):
-    """判断路径是否为消息文件（作者/NNNN.md）。"""
-    return bool(re.match(r"^[a-z]+/\d{4}\.md$", path))
+    """判断路径是否为消息文件（作者/NNNN.md）。
+
+    作者目录不限 ASCII：viewers 中文视角名是产品核心（可读性/性能/…）。
+    约束对齐 agent 名校验（禁 / 与空白；目录名不匹配即非消息文件——
+    human/、protocol.json 等天然排除）。
+    """
+    return bool(re.match(r"^[^/\s]+/\d{4}\.md$", path))
 
 
 def parse_log_nameonly(output):

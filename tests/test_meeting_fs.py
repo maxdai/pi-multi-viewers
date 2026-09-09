@@ -268,11 +268,15 @@ class TestMessages(unittest.TestCase):
         self.assertTrue(is_message_file("a/0001.md"))
         self.assertTrue(is_message_file("human/0001.md"))
         self.assertTrue(is_message_file("ab/0001.md"))  # 多字母目录合法
+        # 目录名对齐 agent 名校验（2026-09-09）：viewers 中文视角名合法；
+        # 禁 / 与空白——A/数字开头同样合法（校验只拦空名/分隔符/空白/超长）
+        self.assertTrue(is_message_file("A/0001.md"))
+        self.assertTrue(is_message_file("1a/0001.md"))
+        self.assertTrue(is_message_file("性能/0001.md"))
         self.assertFalse(is_message_file("a/README.md"))
         self.assertFalse(is_message_file("a/0001.txt"))
-        self.assertFalse(is_message_file("A/0001.md"))   # 大写不合法
         self.assertFalse(is_message_file("a/12345.md"))  # 5 位
-        self.assertFalse(is_message_file("1a/0001.md"))  # 数字开头不合法
+        self.assertFalse(is_message_file("a b/0001.md"))  # 空白非法
 
     def test_parse_log_nameonly(self):
         c1 = "0123456789abcdef0123456789abcdef01234567"  # 40 hex
@@ -440,3 +444,54 @@ class TestBootstrap(unittest.TestCase):
             p, _ = build_bootstrap(out, "/p")
             h = json.loads(open(out).readline())
             self.assertRegex(h["id"], r"^[0-9a-f-]{36}$")
+
+class TestChineseAgentPaths(unittest.TestCase):
+    """中文 agent 名 + git 路径（2026-09-09 引号 bug 回归）。
+
+    git ls-files 默认 quotepath 转义非 ASCII（输出 "\\346\\200..."
+    带引号）→ 带引号路径读不到文件 → list_my_messages 恒空 → is_first
+    恒 True → 无限首启 + 配额绕过（freezing 卡死根因，e2e6 实测）。
+    修复：ls-files 加 -z（NUL 分隔不做转义）。viewers 模式中文视角名
+    是产品核心，此测试防潜伏回归。
+    """
+
+    def _mk_env(self):
+        tmp = tempfile.mkdtemp(prefix="cn-")
+        work = os.path.join(tmp, "work")
+        os.makedirs(os.path.join(work, "性能"))
+        # work 需要是真 git 仓库（git_ls_files 操作它）
+        subprocess.run(["git", "init", "-q"], cwd=work, check=True)
+        subprocess.run(["git", "config", "user.name", "t"], cwd=work)
+        subprocess.run(["git", "config", "user.email", "t@t"], cwd=work)
+        # 提交一条中文路径消息
+        msg = os.path.join(work, "性能", "0001.md")
+        with open(msg, "w") as f:
+            f.write("---\nfrom: 性能\ntype: message\n---\n\n正文\n")
+        subprocess.run(["git", "add", "-A"], cwd=work, check=True)
+        subprocess.run(["git", "commit", "-qm", "discuss: 性能/0001"], cwd=work)
+        return tmp, work
+
+    def test_list_my_messages_chinese(self):
+        tmp, work = self._mk_env()
+        try:
+            msgs = list_my_messages(work, "性能")
+            self.assertEqual(len(msgs), 1)
+            self.assertEqual(msgs[0]["from"], "性能")
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_next_msg_id_chinese(self):
+        tmp, work = self._mk_env()
+        try:
+            self.assertEqual(next_msg_id(work, "性能"), "0002")
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_is_committed_chinese(self):
+        tmp, work = self._mk_env()
+        try:
+            from meeting_engine import _is_committed
+            self.assertTrue(_is_committed(work, "性能/0001.md"))
+            self.assertFalse(_is_committed(work, "性能/0002.md"))
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
