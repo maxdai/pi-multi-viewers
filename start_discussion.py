@@ -420,6 +420,32 @@ def _discover_viewers(viewers_dir):
     return names, briefs
 
 
+def resolve_fork_source():
+    """从主 pi 环境（PI_SESSION_ID）解析当前 session 文件绝对路径
+    （fork-only 启动必需，2026-09-09 从 wrapper 收归——session 文件发现
+    逻辑与 _detect_pi_model_thinking 同款路径约定）。
+
+    sessions 目录编码 = "--" + 去首尾斜杠内斜杠换 "-" + "--"。
+    返回 (fork_source 或 None, error)——PI_SESSION_ID 未注入/文件缺失
+    都是明确错误（fork-only 无静默退化）。
+    """
+    sid = os.environ.get("PI_SESSION_ID") or ""
+    if not sid:
+        return None, ("错误: PI_SESSION_ID 未注入——多视角分析必须在主 pi "
+                      "session 内经 wrapper 启动（见 README 环境要求）")
+    enc = "--" + os.getcwd().strip("/").replace("/", "-") + "--"
+    sdir = os.path.join(PI_AGENT_DIR, "sessions", enc)
+    try:
+        cands = sorted(f for f in os.listdir(sdir) if f.endswith(".jsonl"))
+    except OSError:
+        cands = []
+    hits = [f for f in cands if sid in f]
+    if not hits:
+        return None, (f"错误: 未找到主 session 文件（{enc}/*_{sid}.jsonl）"
+                      "——fork-only 模式必须挂载主 session")
+    return os.path.join(sdir, hits[-1]), None
+
+
 def _snapshot_viewers(spec_dir, viewers_dir):
     """viewers 校验（prepare 时点）+ 快照进 spec/agents/（单一事实源：
     所有视角都源自 viewers/，spec agents/ = 本场快照，可按场修改，
@@ -649,6 +675,10 @@ def setup_environment(args, participants, base, spec_dir=None,
                 "thinking": mv[1] if mv[1] else "max",
                 "prompt_file": f".pi/agent/{p}.md",
             }, f, indent=2, ensure_ascii=False)
+        # （.pi/settings.json 屏蔽已移除——用户 2026-09-09 判定：fork-only
+        # 后 agent cwd=主项目，work 内项目级 settings 不会被任何 pi 进程
+        # 读取，是死产物；多视角语义下上下文工具激活是特性。.pi 目录
+        # 保留 .pi/agent/<p>.md——视角任务书，prompt_file 注入源）
         with open(os.path.join(TPL_DIR, "gitignore.tpl")) as gtf:
             gitignore = gtf.read()
         with open(os.path.join(workdir, ".gitignore"), "w") as f:
@@ -670,7 +700,8 @@ def setup_environment(args, participants, base, spec_dir=None,
     for p in participants[1:]:
         workdir = os.path.join(base, f"work-{p}")
         local_files = {}
-        for rel in ["AGENTS.md", ".gitignore", f".pi/agent/{p}.md", "pi-agent.json"]:
+        for rel in ["AGENTS.md", ".gitignore", f".pi/agent/{p}.md",
+                    "pi-agent.json"]:
             fp = os.path.join(workdir, rel)
             if os.path.exists(fp):
                 with open(fp) as fh:
@@ -769,6 +800,27 @@ def check_status(base):
     return "stopped", None
 
 
+def _parse_agents(agents_arg):
+    """--agents 解析（唯一实现，2026-09-09 从 wrapper 收归）：
+    None → []；纯数字 n → a..（第 n 个字母）；逗号分隔 → 名称列表
+    （去空白、滤空段）。数字下限 2（meeting 至少两个 LLM agents）。
+    返回 (participants, error)。
+    """
+    if agents_arg is None:
+        return [], None
+    if agents_arg.isdigit():
+        n = int(agents_arg)
+        if n < 2:
+            return None, "错误: agents 数量至少为 2（meeting 至少两个 LLM agents）"
+        if n > 26:
+            return None, "错误: agents 数量最多 26（a..z）"
+        return [chr(97 + i) for i in range(n)], None
+    participants = [a.strip() for a in agents_arg.split(",") if a.strip()]
+    if "human" in participants:
+        return None, _check_reserved(participants)
+    return participants, None
+
+
 def main():
     parser = argparse.ArgumentParser(description="Meeting 模式讨论环境")
     parser.add_argument("--dir",
@@ -802,14 +854,16 @@ def main():
     parser.add_argument("--wait", action="store_true", help="阻塞直到讨论完成")
     args = parser.parse_args()
 
-    participants = ([a.strip() for a in args.agents.split(",") if a.strip()]
-                    if args.agents else [])
+    participants, agents_err = _parse_agents(args.agents)
+    if agents_err:
+        print(agents_err)
+        sys.exit(1)
     try:
         args.stances = json.loads(args.stances) if args.stances else None
         args.models = json.loads(args.models) if args.models else None
     except ValueError as e:
         print(f"错误: JSON 参数解析失败: {e}（--stances/--models 需合法 JSON）")
-        return
+        sys.exit(1)
     args.questions = args.questions.split("|") if args.questions else None
 
     # --spec-gen 直接带目录位置参数（--spec-gen myspec/，不需 --dir/--spec）
@@ -832,7 +886,7 @@ def main():
     # 其他模式必须 --dir（讨论运行目录）
     if not args.dir:
         print("错误: 需要 --dir（讨论运行目录；--spec-gen 不需要）")
-        return
+        sys.exit(1)
     # --dir 语义分场景（2026-09-03 修正）：
     # 创建模式（--dir 裸名 + 非消费标志）：快捷命名 → cwd/discussion-<name>
     # 消费模式（--cleanup/--status/--wait/--skip-setup，操作已存在目录）：
@@ -980,12 +1034,14 @@ def main():
             print(f"错误: resultWriter {args.result_writer} 不在参与者 {participants} 中")
             return
         # fork-only（2026-09-09 定）：创建必须携带主 session 文件——无
-        # fork 上下文的多视角分析违背产品本质，明确报错而非静默退化
+        # fork 上下文的多视角分析违背产品本质，明确报错而非静默退化。
+        # --fork-source 未显式传 → 从主 pi 环境（PI_SESSION_ID）自动解析
+        # （收归 python：与 models 探测同款路径约定）
         if not args.fork_source:
-            print("错误: 缺少 --fork-source（多视角模式必须挂载主 session）——"
-                  "在主 pi session 内经 wrapper 启动会自动解析；"
-                  "无 session 时先在项目目录跑一次 pi --print 造引导 session")
-            return
+            args.fork_source, fork_err = resolve_fork_source()
+            if fork_err:
+                print(fork_err)
+                sys.exit(1)
         # 无 spec 时创建必须给 --topic（否则是无效的 --start 单独用）
         if not args.spec and not args.topic:
             print("错误: 需要 --topic（或使用 --skip-setup 启动已有环境）")

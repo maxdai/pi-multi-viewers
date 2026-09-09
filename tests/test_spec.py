@@ -416,6 +416,10 @@ class TestSpecSetup(unittest.TestCase):
             proto = json.load(open(os.path.join(base, "work-a/protocol.json")))
             self.assertEqual(proto["participants"], ["a", "b", "c"])
             self.assertEqual(proto["resultWriter"], "c")
+            # .pi/settings.json 屏蔽已移除（fork-only 后无 pi 进程读 work
+            # 内项目级 settings；用户 2026-09-09 判定）
+            self.assertFalse(os.path.exists(
+                os.path.join(base, "work-a/.pi/settings.json")))
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 

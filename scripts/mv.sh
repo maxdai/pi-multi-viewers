@@ -187,24 +187,8 @@ cmd_prepare() {
     done
     [ -n "$topic" ] || fail "问题不能为空"
 
-    # 数字 → 生成 a..<n> 名称列表（显式 --agents 时）
-    if [[ "$agents_list" =~ ^[0-9]+$ ]]; then
-        local n="$agents_list" name="" list=""
-        [ "$n" -ge 2 ] || fail "agents 数量至少为 2（meeting 至少两个 LLM agents）"
-        [ "$n" -le 26 ] || fail "agents 数量最多 26（a..z）"
-        for ((i = 0; i < n; i++)); do
-            name=$(printf "\\$(printf '%03o' $((97 + i)))")
-            list="${list:+$list,}$name"
-        done
-        agents_list="$list"
-    fi
-    local agents_lines agents_name
-    if [ -n "$agents_list" ]; then
-        agents_lines="$(echo "$agents_list" | tr ',' '\n' | sed '/^[[:space:]]*$/d')"
-        for agents_name in $agents_lines; do
-            [ "$agents_name" != "human" ] || fail "human 是保留名，不能作为参与者"
-        done
-    fi
+    # agents 解析（数字展开/human/名字校验）全部收归 python
+    # _parse_agents（2026-09-09 结构收敛：bash = 调度与展示）
     # viewers 模式（无 --agents）：校验 + 快照已全部移入 python
     # _snapshot_viewers（铁律 1 职责边界；用户 2026-09-09：不合规根本
     # 不应该开始 spec-gen，校验在骨架生成之前失败）
@@ -255,67 +239,12 @@ cmd_start() {
     dir_name="${dir_name}-${stamp}"
     local dir_path="$PWD/$dir_name"
 
-    # 第 1 步：创建分析环境（不启动）
-    # fork 模式（多视角）：主 pi 触发时（PI_SESSION_ID 存在）解析当前
-    # session 文件绝对路径 → protocol.json → 各 agent 首唤 --fork 挂载
-    # 主 session 全量上下文。解析不到（手动 shell 跑 wrapper）不传参，
-    # 退化为 legacy 形态。session 目录名编码（pi config.js）：
-    # "--" + 去首尾斜杠后内斜杠换 "-" + "--"（/root/x → --root-x--）
-    local fork_args=()
-    if [ -n "${PI_SESSION_ID:-}" ]; then
-        local tmp="${PWD#/}"; tmp="${tmp%/}"
-        local enc="--${tmp//\//-}--"
-        local fork_src
-        fork_src="$(ls -t "$HOME/.pi/agent/sessions/$enc/"*"$PI_SESSION_ID".jsonl 2>/dev/null | head -1)"
-        if [ -n "$fork_src" ]; then
-            fork_args=(--fork-source "$fork_src")
-            echo "[start] fork 源：$fork_src"
-        else
-            fail "未找到主 session 文件（$enc/*_$PI_SESSION_ID.jsonl）——fork-only 模式必须挂载主 session（无 session 时先在项目目录跑一次 pi --print 造引导 session）"
-        fi
-    else
-        fail "PI_SESSION_ID 未注入——多视角分析必须在主 pi session 内经 wrapper 启动（见 README 环境要求）"
-    fi
-    if ! "$PYTHON" "$START_DISCUSSION" --dir "$dir_path" --spec "$spec_dir" --max-meeting "$DEFAULT_MAX_MEETING" --max-rr "$DEFAULT_MAX_RR" "${fork_args[@]+"${fork_args[@]}"}"; then
+    # fork 源解析已收归 python（resolve_fork_source：env + sessions 编码
+    # glob，2026-09-09 结构收敛；解析失败 python 内部报错退出）
+    # 第 1 步：创建分析环境（不启动；fork 源自动解析）
+    if ! "$PYTHON" "$START_DISCUSSION" --dir "$dir_path" --spec "$spec_dir" --max-meeting "$DEFAULT_MAX_MEETING" --max-rr "$DEFAULT_MAX_RR"; then
         fail "环境创建失败，请查看上方输出"
     fi
-
-    # 第 2 步：在每个 work 目录写入项目级 .pi/settings.json，屏蔽 magic-context 和 aft
-    # （pi config 权威写法：项目 delta = {source, autoload:false} + 资源
-    # patterns 逐文件禁用——两包各只有 1 个扩展 dist/index.js → "-dist/index.js"。
-    # 实测 2026-09-03 两次纠错：① 原 autoload:false 无 patterns = delta 空
-    # 操作（用户级包照常全量加载，aft 进程照常 spawn）② 无 autoload:false
-    # 的资源 [] 形态 = project wins → 触发项目级 npm install 到 .pi/npm
-    # （每 work 一次 install magic-context）。delta 不装项目副本）
-    # 注：fork 模式（--fork-source 传入，agent cwd=主项目）下此文件
-    # 不生效（pi 读的是主项目 .pi/settings.json）——保留仅为 legacy
-    # 形态兼容；多视角产品语义下上下文工具激活是特性，非问题。
-    local agent
-    # agents 列表来自 spec（--agents 参数化后不能硬编码 a b c——
-    # 自定义数量/名称时硬编码会漏写 work-d/work-x 的 settings，
-    # 2026-09-03 顺手修复）
-    for agent in $(cat "$spec_dir/agents/.order" 2>/dev/null); do
-        local workdir="$dir_path/work-$agent"
-        if [ -d "$workdir" ]; then
-            mkdir -p "$workdir/.pi"
-            cat > "$workdir/.pi/settings.json" <<'SETTINGS_EOF'
-{
-  "packages": [
-    {
-      "source": "npm:@cortexkit/pi-magic-context",
-      "autoload": false,
-      "extensions": ["-dist/index.js"]
-    },
-    {
-      "source": "npm:@cortexkit/aft-pi",
-      "autoload": false,
-      "extensions": ["-dist/index.js"]
-    }
-  ]
-}
-SETTINGS_EOF
-        fi
-    done
 
     # 临时 spec 已被消费，删除
     rm -rf "$spec_dir"

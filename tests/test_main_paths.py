@@ -110,12 +110,14 @@ class TestStartDiscussionMain(unittest.TestCase):
     """start_discussion.main：命令分发。"""
 
     def test_main_requires_dir(self):
-        """无 --dir 且非 --spec-gen → 打印错误并返回（main 用 return 非 sys.exit）。"""
+        """无 --dir 且非 --spec-gen → 打印错误并 sys.exit(1)（CLI 错误语义
+        统一非零退出码，wrapper || 可捕获——2026-09-09 收敛）。"""
         import start_discussion as sd
         with mock.patch("sys.argv", ["start_discussion.py"]):
             with mock.patch("builtins.print") as p:
-                rc = sd.main()
-            self.assertIsNone(rc)
+                with self.assertRaises(SystemExit) as cm:
+                    sd.main()
+            self.assertEqual(cm.exception.code, 1)
             p.assert_any_call(mock.ANY)
 
     def test_main_status_dispatches(self):

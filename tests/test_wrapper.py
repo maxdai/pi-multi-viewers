@@ -62,7 +62,8 @@ class TestPrepare(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             r = run_wrapper(["--prepare", "T", "--agents", "a,human"], cwd=tmp)
             self.assertNotEqual(r.returncode, 0)
-            self.assertIn("human 是保留名", r.stderr + r.stdout)
+            self.assertIn("human", r.stderr + r.stdout)
+            self.assertIn("保留名", r.stderr + r.stdout)
 
     def test_prepare_no_topic(self):
         r = run_wrapper(["--prepare"])
