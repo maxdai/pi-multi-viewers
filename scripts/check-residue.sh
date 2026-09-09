@@ -22,6 +22,20 @@ WHITELIST=(
     "/root/.dsh"
 )
 
+# 测试引导 session 登记日志（meeting_fs.build_bootstrap 每次创建追加）：
+# 报告对照此日志标注归属——已登记 = 本流程测试产物（可删）；未登记 =
+# 非本流程创建（真实会话，勿删）。不靠人猜（2026-09-09 用户：建立时
+# 记录 log 才方便回查，人工确认是推卸责任）。
+REGISTRY="$HOME/.pi/pi-multi-viewers-test-sessions.log"
+is_registered() {
+    # $1 = session 文件路径；按 header 的 session_id 对照登记日志
+    # （build_bootstrap 登记 id；文件路径会因 --session 续写/复制变化，
+    # id 才是稳定标识）。登记过 = 本流程测试产物。
+    local sid
+    sid=$(head -1 "$1" | python3 -c "import json,sys; print(json.loads(sys.stdin.readline()).get('id',''))" 2>/dev/null)
+    [ -n "$sid" ] && grep -q "\"session_id\": \"$sid\"" "$REGISTRY" 2>/dev/null
+}
+
 RESIDUE=0
 
 say() { [ "$1" = "--verbose" ] || [ -n "$VERBOSE" ] && echo "$2"; }
@@ -48,9 +62,15 @@ for d in "$SESS_DIR"/*/; do
             esac
         done
         if [ "$whitelisted" = "0" ]; then
-            # 附判断依据（防误删，2026-09-09）：首条 user 消息摘要 +
-            # 创建时间——人一眼分辨"测试引导（就绪/测试字样）" vs 真实
-            # 会话。检查器永远只读不删；误报时把 cwd 加白名单即可。
+            # 归属判定（2026-09-09）：登记日志回查——已登记=测试产物
+            # （可删），未登记=非本流程创建（勿删，提示加白名单）。
+            # 首条消息摘要仅作补充信息（不再作为删除判断依据）。
+            if is_registered "$f"; then
+                owner="[已登记-测试产物，可删]"
+            else
+                owner="[未登记-非本流程创建，勿删]"
+                RESIDUE=1
+            fi
             first_user=$(python3 -c "
 import json, sys
 try:
@@ -64,10 +84,9 @@ try:
 except Exception:
     print('')
 " 2>/dev/null)
-            echo "[残留-1] session（24h 内 cwd=$cwd，创建 $(stat -c %y "$f" | cut -d. -f1)）"
+            echo "[残留-1] session（24h 内 cwd=$cwd，创建 $(stat -c %y "$f" | cut -d. -f1)）$owner"
             echo "        首条消息: ${first_user:-（无 user 消息）}"
             echo "        路径: $f"
-            RESIDUE=1
         fi
     done
 done

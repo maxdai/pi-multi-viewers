@@ -445,6 +445,22 @@ class TestBootstrap(unittest.TestCase):
             h = json.loads(open(out).readline())
             self.assertRegex(h["id"], r"^[0-9a-f-]{36}$")
 
+    def test_registry_logged(self):
+        """创建即登记（防误删，2026-09-09）：登记日志含 id/path/cwd。"""
+        import meeting_fs
+        orig = meeting_fs.SESSION_REGISTRY
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                meeting_fs.SESSION_REGISTRY = os.path.join(tmp, "reg.log")
+                out = os.path.join(tmp, "b.jsonl")
+                meeting_fs.build_bootstrap(out, "/p", session_id="reg-1")
+                rec = json.loads(open(os.path.join(tmp, "reg.log")).readline())
+                self.assertEqual(rec["session_id"], "reg-1")
+                self.assertEqual(rec["path"], out)
+                self.assertEqual(rec["cwd"], "/p")
+        finally:
+            meeting_fs.SESSION_REGISTRY = orig
+
 class TestChineseAgentPaths(unittest.TestCase):
     """中文 agent 名 + git 路径（2026-09-09 引号 bug 回归）。
 

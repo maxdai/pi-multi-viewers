@@ -429,6 +429,30 @@ def build_active_fork_source(src_session, out_path, new_id, new_cwd):
             f.write(json.dumps(e, ensure_ascii=False) + "\n")
     return len(active) + 1, None
 
+# 测试引导 session 登记日志（防误删，用户 2026-09-09）：每个测试/脚本
+# 引导 session 创建时登记一行——清理时回查日志确认"是我建的测试产物"
+# 才删，未登记 = 非本流程创建（真实会话），不得删。路径与
+# scripts/check-residue.sh 的对照逻辑共享。
+SESSION_REGISTRY = os.path.join(
+    os.path.expanduser("~/.pi"), "pi-multi-viewers-test-sessions.log")
+
+
+def _registry_log(session_id, out_path, cwd):
+    """登记一条测试引导 session 记录（追加）。"""
+    from datetime import datetime, timezone
+    rec = {
+        "created": datetime.now(timezone.utc).isoformat(),
+        "session_id": session_id,
+        "path": os.path.abspath(out_path),
+        "cwd": cwd,
+    }
+    try:
+        with open(SESSION_REGISTRY, "a", encoding="utf-8") as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    except OSError:
+        pass  # 登记失败不阻塞引导创建（清理时该条会显示未登记 → 不删，安全侧）
+
+
 def build_bootstrap(out_path, cwd, session_id=None):
     """生成空白引导 session 文件（零 LLM，替代 pi --print "就绪"）。
 
@@ -436,6 +460,8 @@ def build_bootstrap(out_path, cwd, session_id=None):
     个合法 fork 源。空 header + 零 message——agent 首唤 --session 打开后
     第一条 user 消息就是 wake prompt（任务描述，无"就绪"噪音 turn）。
     冒烟实测：仅 header 的文件可被 pi --session 正常打开续写。
+
+    每次创建写登记日志（SESSION_REGISTRY）——清理回查归属（防误删）。
 
     返回 (out_path, error)。
     """
@@ -451,4 +477,5 @@ def build_bootstrap(out_path, cwd, session_id=None):
             f.write(json.dumps(header, ensure_ascii=False) + "\n")
     except OSError as e:
         return None, f"引导 session 写入失败: {e}"
+    _registry_log(sid, out_path, cwd)
     return out_path, None
