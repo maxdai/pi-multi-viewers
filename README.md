@@ -26,8 +26,9 @@
 或命令行：
 
 # 一次性准备：项目 cwd 下建 viewers/（稳定视角资产，文件名即 agent 名）
-mkdir -p viewers
-echo "你的所有观点必须从性能角度出发……其它视角由别的参与者负责，你不要越界展开。" > viewers/性能.md
+# 本仓库自带示范（viewers/性能.md + viewers/可读性.md——措辞经首次实验验证，
+# 两个视角刻意对立：性能与可读性会产生真实交锋）。在新项目里照此建自己的。
+ls viewers/
 
 # 每次：生成主题骨架（不需要 --agents——启动时自动发现 viewers/*.md）
 scripts/mv.sh --prepare "<主题>"              # spec = question.md(+background.md)
