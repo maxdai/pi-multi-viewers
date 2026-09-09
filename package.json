@@ -1,0 +1,28 @@
+{
+  "name": "pi-multi-viewers",
+  "version": "0.1.0",
+  "description": "Multi-perspective analysis for Pi: fork the main session into N perspective agents over the meeting protocol.",
+  "type": "module",
+  "private": false,
+  "license": "MIT",
+  "pi": {
+    "prompts": [
+      "./prompts"
+    ]
+  },
+  "files": [
+    "scripts",
+    "*.py",
+    "templates",
+    "prompts",
+    "README.md",
+    "docs/examples"
+  ],
+  "keywords": [
+    "pi",
+    "multi-perspective",
+    "multi-agent",
+    "session-fork",
+    "analysis"
+  ]
+}

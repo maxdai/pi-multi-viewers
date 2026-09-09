@@ -220,7 +220,7 @@ def gen_agens_md(args, agent, participants, spec_background=None,
     )
     if not main_pi_cwd:
         # 手动场景不注入 cwd 节（隐藏，不写占位）
-        out = out.replace("\n## 主 pi 工作目录\n\n讨论环境的主 pi 在 `（未提供）` 目录运行。与该目录相关的信息\n（源码、文档、配置）可在其中查找：如有需要可查看相关文件以获取\n比本背景更详细的信息。\n", "")
+        out = out.replace("\n## 主 pi 工作目录\n\n分析环境的主 pi 在 `（未提供）` 目录运行。与该目录相关的信息\n（源码、文档、配置）可在其中查找：如有需要可查看相关文件以获取\n比本背景更详细的信息。\n", "")
     return out
 
 

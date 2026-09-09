@@ -1,17 +1,15 @@
 #!/usr/bin/env bash
 #
-# pi-agents-helper wrapper（pi-meeting 的 human 通道版本）
+# pi-multi-viewers wrapper——多视角协同分析（fork 主 session + meeting 协议）
 #
 # 用法：
-#   ./scripts/discuss.sh --prepare "<问题>" [--background "<背景>"]
-#   ./scripts/discuss.sh --start <spec目录>
-#   ./scripts/discuss.sh --status <dir>
-#   ./scripts/discuss.sh --wait <dir>
-#   ./scripts/discuss.sh --cleanup <dir>
-#   ./scripts/discuss.sh --view <dir> [--since <ref>]     # human-viewer 封装
-#   ./scripts/discuss.sh --say <dir> "<文本>"              # human-sayer 封装
-#
-# 设计文档：docs/pi-helper-design.md（§5.1.2 主 pi 代理形态）
+#   ./scripts/mv.sh --prepare "<主题>" [--agents "a,b,c"|4]
+#   ./scripts/mv.sh --start <spec目录>
+#   ./scripts/mv.sh --status <dir>
+#   ./scripts/mv.sh --wait <dir>
+#   ./scripts/mv.sh --cleanup <dir>
+#   ./scripts/mv.sh --view <dir> [--since <ref>]     # human-viewer 封装
+#   ./scripts/mv.sh --say <dir> "<文本>"              # human-sayer 封装
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -37,14 +35,14 @@ usage() {
   $0 --view <dir> [--since <ref>]
   $0 --say <dir> "<文本>"
 
-默认讨论参数:
+默认参数:
   agents=a,b,c  max-meeting=10  max-rr=5
 
 --agents: 逗号分隔名称列表（如 "x,y"）或纯数字（如 4 → 生成 a..d）；
           human 是保留名，不能作为参与者
 
 human 通道:
-  --view: 增量查看讨论进展（--since 之后的新消息+状态；末尾输出 HEAD=<hash>，主 pi 记录作下轮 --since）
+  --view: 增量查看分析进展（--since 之后的新消息+状态；末尾输出 HEAD=<hash>，主 pi 记录作下轮 --since）
   --say:  插话（写一条 human 消息，agents 可见并可回应）
 USAGE_EOF
 }
@@ -55,8 +53,8 @@ fail() {
 }
 
 # 检查 aft 是否关闭 bash 接管（用户 2026-08-31：0.2.0 依赖 PI_SESSION_ID 等
-# 注入——aft 接管 bash 后这些变量不再注入，插话扩展找不到讨论目录）
-# 仅 --prepare/--start 需要（模型继承 + 目录含 sid）；不阻断（手动跑讨论
+# 注入——aft 接管 bash 后这些变量不再注入，插话扩展找不到分析目录）
+# 仅 --prepare/--start 需要（模型继承 + 目录含 sid）；不阻断（手动跑分析
 # 仍可用），只给醒目警告。
 check_aft_bash() {
     local cfg="$HOME/.config/cortexkit/aft.jsonc"
@@ -70,7 +68,7 @@ check_aft_bash() {
     if [ -z "$json" ]; then
         echo "[aft] 警告: 未找到 $HOME/.config/cortexkit/aft.jsonc" >&2
         echo "[aft]   本工具需要 \"bash\": false（关闭 aft 对 bash 的接管），否则" >&2
-        echo "[aft]   插话扩展找不到讨论目录、models.md 退化为兜底值。" >&2
+        echo "[aft]   插话扩展找不到分析目录、models.md 退化为兜底值。" >&2
         echo "[aft]   修复: 在 $HOME/.config/cortexkit/aft.jsonc 中添加 \"bash\": false 并重启 pi。" >&2
         return
     fi
@@ -78,7 +76,7 @@ check_aft_bash() {
     if ! echo "$json" | sed 's|//.*||' | grep -q '"bash"[[:space:]]*:[[:space:]]*false'; then
         echo "[aft] 警告: $HOME/.config/cortexkit/aft.jsonc 中未设置 \"bash\": false" >&2
         echo "[aft]   当前 aft 会接管 bash 工具，PI_SESSION_ID 等环境变量不注入——" >&2
-        echo "[aft]   插话扩展找不到讨论目录、models.md 退化为兜底值。" >&2
+        echo "[aft]   插话扩展找不到分析目录、models.md 退化为兜底值。" >&2
         echo "[aft]   修复: 添加 \"bash\": false 并重启 pi。" >&2
     fi
 }
@@ -133,7 +131,7 @@ cmd_view() {
         esac
     done
     require_dir "$dir"
-    [ -d "$dir/repo.git" ] || fail "讨论不存在: $dir（无 repo.git）"
+    [ -d "$dir/repo.git" ] || fail "分析不存在: $dir（无 repo.git）"
     if [ -n "$since" ]; then
         "$PYTHON" "$HUMAN_VIEWER" "$dir" --since "$since"
     else
@@ -148,7 +146,7 @@ cmd_say() {
     local dir text="${2:-}"
     dir="$(normalize_dir "$1")"
     require_dir "$dir"
-    [ -d "$dir/work-human" ] || fail "讨论缺少 work-human: $dir"
+    [ -d "$dir/work-human" ] || fail "分析缺少 work-human: $dir"
     [ -n "$text" ] || fail "插话文本不能为空"
     "$PYTHON" "$HUMAN_SAYER" "$dir" "$text"
 }
@@ -288,7 +286,7 @@ cmd_prepare() {
 
     local stamp
     stamp="$(date +%Y%m%d-%H%M%S)"
-    local spec_dir="$PWD/pi-agents-helper-spec-${stamp}"
+    local spec_dir="$PWD/mv-spec-${stamp}"
     mkdir -p "$spec_dir/agents"
 
     # question.md（初始立场行按 agents 列表）
@@ -299,7 +297,7 @@ cmd_prepare() {
     cat > "$spec_dir/question.md" <<EOF
 # question.md——说明行，不注入
 
-# 讨论主题：$topic
+# 分析主题：$topic
 
 ## 初始立场（可选，每参与者一行）
 $(printf '%b' "$stance_lines")
@@ -356,11 +354,11 @@ EOF
     fi
 
     cat <<OUTPUT_EOF
-已生成讨论 spec:
+已生成分析 spec:
   $spec_dir
 
 请查看/编辑该目录，补充背景、各 agent 视角等。
-编辑完成后，告诉我"继续"，我会自动启动讨论。
+编辑完成后，告诉我"继续"，我会自动启动分析。
 OUTPUT_EOF
 }
 
@@ -380,7 +378,7 @@ cmd_start() {
     dir_name="${dir_name}-${stamp}"
     local dir_path="$PWD/$dir_name"
 
-    # 第 1 步：创建讨论环境（不启动）
+    # 第 1 步：创建分析环境（不启动）
     # fork 模式（多视角）：主 pi 触发时（PI_SESSION_ID 存在）解析当前
     # session 文件绝对路径 → protocol.json → 各 agent 首唤 --fork 挂载
     # 主 session 全量上下文。解析不到（手动 shell 跑 wrapper）不传参，
@@ -400,7 +398,7 @@ cmd_start() {
         fi
     fi
     if ! "$PYTHON" "$START_DISCUSSION" --dir "$dir_path" --spec "$spec_dir" --max-meeting "$DEFAULT_MAX_MEETING" --max-rr "$DEFAULT_MAX_RR" "${fork_args[@]+"${fork_args[@]}"}"; then
-        fail "讨论环境创建失败，请查看上方输出"
+        fail "环境创建失败，请查看上方输出"
     fi
 
     # 第 2 步：在每个 work 目录写入项目级 .pi/settings.json，屏蔽 magic-context 和 aft
@@ -445,14 +443,14 @@ SETTINGS_EOF
 
     # 第 3 步：启动已有环境
     if ! "$PYTHON" "$START_DISCUSSION" --dir "$dir_path" --skip-setup --start; then
-        fail "讨论启动失败，请查看上方输出"
+        fail "启动失败，请查看上方输出"
     fi
 
     cat <<OUTPUT_EOF
-讨论已启动
+多视角分析已启动
 目录: $dir_path
 
-观看讨论（pi-web 复制执行，不进 LLM；Esc 中断后可插话再续看）:
+观看分析（复制执行，不进 LLM；Ctrl-C 中断后可插话再续看）:
 !!python3 "$ROOT_DIR/human_viewer.py" $dir_path --follow
 
 查看进展: $0 --view $dir_path
@@ -464,8 +462,8 @@ SETTINGS_EOF
 说明:
 - human 通道：--view 增量查看（主 pi 记录末尾 HEAD 作下轮 --since）；
   --say 插话（agents 可见并可回应；已冻结 agent 不响应）
-- 完成后 result.md 自动保存到固定位置：$dir_path-result.md（与讨论目录同级——resultWriter loop 退出时保存；cleanup 也会保存）
-- 读取 result.md 摘要后请执行 --cleanup 清理讨论目录
+- 完成后 result.md 自动保存到固定位置：$dir_path-result.md（与分析目录同级——resultWriter loop 退出时保存；cleanup 也会保存）
+- 读取 result.md 摘要后请执行 --cleanup 清理分析目录
 OUTPUT_EOF
 }
 
@@ -482,28 +480,28 @@ if [ "$#" -ge 1 ]; then
             exit $?
             ;;
         --status)
-            [ "$#" -ge 2 ] || fail "--status 需要讨论目录参数"
+            [ "$#" -ge 2 ] || fail "--status 需要分析目录参数"
             cmd_status "$2"
             exit $?
             ;;
         --wait)
-            [ "$#" -ge 2 ] || fail "--wait 需要讨论目录参数"
+            [ "$#" -ge 2 ] || fail "--wait 需要分析目录参数"
             cmd_wait "$2"
             exit $?
             ;;
         --cleanup)
-            [ "$#" -ge 2 ] || fail "--cleanup 需要讨论目录参数"
+            [ "$#" -ge 2 ] || fail "--cleanup 需要分析目录参数"
             cmd_cleanup "$2"
             exit $?
             ;;
         --view)
-            [ "$#" -ge 2 ] || fail "--view 需要讨论目录参数"
+            [ "$#" -ge 2 ] || fail "--view 需要分析目录参数"
             shift
             cmd_view "$@"
             exit $?
             ;;
         --say)
-            [ "$#" -ge 3 ] || fail "--say 需要讨论目录和文本参数"
+            [ "$#" -ge 3 ] || fail "--say 需要分析目录和文本参数"
             cmd_say "$2" "$3"
             exit $?
             ;;

@@ -1,4 +1,4 @@
-"""discuss.sh wrapper 冒烟测试——W1-W7（API 清单基准，2026-09-01）。
+"""mv.sh wrapper 冒烟测试——W1-W7（API 清单基准，2026-09-01）。
 
 wrapper 是 bash 脚本：用 subprocess 真实执行 + 断言输出/退出码。
 --start 启动真实 loop 太重（e2e 覆盖），冒烟只测参数/错误路径与
@@ -15,7 +15,7 @@ import tempfile
 import unittest
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-WRAPPER = os.path.join(HERE, "scripts", "discuss.sh")
+WRAPPER = os.path.join(HERE, "scripts", "mv.sh")
 
 
 def run_wrapper(args, cwd=None, env=None):
@@ -31,7 +31,7 @@ class TestPrepare(unittest.TestCase):
             r = run_wrapper(["--prepare", "测试主题", "--agents", "2"], cwd=tmp)
             self.assertEqual(r.returncode, 0, r.stderr)
             specs = [d for d in os.listdir(tmp)
-                     if d.startswith("pi-agents-helper-spec-")]
+                     if d.startswith("mv-spec-")]
             self.assertEqual(len(specs), 1)
             spec = os.path.join(tmp, specs[0])
             for f in ("question.md", "background.md", "models.md"):
@@ -47,14 +47,14 @@ class TestPrepare(unittest.TestCase):
             r = run_wrapper(["--prepare", "T", "--agents", "4"], cwd=tmp)
             self.assertEqual(r.returncode, 0, r.stderr)
             spec = os.path.join(tmp, [d for d in os.listdir(tmp)
-                                      if d.startswith("pi-agents-helper-spec-")][0])
+                                      if d.startswith("mv-spec-")][0])
             with open(os.path.join(spec, "agents", ".order")) as f:
                 self.assertEqual(f.read().split(), ["a", "b", "c", "d"])
             shutil.rmtree(spec)
             r = run_wrapper(["--prepare", "T", "--agents", "x,y"], cwd=tmp)
             self.assertEqual(r.returncode, 0, r.stderr)
             spec = os.path.join(tmp, [d for d in os.listdir(tmp)
-                                      if d.startswith("pi-agents-helper-spec-")][0])
+                                      if d.startswith("mv-spec-")][0])
             with open(os.path.join(spec, "agents", ".order")) as f:
                 self.assertEqual(f.read().split(), ["x", "y"])
 
@@ -74,7 +74,7 @@ class TestPrepare(unittest.TestCase):
                             cwd=tmp)
             self.assertEqual(r.returncode, 0, r.stderr)
             spec = os.path.join(tmp, [d for d in os.listdir(tmp)
-                                      if d.startswith("pi-agents-helper-spec-")][0])
+                                      if d.startswith("mv-spec-")][0])
             with open(os.path.join(spec, "background.md")) as f:
                 self.assertIn("背景内容", f.read())
 

@@ -124,7 +124,7 @@ class TestSpecSkeleton(unittest.TestCase):
             r = open(os.path.join(d, "README.md")).read()
             self.assertIn("models.md", r)
             self.assertIn("下一步", r)
-            self.assertIn("--spec", r)
+            self.assertIn("--start", r)
 
 
 class TestSpecInjection(unittest.TestCase):
