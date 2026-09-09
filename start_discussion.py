@@ -154,7 +154,10 @@ def gen_spec_skeleton(spec_dir, participants):
     每个文件第一行 = 用途说明（不注入，设计 16.4）；文件预先 touch 好
     方便手工修改（用户设计 2026-08-11）。
     """
-    os.makedirs(os.path.join(spec_dir, "agents"), exist_ok=True)
+    # agents/ 骨架仅显式 --agents 时生成（viewers 模式：启动时从项目
+    # cwd/viewers/ 发现——空 agents/ 目录会阻断 viewers 回退，故不建）
+    if participants:
+        os.makedirs(os.path.join(spec_dir, "agents"), exist_ok=True)
     # README.md：从模板复制（内容不变——模板化，用户 7909）
     shutil.copyfile(os.path.join(TPL_DIR, "spec-readme.md.tpl"),
                     os.path.join(spec_dir, "README.md"))
@@ -182,15 +185,16 @@ def gen_spec_skeleton(spec_dir, participants):
                  "本行是说明行，不会注入。"]
         lines += [f"{p}: default" for p in participants]
         f.write("\n".join(lines) + "\n")
-    # agents/X.md（第一行说明 + 空正文，按 participants 逐个 touch）
-    for p in participants:
-        with open(os.path.join(spec_dir, "agents", f"{p}.md"), "w") as f:
-            f.write(f"# {p}.md——agent {p} 的分工/补充（追加到 agent {p} 定义正文）。"
-                    f"本行是说明行，不会注入。\n\n")
-    # agents/.order：固化 --agents 顺序（审核#6——sorted() 推断破坏顺序语义，
-    # starter/默认 resultWriter/RR 轮转链依赖 participants 顺序）
-    with open(os.path.join(spec_dir, "agents", ".order"), "w") as f:
-        f.write("\n".join(participants) + "\n")
+    # agents/X.md + .order（仅显式 --agents 时，同上）
+    if participants:
+        for p in participants:
+            with open(os.path.join(spec_dir, "agents", f"{p}.md"), "w") as f:
+                f.write(f"# {p}.md——agent {p} 的分工/补充（追加到 agent {p} 定义正文）。"
+                        f"本行是说明行，不会注入。\n\n")
+        # .order：固化 --agents 顺序（审核#6——sorted() 推断破坏顺序语义，
+        # starter/默认 resultWriter/RR 轮转链依赖 participants 顺序）
+        with open(os.path.join(spec_dir, "agents", ".order"), "w") as f:
+            f.write("\n".join(participants) + "\n")
 
 
 def gen_agens_md(args, agent, participants, spec_background=None,
@@ -307,14 +311,46 @@ def _resolve_path(p):
         return os.path.abspath(os.path.expanduser(p))
     return os.path.join(os.getcwd(), p)
 
-def _resolve_spec(spec, agents, topic, background, stances, questions, models):
+def _check_reserved(participants):
+    """human 保留名校验（helper 设计 §2.1）：插话通道不是参与者。"""
+    if "human" in participants:
+        return "错误: 'human' 是保留名（human 插话通道），不可作为参与者"
+    return None
+
+
+def _discover_viewers(viewers_dir):
+    """发现 viewers 目录（多视角产品约定）：*.md 文件名即 agent 名。
+
+    返回 (participants, briefs)——participants 按文件名排序（决定 starter/
+    RR 轮转与默认 resultWriter）；briefs = {agent: 视角任务书正文}。
+    目录不存在/无文件 → (None, None)（调用方决定报错或回退）。
+    """
+    if not os.path.isdir(viewers_dir):
+        return None, None
+    names = sorted(
+        f[:-3] for f in os.listdir(viewers_dir)
+        if f.endswith(".md") and not f.startswith("."))
+    if not names:
+        return None, None
+    briefs = {}
+    for n in names:
+        with open(os.path.join(viewers_dir, f"{n}.md")) as f:
+            briefs[n] = f.read().strip("\n")
+    return names, briefs
+
+
+def _resolve_spec(spec, agents, topic, background, stances, questions, models,
+                  viewers_dir=None):
     """--spec 模式解析（审核#5 抽成可测函数）：互斥校验 + spec 目录 +
     participants 推断 + question.md 必填。
 
-    返回 (spec_dir, participants, error)——error 非 None 时前两者为 None。
+    participants 来源优先级：spec/agents/（显式自定义，含 .order）>
+    viewers_dir 发现（项目稳定视角，*.md 文件名即 agent 名）> 错误。
+    返回 (spec_dir, participants, viewer_briefs, error)——error 非 None 时
+    前两者为 None；viewer_briefs = {agent: 视角正文}（viewers 模式非空）。
     """
     if not spec:
-        return None, None, None
+        return None, None, None, None
     # 明确互斥（用户 7782）：内容/参与者参数二选一，不留"忽略/优先"中间态
     # （审核#18→review4 M2）：--agents 默认 None——显式传（任何值，含 a,b）
     # 一律报互斥，消除默认值字符串比较的漏报/误报
@@ -332,43 +368,52 @@ def _resolve_spec(spec, agents, topic, background, stances, questions, models):
     if models:
         conflicting.append("--models")
     if conflicting:
-        return None, None, (
+        return None, None, None, (
             f"错误: --spec 与 {', '.join(conflicting)} 互斥——"
             f"内容要么全在 spec，要么全在命令行")
     # spec 目录解析（相对 → cwd 下，L10 抽取）
     spec_dir = _resolve_path(spec)
     if not os.path.isdir(spec_dir):
-        return None, None, f"错误: spec 目录不存在 {spec_dir}"
+        return None, None, None, f"错误: spec 目录不存在 {spec_dir}"
     agents_dir = os.path.join(spec_dir, "agents")
-    if not os.path.isdir(agents_dir):
-        return None, None, "错误: spec 目录缺少 agents/（先 --spec-gen 生成骨架）"
-    # participants 从 spec/agents/ 推断（无 --agents，避免冲突）
-    # 顺序：agents/.order 固化 --agents 顺序（审核#6），未列出的 .md 按
-    # 字母序追加（用户增删 agent 自然处理）；无 .order 回退 sorted
-    order_file = os.path.join(agents_dir, ".order")
-    if os.path.isfile(order_file):
-        with open(order_file) as f:
-            order = [l.strip() for l in f.read().splitlines() if l.strip()]
-        listed = [p for p in order
-                  if os.path.isfile(os.path.join(agents_dir, f"{p}.md"))]
-        listed_set = set(listed)
-        extra = sorted(
-            f[:-3] for f in os.listdir(agents_dir)
-            if f.endswith(".md") and f[:-3] not in listed_set)
-        participants = listed + extra
+    viewer_briefs = {}
+    if os.path.isdir(agents_dir):
+        # participants 从 spec/agents/ 推断（无 --agents，避免冲突）
+        # 顺序：agents/.order 固化 --agents 顺序（审核#6），未列出的 .md 按
+        # 字母序追加（用户增删 agent 自然处理）；无 .order 回退 sorted
+        order_file = os.path.join(agents_dir, ".order")
+        if os.path.isfile(order_file):
+            with open(order_file) as f:
+                order = [l.strip() for l in f.read().splitlines() if l.strip()]
+            listed = [p for p in order
+                      if os.path.isfile(os.path.join(agents_dir, f"{p}.md"))]
+            listed_set = set(listed)
+            extra = sorted(
+                f[:-3] for f in os.listdir(agents_dir)
+                if f.endswith(".md") and f[:-3] not in listed_set)
+            participants = listed + extra
+        else:
+            participants = sorted(
+                f[:-3] for f in os.listdir(agents_dir) if f.endswith(".md"))
+        if not participants:
+            return None, None, None, "错误: spec/agents/ 下没有 agent 定义文件"
     else:
-        participants = sorted(
-            f[:-3] for f in os.listdir(agents_dir) if f.endswith(".md"))
-    if not participants:
-        return None, None, "错误: spec/agents/ 下没有 agent 定义文件"
+        # viewers 发现（多视角产品约定）：cwd/viewers/*.md，文件名即 agent 名
+        participants, viewer_briefs = _discover_viewers(viewers_dir)
+        if participants is None:
+            return None, None, None, (
+                "错误: spec 缺少 agents/ 且未找到 viewers/ 目录"
+                "（项目 cwd 下建 viewers/<视角名>.md，或 --spec-gen --agents 生成）")
+        if "human" in participants:
+            return None, None, None, _check_reserved(participants)
     # spec 必须有 question.md（讨论起点不可缺）
     if not os.path.isfile(os.path.join(spec_dir, "question.md")):
-        return None, None, "错误: spec 缺少 question.md（讨论起点，先 --spec-gen 生成）"
+        return None, None, None, "错误: spec 缺少 question.md（讨论起点，先 --spec-gen 生成）"
     # 空正文校验（审核#19）：删到只剩说明行 → 无讨论主题（CLI 路径有
     # --topic 必填对等约束）
     if not (_spec_read(spec_dir, "question.md") or "").strip():
-        return None, None, "错误: spec 的 question.md 正文为空（讨论起点不可缺）"
-    return spec_dir, participants, None
+        return None, None, None, "错误: spec 的 question.md 正文为空（讨论起点不可缺）"
+    return spec_dir, participants, viewer_briefs, None
 
 
 def _clone_work(base, p):
@@ -386,12 +431,15 @@ def _clone_work(base, p):
     return workdir
 
 
-def setup_environment(args, participants, base, spec_dir=None):
+def setup_environment(args, participants, base, spec_dir=None,
+                      viewer_briefs=None):
     """生成讨论环境（bare + clones + 配置 + setup commit + 重建）。
 
     spec_dir: 讨论规格目录（设计 16）——内容优先：question.md →
     question.md、background.md → AGENTS.md 背景节、agents/X.md → agent 定义
     正文。逐文件独立回退（缺哪个走 CLI/占位）。
+    viewer_briefs: viewers 发现的视角任务书 {agent: 正文}（2026-09-09）——
+    优先级低于 spec/agents/（显式自定义胜出），作为 agent 定义正文。
     """
     # spec 内容预读（跳过首行说明）
     spec_question = _spec_read(spec_dir, "question.md") if spec_dir else None
@@ -405,6 +453,10 @@ def setup_environment(args, participants, base, spec_dir=None):
             c = _spec_read(spec_dir, f"agents/{p}.md")
             if c is not None:
                 spec_agents[p] = c
+    # viewers briefs：spec/agents/ 优先（显式自定义胜出），否则 viewers 正文
+    agent_extra = {p: (spec_agents.get(p) or (viewer_briefs or {}).get(p))
+                   for p in participants}
+    agent_extra = {k: v for k, v in agent_extra.items() if v}
     # models：spec 模式从 models.md 读（自包含，{agent: (model, variant)}），
     # CLI --models 已互斥（{agent: model} 旧格式——variant 用默认 max）
     if spec_dir:
@@ -465,7 +517,7 @@ def setup_environment(args, participants, base, spec_dir=None):
         mv = models.get(p, (None, "max"))
         with open(os.path.join(workdir, ".pi/agent", f"{p}.md"), "w") as f:
             f.write(gen_agent_def(p, participants, {p: mv[0]} if mv[0] else None,
-                                  stances_arg, spec_agents.get(p), variant=mv[1]))
+                                  stances_arg, agent_extra.get(p), variant=mv[1]))
         with open(os.path.join(workdir, "pi-agent.json"), "w") as f:
             json.dump({
                 "model": mv[0] or "",
@@ -637,9 +689,9 @@ def main():
 
     # --spec-gen 直接带目录位置参数（--spec-gen myspec/，不需 --dir/--spec）
     if args.spec_gen:
-        if not participants:
-            print("错误: --spec-gen 需要 --agents（骨架按参与者预列 agents/ 与 .order，review5 F5）")
-            return
+        # --agents 可选（2026-09-09 viewers 模式）：缺省 = 只生成
+        # question/background/models/README（无 agents/——启动时从项目
+        # cwd/viewers/ 发现视角）；显式 --agents = 覆盖 viewers（review5 F5）
         spec_dir = _resolve_path(args.spec_gen)   # L10
         gen_spec_skeleton(spec_dir, participants)
         print(f"[spec-gen] 已生成骨架: {spec_dir}")
@@ -760,12 +812,14 @@ def main():
             return
         # 创建分支（--spec 提供内容源时 spec 优先，设计 16.5）
         spec_dir = None
+        viewer_briefs = {}
         if args.spec:
             # 互斥校验 + spec 目录解析 + participants 推断 + question.md 必填
             # （审核#5：抽成 _resolve_spec 可测函数）
-            spec_dir, parts, err = _resolve_spec(
+            spec_dir, parts, viewer_briefs, err = _resolve_spec(
                 args.spec, args.agents, args.topic, args.background,
-                args.stances, args.questions, args.models)
+                args.stances, args.questions, args.models,
+                viewers_dir=os.path.join(os.getcwd(), "viewers"))
             if err:
                 print(err)
                 return
@@ -773,28 +827,39 @@ def main():
         # 非 spec：--agents 未传 → 默认 a,b（M2：argparse 默认 None）
         if not args.spec and not participants:
             participants = ["a", "b"]
-        # agent 名校验（审核#7）+ 非空校验（审核#20：--agents "," 全空）
+        # agent 名校验 + 非空校验（审核#20：--agents "," 全空）
+        # 2026-09-09 放宽：viewers 模式下文件名即 agent 名（中文人物名/
+        # 视角名合法）——非法 = 空名/路径分隔符/空白/human 保留名/>32 字符
         if not participants:
             print("错误: 参与者为空（--agents 或 spec/agents/ 无有效 agent）")
             return
-        bad = [p for p in participants if not re.match(r"^[a-z]+$", p)]
+        bad = [p for p in participants
+               if not p or re.search(r"[/\\\s]", p) or len(p) > 32]
         if bad:
-            print(f"错误: agent 名必须纯小写字母（[a-z]+）：{bad}")
+            print(f"错误: 非法 agent 名（禁止空名/路径分隔符/空白，≤32 字符）：{bad}")
             return
-        # human 保留名（helper 设计 §2.1）：human 是插话通道，不是参与者——
-        # 混入 participants 会被当成普通 agent 生成 loop 进程 + 进聚合判定
-        if "human" in participants:
-            print("错误: 'human' 是保留名（human 插话通道），不可作为参与者")
+        # human 保留名（helper 设计 §2.1）：human 是插话通道，不是参与者
+        err = _check_reserved(participants)
+        if err:
+            print(err)
             return
         # resultWriter 必须 ∈ participants（spec 推断或 CLI 的 participants）
         if args.result_writer and args.result_writer not in participants:
             print(f"错误: resultWriter {args.result_writer} 不在参与者 {participants} 中")
             return
+        # fork-only（2026-09-09 定）：创建必须携带主 session 文件——无
+        # fork 上下文的多视角分析违背产品本质，明确报错而非静默退化
+        if not args.fork_source:
+            print("错误: 缺少 --fork-source（多视角模式必须挂载主 session）——"
+                  "在主 pi session 内经 wrapper 启动会自动解析；"
+                  "无 session 时先在项目目录跑一次 pi --print 造引导 session")
+            return
         # 无 spec 时创建必须给 --topic（否则是无效的 --start 单独用）
         if not args.spec and not args.topic:
             print("错误: 需要 --topic（或使用 --skip-setup 启动已有环境）")
             return
-        setup_environment(args, participants, base, spec_dir)
+        setup_environment(args, participants, base, spec_dir,
+                          viewer_briefs=viewer_briefs)
     if args.start:
         # 启动每个 agent 的 meeting_loop（独立进程，git 触发）
         procs = []

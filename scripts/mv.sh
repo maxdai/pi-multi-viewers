@@ -236,7 +236,7 @@ read_pi_model_thinking() {
 # --agents 可覆盖：名称列表 "a,b,c" 或纯数字 "4"（生成 a..<n>））
 cmd_prepare() {
     check_aft_bash
-    local topic="" background="" agents_list="$DEFAULT_AGENTS"
+    local topic="" background="" agents_list=""
     if [ "$#" -lt 1 ]; then
         usage >&2
         exit 2
@@ -266,6 +266,8 @@ cmd_prepare() {
     done
     [ -n "$topic" ] || fail "问题不能为空"
 
+    # --agents 未传 = viewers 模式骨架（无 agents/ 目录——启动时从
+    # 项目 cwd/viewers/ 发现视角；--agents 显式指定 = 覆盖 viewers）
     # 数字 → 生成 a..<n> 名称列表
     if [[ "$agents_list" =~ ^[0-9]+$ ]]; then
         local n="$agents_list" name="" list=""
@@ -287,9 +289,14 @@ cmd_prepare() {
     local stamp
     stamp="$(date +%Y%m%d-%H%M%S)"
     local spec_dir="$PWD/mv-spec-${stamp}"
-    mkdir -p "$spec_dir/agents"
+    mkdir -p "$spec_dir"
+    local agents_lines="" agents_name=""
+    if [ -n "$agents_list" ]; then
+        mkdir -p "$spec_dir/agents"
+        agents_lines="$(echo "$agents_list" | tr ',' '\n' | sed '/^[[:space:]]*$/d')"
+    fi
 
-    # question.md（初始立场行按 agents 列表）
+    # question.md（初始立场行按 agents 列表；viewers 模式无立场占位）
     local stance_lines=""
     for agents_name in $agents_lines; do
         stance_lines="${stance_lines}- $agents_name: 立场\n"
@@ -339,14 +346,17 @@ EOF
         done
     } > "$spec_dir/models.md"
 
-    # agents/*.md
-    for agents_name in $agents_lines; do
-        cat > "$spec_dir/agents/$agents_name.md" <<EOF
+    # agents/*.md + .order（仅显式 --agents 时；viewers 模式不生成——
+    # 启动时从项目 cwd/viewers/ 发现）
+    if [ -n "$agents_lines" ]; then
+        for agents_name in $agents_lines; do
+            cat > "$spec_dir/agents/$agents_name.md" <<EOF
 # $agents_name.md——说明行，不注入
 
 EOF
-    done
-    echo "$agents_lines" > "$spec_dir/agents/.order"
+        done
+        echo "$agents_lines" > "$spec_dir/agents/.order"
+    fi
 
     # README
     if [ -f "$SPEC_README_TPL" ]; then
@@ -394,8 +404,10 @@ cmd_start() {
             fork_args=(--fork-source "$fork_src")
             echo "[start] fork 源：$fork_src"
         else
-            echo "[start] 警告：未找到主 session 文件（$enc/*_$PI_SESSION_ID.jsonl）——退化 legacy 形态" >&2
+            fail "未找到主 session 文件（$enc/*_$PI_SESSION_ID.jsonl）——fork-only 模式必须挂载主 session（无 session 时先在项目目录跑一次 pi --print 造引导 session）"
         fi
+    else
+        fail "PI_SESSION_ID 未注入——多视角分析必须在主 pi session 内经 wrapper 启动（见 README 环境要求）"
     fi
     if ! "$PYTHON" "$START_DISCUSSION" --dir "$dir_path" --spec "$spec_dir" --max-meeting "$DEFAULT_MAX_MEETING" --max-rr "$DEFAULT_MAX_RR" "${fork_args[@]+"${fork_args[@]}"}"; then
         fail "环境创建失败，请查看上方输出"

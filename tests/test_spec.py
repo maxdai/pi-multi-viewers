@@ -256,7 +256,7 @@ class TestResolveSpec(unittest.TestCase):
 
     def test_no_spec(self):
         self.assertEqual(_resolve_spec(None, "a,b", None, None, None, None, None),
-                         (None, None, None))
+                         (None, None, None, None))
 
     def test_mutex_each_param(self):
         # 互斥：传任一内容/参与者参数都报错
@@ -271,15 +271,16 @@ class TestResolveSpec(unittest.TestCase):
                 (None, None, None, None, None, {"a": "m"}, "--models"),
             ]
             for agents, topic, bg, st, qs, md, expect in cases:
-                _, _, err = _resolve_spec(d, agents, topic, bg, st, qs, md)
+                _, _, _, err = _resolve_spec(d, agents, topic, bg, st, qs, md)
                 self.assertIsNotNone(err, f"应报错: {expect}")
                 self.assertIn(expect, err)
 
     def test_infer_participants(self):
         with tempfile.TemporaryDirectory() as d:
             gen_spec_skeleton(d, ["b", "a", "c"])
-            spec_dir, parts, err = _resolve_spec(
+            spec_dir, parts, briefs, err = _resolve_spec(
                 d, None, None, None, None, None, None)
+            self.assertEqual(briefs, {})
             self.assertIsNone(err)
             self.assertEqual(spec_dir, os.path.abspath(d))
             # .order 固化顺序（审核#6）——保持 gen_spec_skeleton 传入顺序
@@ -290,20 +291,62 @@ class TestResolveSpec(unittest.TestCase):
         # 有 agents/ 但缺 question.md → "缺少 question.md"
         with tempfile.TemporaryDirectory() as d:
             os.makedirs(os.path.join(d, "agents"))
-            _, _, err = _resolve_spec(d, None, None, None, None, None, None)
+            _, _, _, err = _resolve_spec(d, None, None, None, None, None, None)
             self.assertIn("没有 agent 定义文件", err)
+        # 缺 agents/ 且无 viewers/ → 明确报错（fork-only 下不再有其它回退）
         with tempfile.TemporaryDirectory() as d:
-            _, _, err = _resolve_spec(d, None, None, None, None, None, None)
-            self.assertIn("缺少 agents/", err)
+            _, _, _, err = _resolve_spec(d, None, None, None, None, None, None,
+                                         viewers_dir=os.path.join(d, "viewers"))
+            self.assertIn("viewers/", err)
         with tempfile.TemporaryDirectory() as d:
             os.makedirs(os.path.join(d, "agents"))
             open(os.path.join(d, "agents/a.md"), "w").close()
-            _, _, err = _resolve_spec(d, None, None, None, None, None, None)
+            _, _, _, err = _resolve_spec(d, None, None, None, None, None, None)
             self.assertIn("缺少 question.md", err)
+
+    def test_viewers_discovery(self):
+        """viewers 模式：无 agents/ + cwd/viewers/*.md → 文件名即 agent 名。"""
+        with tempfile.TemporaryDirectory() as d:
+            os.makedirs(os.path.join(d, "viewers"))
+            for name, brief in [("苏晚", "命运视角"), ("林然", "性格视角")]:
+                open(os.path.join(d, "viewers", f"{name}.md"), "w").write(brief)
+            open(os.path.join(d, "question.md"), "w").write("# t\n正文")  # 主题必填不变
+            spec_dir, parts, briefs, err = _resolve_spec(
+                d, None, None, None, None, None, None,
+                viewers_dir=os.path.join(d, "viewers"))
+            self.assertIsNone(err)
+            # 排序 = 文件名排序（决定 starter/RR 轮转）
+            self.assertEqual(parts, ["林然", "苏晚"])
+            self.assertEqual(briefs["林然"], "性格视角")
+            self.assertEqual(briefs["苏晚"], "命运视角")
+
+    def test_viewers_human_reserved(self):
+        with tempfile.TemporaryDirectory() as d:
+            os.makedirs(os.path.join(d, "viewers"))
+            open(os.path.join(d, "viewers/human.md"), "w").close()
+            _, _, _, err = _resolve_spec(
+                d, None, None, None, None, None, None,
+                viewers_dir=os.path.join(d, "viewers"))
+            self.assertIn("human", err)
+
+    def test_spec_agents_override_viewers(self):
+        """spec 显式 agents/ 优先于 viewers 发现。"""
+        with tempfile.TemporaryDirectory() as d:
+            os.makedirs(os.path.join(d, "agents"))
+            open(os.path.join(d, "agents/z.md"), "w").close()
+            open(os.path.join(d, "question.md"), "w").write("# t\n正文")
+            os.makedirs(os.path.join(d, "viewers"))
+            open(os.path.join(d, "viewers/林然.md"), "w").close()
+            spec_dir, parts, briefs, err = _resolve_spec(
+                d, None, None, None, None, None, None,
+                viewers_dir=os.path.join(d, "viewers"))
+            self.assertIsNone(err)
+            self.assertEqual(parts, ["z"])
+            self.assertEqual(briefs, {})
 
     def test_spec_dir_not_exists(self):
         with tempfile.TemporaryDirectory() as d:
-            _, _, err = _resolve_spec(
+            _, _, _, err = _resolve_spec(
                 d + "/nope", None, None, None, None, None, None)
             self.assertIn("目录不存在", err)
 

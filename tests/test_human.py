@@ -185,7 +185,8 @@ class TestReservedName(unittest.TestCase):
                     f.write(f"{name} 定义\n")
             r = subprocess.run(
                 [sys.executable, "start_discussion.py",
-                 "--dir", os.path.join(tmp, "disc"), "--spec", spec],
+                 "--dir", os.path.join(tmp, "disc"), "--spec", spec,
+                 "--fork-source", "/s/main.jsonl"],
                 capture_output=True, text=True,
                 cwd=ROOT)
             self.assertIn("保留名", r.stdout)
@@ -539,7 +540,8 @@ class TestSayer(unittest.TestCase):
             disc = os.path.join(tmp, "disc")
             r = subprocess.run(
                 [sys.executable, "start_discussion.py",
-                 "--dir", disc, "--agents", "a,b", "--topic", "t"],
+                 "--dir", disc, "--agents", "a,b", "--topic", "t",
+                 "--fork-source", "/s/main.jsonl"],
                 capture_output=True, text=True, cwd=ROOT)
             wh = os.path.join(disc, "work-human")
             self.assertTrue(os.path.isdir(wh), r.stdout)

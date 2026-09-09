@@ -29,6 +29,12 @@ class TestMeetingLoopMain(unittest.TestCase):
     rw 调用 _preserve_result_md（L14 修复的生产路径验证）。
     """
 
+    def setUp(self):
+        self.src = os.path.join(tempfile.mkdtemp(prefix="mlsrc-"),
+                                "main.jsonl")
+        with open(self.src, "w") as f:
+            f.write('{"type":"session","id":"src"}\n')
+
     def _make_done_env(self):
         """构造：bare + work-b + protocol(rw=b) + b/0001 concluded + result.md。"""
         tmp = tempfile.mkdtemp(prefix="mlmain-")
@@ -44,7 +50,8 @@ class TestMeetingLoopMain(unittest.TestCase):
         with open(os.path.join(w, "protocol.json"), "w") as f:
             json.dump({"participants": ["a", "b"], "resultWriter": "b",
                        "maxMeetingRounds": 10, "maxRRRounds": 7,
-                       "stallTimeoutSeconds": 600}, f)
+                       "stallTimeoutSeconds": 600,
+                       "forkSource": self.src, "forkCwd": w}, f)
         os.makedirs(os.path.join(w, "b"))
         with open(os.path.join(w, "b/0001.md"), "w") as f:
             f.write("---\nfrom: b\ntype: concluded\nmode: concluded\n---\n")
@@ -134,7 +141,8 @@ class TestStartDiscussionMain(unittest.TestCase):
         """--dir + topic → setup_environment（真实构造太重，mock 验证分发）。"""
         import start_discussion as sd
         with mock.patch("sys.argv", ["start_discussion.py", "--dir", "/x",
-                                     "--topic", "T", "--agents", "a,b"]):
+                                     "--topic", "T", "--agents", "a,b",
+                                     "--fork-source", "/s/main.jsonl"]):
             with mock.patch("start_discussion.setup_environment") as se:
                 with mock.patch("start_discussion.os.path.isdir",
                                 return_value=False):

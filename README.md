@@ -25,10 +25,14 @@
 
 或命令行：
 
-```bash
-scripts/mv.sh --prepare "<主题>" --agents 3   # 生成 spec 骨架
-# 编辑 spec：question.md（主题）+ agents/X.md（视角任务书）
-scripts/mv.sh --start <spec目录>              # 启动
+# 一次性准备：项目 cwd 下建 viewers/（稳定视角资产，文件名即 agent 名）
+mkdir -p viewers
+echo "你的所有观点必须从性能角度出发……其它视角由别的参与者负责，你不要越界展开。" > viewers/性能.md
+
+# 每次：生成主题骨架（不需要 --agents——启动时自动发现 viewers/*.md）
+scripts/mv.sh --prepare "<主题>"              # spec = question.md(+background.md)
+scripts/mv.sh --start <spec目录>              # 启动（fork 模式，自动挂载主 session）
+# 显式 --agents 仍可用：一次性自定义 agent（覆盖 viewers 发现）
 scripts/mv.sh --view <dir> --follow           # 观看（不进 LLM）
 scripts/mv.sh --say <dir> "<文本>"            # 插话
 scripts/mv.sh --cleanup <dir>                 # 收尾（result.md 自动留存）

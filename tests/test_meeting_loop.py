@@ -65,11 +65,18 @@ class FakeProc:
 
 
 class TestWakeLlm(unittest.TestCase):
+    """wake_llm 三条路径（fork-only 语义：所有测试经 fork 源运行）。"""
+
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix="wake-llm-test-")
         self.workdir = os.path.join(self.tmp, "work-a")
         os.makedirs(self.workdir)
         self.base = os.path.dirname(self.workdir)
+        self.src = os.path.join(self.tmp, "main-session.jsonl")
+        with open(self.src, "w") as f:
+            f.write('{"type":"session","id":"src"}\n')
+        self.fork_cwd = os.path.join(self.tmp, "main")
+        os.makedirs(self.fork_cwd)
 
     def tearDown(self):
         import shutil
@@ -92,7 +99,9 @@ class TestWakeLlm(unittest.TestCase):
                 return orig_isdir(p)
 
             os.path.isdir = fake_isdir
-            return meeting_loop.wake_llm(self.workdir, "a", "PROMPT")
+            return meeting_loop.wake_llm(self.workdir, "a", "PROMPT",
+                                         fork_source=self.src,
+                                         fork_cwd=self.fork_cwd)
         finally:
             meeting_loop.MAX_WAKE_SEC = orig_max
             os.path.isdir = orig_isdir
@@ -131,15 +140,16 @@ class TestWakeLlm(unittest.TestCase):
         self.assertTrue(proc.terminated)
 
     def test_normal_returns_saves_session(self):
-        """正常路径完整功能：返回 (sid, 0) + status 文件写入。"""
-        proc = FakeProc("ok")
+        """正常路径完整功能：返回 (sid, 0) + status 文件写入（fork-only：sid
+        = 预生成 UUID 或输出解析值，不再是可读派生名）。"""
+        proc = FakeProc("ok", out='{"type":"session","id":"uuid-9"}')
         result = self._run(proc)
-        sid = meeting_loop.session_id(self.workdir, "a")
-        self.assertEqual(result, (sid, 0))
+        self.assertEqual(result[1], 0)
         status = os.path.join(self.base, "status-a.json")
         self.assertTrue(os.path.exists(status))
         with open(status) as f:
-            self.assertEqual(json.load(f), {"sessionID": sid})
+            self.assertEqual(json.load(f), {"sessionID": "uuid-9"})
+        self.assertEqual(result[0], "uuid-9")
 
     def test_parse_session_header(self):
         """parse_session：解析 pi JSON 输出的 session 头。"""
@@ -212,25 +222,25 @@ class TestKillProc(unittest.TestCase):
     def test_wake_llm_removed_dir_uses_kill_proc(self):
         """目录清理路径最终走 _kill_proc（SystemExit 前必杀 pi）。"""
         proc = FakeProc("timeout-then-removed", sticky_terminate=True)
-        with self.assertRaises(SystemExit) as cm:
-            t = TestWakeLlm("test_dir_removed_during_wake")
-            t.setUp()
-            try:
+        t = TestWakeLlm("test_dir_removed_during_wake")
+        t.setUp()
+        try:
+            with self.assertRaises(SystemExit) as cm:
                 t._run(proc, repo_git_exists=False)
-            finally:
-                t.tearDown()
+        finally:
+            t.tearDown()
         self.assertEqual(cm.exception.code, 0)
         self.assertTrue(proc.killed)
 
 
 class TestForkWake(unittest.TestCase):
-    """fork 模式（多视角）：首唤 --fork+--name、后续 --session-id、spawn cwd。
+    """fork-only 语义（2026-09-09 收敛：删除 legacy 分支）。
 
-    设计（2026-09-09，实测 docs/examples/first-experiment 后集成）：
-    - 首唤（无已存 sid + 配置 forkSource）→ --fork <src> + --name，不指定
-      --session-id（pi 生成 UUID），spawn cwd = fork_cwd（主项目）
-    - 后续唤醒（sid 已存）→ 常规 --session-id 续接，cwd = workdir
-    - 未配置 forkSource → 完全 legacy 行为（向后兼容）
+    - 首唤（无已存 sid）→ --fork <src> + --name + 预生成 --session-id
+      （UUID——parse 失败也有确定 id）；spawn cwd = fork_cwd（主项目）
+    - 续接（sid 已存）→ --session-id，无 --fork；cwd 仍 = fork_cwd
+    - 未配置 fork 源 → RuntimeError（不再静默退化 legacy）
+    - 协议注入：workdir/AGENTS.md 存在 → --append-system-prompt（缺口修复）
     """
 
     def setUp(self):
@@ -250,6 +260,8 @@ class TestForkWake(unittest.TestCase):
         meeting_loop._current_proc = None
 
     def _run(self, proc, **kwargs):
+        kwargs.setdefault("fork_source", self.src)
+        kwargs.setdefault("fork_cwd", self.cwd_main)
         orig_popen = subprocess.Popen
         orig_isdir = os.path.isdir
         try:
@@ -268,45 +280,67 @@ class TestForkWake(unittest.TestCase):
             subprocess.Popen = orig_popen
             os.path.isdir = orig_isdir
 
-    def test_first_wake_uses_fork_and_name_no_session_id(self):
-        """首唤：--fork <src> + --name（可读名），无 --session-id；cwd=主项目。"""
+    def test_first_wake_uses_fork_name_and_predetermined_sid(self):
+        """首唤：--fork <src> + --name + 预生成 --session-id；cwd=主项目。"""
         proc = FakeProc("ok", out='{"type":"session","id":"uuid-1"}')
-        result, pm = self._run(proc, fork_source=self.src, fork_cwd=self.cwd_main)
+        result, pm = self._run(proc)
         args, kwargs = pm.call_args
         cmd = args[0]
         self.assertIn("--fork", cmd)
         self.assertEqual(cmd[cmd.index("--fork") + 1], self.src)
         self.assertIn("--name", cmd)
         self.assertTrue(cmd[cmd.index("--name") + 1].endswith("-a"))
-        self.assertNotIn("--session-id", cmd)
+        self.assertIn("--session-id", cmd)
+        sid = cmd[cmd.index("--session-id") + 1]
+        self.assertRegex(sid, r"^[0-9a-f-]{36}$")  # 预生成 UUID
         self.assertEqual(kwargs["cwd"], self.cwd_main)
-        # sid 从输出解析并保存
-        self.assertEqual(result, ("uuid-1", 0))
+        self.assertEqual(result, ("uuid-1", 0))  # 输出解析成功 → 用输出的
         with open(os.path.join(self.base, "status-a.json")) as f:
             self.assertEqual(json.load(f), {"sessionID": "uuid-1"})
 
-    def test_second_wake_uses_session_id_no_fork(self):
-        """续接：sid 已存 → --session-id，无 --fork；cwd 回 workdir。"""
+    def test_second_wake_continues_saved_sid(self):
+        """续接：sid 已存 → --session-id 续接，无重复 --fork；cwd 仍=主项目。"""
         meeting_loop.save_session_id(self.workdir, "a", "uuid-1")
         proc = FakeProc("ok", out='{"type":"session","id":"uuid-1"}')
-        _, pm = self._run(proc, fork_source=self.src, fork_cwd=self.cwd_main)
-        args, kwargs = pm.call_args
-        cmd = args[0]
-        self.assertNotIn("--fork", cmd)
-        self.assertIn("--session-id", cmd)
-        self.assertEqual(cmd[cmd.index("--session-id") + 1], "uuid-1")
-        self.assertEqual(kwargs["cwd"], self.workdir)
-
-    def test_no_fork_config_is_legacy(self):
-        """未配置 forkSource：完全 legacy（--session-id + cwd=workdir）。"""
-        proc = FakeProc("ok")
         _, pm = self._run(proc)
         args, kwargs = pm.call_args
         cmd = args[0]
         self.assertNotIn("--fork", cmd)
         self.assertIn("--session-id", cmd)
-        self.assertEqual(kwargs["cwd"], self.workdir)
+        self.assertEqual(cmd[cmd.index("--session-id") + 1], "uuid-1")
+        self.assertEqual(kwargs["cwd"], self.cwd_main)
 
+    def test_missing_fork_source_raises(self):
+        """fork-only：未配置 fork 源 → 明确报错（不再静默退化 legacy）。"""
+        proc = FakeProc("ok")
+        with self.assertRaises(RuntimeError):
+            self._run(proc, fork_source=None)
+
+    def test_protocol_agents_md_injected(self):
+        """协议注入缺口修复：workdir/AGENTS.md 存在 → --append-system-prompt
+        （视角 prompt_file + 协议各一次）。"""
+        proto = os.path.join(self.workdir, "AGENTS.md")
+        with open(proto, "w") as f:
+            f.write("# 协议")
+        # 视角注入路径（pi-agent.json.prompt_file）也建好
+        pdir = os.path.join(self.workdir, ".pi/agent")
+        os.makedirs(pdir, exist_ok=True)
+        with open(os.path.join(pdir, "a.md"), "w") as f:
+            f.write("# 视角")
+        with open(os.path.join(self.workdir, "pi-agent.json"), "w") as f:
+            json.dump({"prompt_file": ".pi/agent/a.md"}, f)
+        proc = FakeProc("ok", out='{"type":"session","id":"u"}')
+        _, pm = self._run(proc)
+        cmd = pm.call_args[0][0]
+        self.assertEqual(cmd.count("--append-system-prompt"), 2)
+        self.assertIn(proto, cmd)
+        self.assertIn(os.path.join(pdir, "a.md"), cmd)
+
+    def test_protocol_agents_md_absent_no_inject(self):
+        proc = FakeProc("ok", out='{"type":"session","id":"u"}')
+        _, pm = self._run(proc)
+        cmd = pm.call_args[0][0]
+        self.assertNotIn(os.path.join(self.workdir, "AGENTS.md"), cmd)
 
 class TestResponderAbsolutePaths(unittest.TestCase):
     """make_responder：fork 模式（cwd=主项目）下 prompt 路径必须绝对。"""

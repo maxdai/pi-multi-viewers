@@ -205,34 +205,45 @@ def recover_git_lock(workdir, agent):
 
 
 def wake_llm(workdir, agent, prompt, pure=False, fork_source=None, fork_cwd=None):
-    """唤醒 pi（session 复用 + 失败回退）。返回 sessionID。
+    """唤醒 pi（fork-only：首唤 --fork，后续 --session-id 续接）。返回 sessionID。
 
     每次唤醒记录完整命令行 + prompt 到 wake-logs/（排错第一手段）。
 
-    fork 模式（多视角，可选）：首次唤醒（无已存 sid）以 --fork 挂载主
+    fork 模式（唯一模式）：首次唤醒（无已存 sid）以 --fork 挂载主
     session 全量上下文 + --name 可读显示名（id 由 pi 生成 UUID——id 归
     机制、名字归人）；agent 进程 cwd = fork_cwd（主项目，可直接读项目
-    文件）。后续唤醒 sid 已存 → 走常规 --session-id 续接。
-    实测 2026-09-09（docs/examples/first-experiment）：fork 上下文携带、
-    --name 落盘（session_info label）、续接模式全部通过。
+    文件）。后续唤醒 sid 已存 → --session-id 续接。
+    实测 2026-09-09（docs/examples/first-experiment + e2e）：fork 上下文
+    携带、--name 落盘（session_info label）、续接模式全部通过。
+
+    协议注入：workdir/AGENTS.md（讨论协议）不在主项目 cwd 的祖先链上，
+    pi 不会自动发现——无条件 --append-system-prompt 注入（文件存在才加）。
+    e2e 曾暴露缺口：无注入时靠模型能力偶尔能跑通，非设计保证。
     """
+    if not fork_source:
+        raise RuntimeError(
+            "fork 源未配置（protocol.json 缺 forkSource）——多视角模式必须在"
+            "主 pi session 内启动（无 session 时先在项目目录跑一次 pi --print 造引导 session）")
     cfg = read_agent_config(workdir, agent)
     sid = load_session_id(workdir, agent)
     base = os.path.dirname(workdir)
     session_dir = os.path.join(base, "pi-sessions")
-    fork_mode = bool(fork_source) and not sid
-    if fork_mode:
+    first_wake = not sid
+    if first_wake:
+        # 预生成 UUID 并显式传 --session-id：pi --fork 接受指定 id——
+        # 即使输出解析失败，本进程也有确定 sid（续接不依赖 parse 成功）
+        import uuid
+        sid = str(uuid.uuid4())
         base_name = os.path.basename(base.rstrip("/")) or "discussion"
         display_name = f"{base_name}-{agent}"
         cmd = ["pi", "--mode", "json", "--fork", fork_source,
-               "--name", display_name, "--session-dir", session_dir]
+               "--session-id", sid, "--name", display_name,
+               "--session-dir", session_dir]
         spawn_cwd = fork_cwd or workdir
     else:
-        if not sid:
-            sid = session_id(workdir, agent)
         cmd = ["pi", "--mode", "json", "--session-id", sid,
                "--session-dir", session_dir]
-        spawn_cwd = workdir
+        spawn_cwd = fork_cwd or workdir
     if pure:
         # Pi 的 pure 近似：关闭外部扩展/技能/prompt-template/主题加载，
         # 保留内置工具（read/bash/edit/write）与项目内 AGENTS.md。
@@ -246,6 +257,10 @@ def wake_llm(workdir, agent, prompt, pure=False, fork_source=None, fork_cwd=None
     prompt_file = cfg.get("prompt_file") or ""
     if prompt_file and os.path.isfile(os.path.join(workdir, prompt_file)):
         cmd += ["--append-system-prompt", os.path.join(workdir, prompt_file)]
+    # 协议 AGENTS.md 注入（fork-only 缺口修复，见 docstring）：
+    protocol_md = os.path.join(workdir, "AGENTS.md")
+    if os.path.isfile(protocol_md):
+        cmd += ["--append-system-prompt", protocol_md]
     # 非交互模式 + JSON 事件流；自动信任项目本地文件（AGENTS.md 等）
     cmd += ["--approve", "--print", prompt]
 
@@ -407,10 +422,16 @@ if __name__ == "__main__":
                 mr = int(sys.argv[i + 1])
             else:
                 st = int(sys.argv[i + 1])
+    fork_source = proto.get("forkSource") or ""
+    if not fork_source:
+        print("[fatal] protocol.json 缺 forkSource——多视角模式必须在主 pi "
+              "session 内启动（wrapper 会自动解析；无 session 时先在项目目录"
+              "跑一次 pi --print 造引导 session）", flush=True)
+        sys.exit(1)
     try:
         agent_loop(workdir, agent,
                    make_responder(pure,
-                                  fork_source=proto.get("forkSource") or "",
+                                  fork_source=fork_source,
                                   fork_cwd=proto.get("forkCwd") or ""),
                    max_meeting=mm, max_rr=mr, stall_timeout=st)
     except KeyboardInterrupt:
