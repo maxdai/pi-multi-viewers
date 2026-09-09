@@ -17,6 +17,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from meeting_fs import (
     build_active_fork_source,
+    build_bootstrap,
     run_git, git_head, git_pull, git_commit, git_push,
     git_ls_files, git_show, _frontmatter_end, parse_frontmatter,
     extract_body, read_message, _fm_to_lines, write_message,
@@ -418,3 +419,24 @@ class TestActiveForkSource(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class TestBootstrap(unittest.TestCase):
+    """空白引导 session（2026-09-09）：零 LLM 造合法 fork 源。"""
+
+    def test_generates_header_only(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = os.path.join(tmp, "bootstrap.jsonl")
+            p, err = build_bootstrap(out, "/proj", session_id="bs-1")
+            self.assertIsNone(err)
+            lines = [json.loads(x) for x in open(out)]
+            self.assertEqual(len(lines), 1)
+            self.assertEqual(lines[0]["type"], "session")
+            self.assertEqual(lines[0]["id"], "bs-1")
+            self.assertEqual(lines[0]["cwd"], "/proj")
+
+    def test_random_id_when_unspecified(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = os.path.join(tmp, "b.jsonl")
+            p, _ = build_bootstrap(out, "/p")
+            h = json.loads(open(out).readline())
+            self.assertRegex(h["id"], r"^[0-9a-f-]{36}$")

@@ -404,3 +404,27 @@ def build_active_fork_source(src_session, out_path, new_id, new_cwd):
         for e in active:
             f.write(json.dumps(e, ensure_ascii=False) + "\n")
     return len(active) + 1, None
+
+def build_bootstrap(out_path, cwd, session_id=None):
+    """生成空白引导 session 文件（零 LLM，替代 pi --print "就绪"）。
+
+    用途（2026-09-09）：脚本/测试场景无主 session 时，给 meeting_loop 一
+    个合法 fork 源。空 header + 零 message——agent 首唤 --session 打开后
+    第一条 user 消息就是 wake prompt（任务描述，无"就绪"噪音 turn）。
+    冒烟实测：仅 header 的文件可被 pi --session 正常打开续写。
+
+    返回 (out_path, error)。
+    """
+    import uuid
+    from datetime import datetime, timezone
+    sid = session_id or str(uuid.uuid4())
+    ts = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    header = {"type": "session", "version": 3, "id": sid,
+              "timestamp": ts, "cwd": cwd}
+    try:
+        os.makedirs(os.path.dirname(out_path), exist_ok=True)
+        with open(out_path, "w", encoding="utf-8") as f:
+            f.write(json.dumps(header, ensure_ascii=False) + "\n")
+    except OSError as e:
+        return None, f"引导 session 写入失败: {e}"
+    return out_path, None
