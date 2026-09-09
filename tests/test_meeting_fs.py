@@ -396,13 +396,16 @@ class TestActiveForkSource(unittest.TestCase):
             self.assertEqual(lines[1]["type"], "compaction")
             self.assertEqual(lines[2]["id"], "k1")  # 旧历史 m1 被裁掉
 
-    def test_no_compaction_rejected(self):
+    def test_no_compaction_bootstrap_fallback(self):
+        """无 compaction（引导 session）→ 全量兜底（引导本就干净）。"""
         with tempfile.TemporaryDirectory() as tmp:
             src = self._make_src(tmp, with_compaction=False)
-            n, err = build_active_fork_source(
-                src, os.path.join(tmp, "out.jsonl"), "u", "/p")
-            self.assertEqual(n, 0)
-            self.assertIn("无 compaction", err)
+            out = os.path.join(tmp, "out.jsonl")
+            n, err = build_active_fork_source(src, out, "u", "/p")
+            self.assertIsNone(err)
+            lines = [json.loads(x) for x in open(out)]
+            self.assertEqual(len(lines), 2)  # header + 全量 1 条
+            self.assertEqual(lines[1]["id"], "m1")
 
     def test_bad_source(self):
         with tempfile.TemporaryDirectory() as tmp:

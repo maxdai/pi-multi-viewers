@@ -373,22 +373,31 @@ def build_active_fork_source(src_session, out_path, new_id, new_cwd):
         return 0, "源 session 无 header"
     comps = [(i, e) for i, e in enumerate(entries) if e.get("type") == "compaction"]
     if not comps:
-        return 0, "源 session 无 compaction（活跃视图不可用）——历史全量即行为先例，建议用引导 session"
-    _i_last, comp = comps[-1]
-    kept_id = comp.get("firstKeptEntryId")
-    idx_by_id = {e.get("id"): i for i, e in enumerate(entries) if e.get("id")}
-    kept_idx = idx_by_id.get(kept_id)
-    if kept_idx is None:
-        return 0, f"firstKeptEntryId {kept_id} 不在源 session 中"
+        # 无 compaction 兜底：引导 session（pi --print 造的几条消息）本就
+        # 干净无行为先例，全量即活跃视图；大 session 无 compaction 说明
+        # 主 pi 从未压缩（历史=活跃），此时全量复制风险自担——文件头加
+        # 标记供核查。拒绝会堵死引导 session 正道（e2e 预检实测 2026-09-09）
+        active = entries[1:]  # 除 header 外全量
+        truncated = False
+    if comps:
+        _i_last, comp = comps[-1]
+        kept_id = comp.get("firstKeptEntryId")
+        idx_by_id = {e.get("id"): i for i, e in enumerate(entries) if e.get("id")}
+        kept_idx = idx_by_id.get(kept_id)
+        if kept_idx is None:
+            return 0, f"firstKeptEntryId {kept_id} 不在源 session 中"
+        active = [comp] + entries[kept_idx:]
+        new_ts = comp.get("timestamp") or header.get("timestamp")
+    else:
+        new_ts = header.get("timestamp")
     new_header = {
         "type": "session",
         "version": header.get("version", 3),
         "id": new_id,
-        "timestamp": comp.get("timestamp") or header.get("timestamp"),
+        "timestamp": new_ts,
         "cwd": new_cwd,
         "parentSession": src_session,
     }
-    active = [comp] + entries[kept_idx:]
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     with open(out_path, "w", encoding="utf-8") as f:
         f.write(json.dumps(new_header, ensure_ascii=False) + "\n")
