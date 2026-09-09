@@ -1,0 +1,486 @@
+...../root/pi-agents-helper/meeting_engine.py:57: ResourceWarning: unclosed file <_io.TextIOWrapper name='/tmp/flow-compose-kyp_tfd1/disc/work-a/protocol.json' mode='r' encoding='UTF-8'>
+  proto = json.load(open(os.path.join(workdir, "protocol.json")))
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/root/pi-agents-helper/meeting_engine.py:63: ResourceWarning: unclosed file <_io.TextIOWrapper name='/tmp/flow-compose-kyp_tfd1/disc/work-a/protocol.json' mode='r' encoding='UTF-8'>
+  proto = json.load(open(os.path.join(workdir, "protocol.json")))
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+.[setup] 环境就绪: /tmp/flow-compose-kyp_tfd1/disc（2 agents: a, b）
+[setup] resultWriter=b, maxMeeting=10, maxRR=7, 立场=无, pure=False
+[setup] 环境就绪: /tmp/flow-compose-c4vqqqf6/disc（2 agents: a, b）
+[setup] resultWriter=b, maxMeeting=10, maxRR=7, 立场=无, pure=False
+[19:58:51] a: 提交并推送 1 条新消息
+/root/pi-agents-helper/meeting_engine.py:82: ResourceWarning: unclosed file <_io.BufferedReader name=5>
+  contents = _cat_batch(bare, msg_files)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+.[setup] 环境就绪: /tmp/flow-compose-b6f8hwe9/disc（2 agents: a, b）
+[setup] resultWriter=b, maxMeeting=10, maxRR=7, 立场=无, pure=False
+[19:58:51] a: 提交并推送 1 条新消息
+[19:58:51] b: 提交并推送 1 条新消息
+/root/pi-agents-helper/meeting_engine.py:82: ResourceWarning: unclosed file <_io.BufferedReader name=5>
+  contents = _cat_batch(bare, msg_files)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/root/pi-agents-helper/meeting_engine.py:82: ResourceWarning: unclosed file <_io.BufferedReader name=5>
+  contents = _cat_batch(bare, msg_files)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+[19:58:51] a: [loop] 写流程控制 freezing (a/0002.md)
+[19:58:51] b: [loop] 写流程控制 freezing (b/0002.md)
+/root/pi-agents-helper/meeting_engine.py:82: ResourceWarning: unclosed file <_io.BufferedReader name=5>
+  contents = _cat_batch(bare, msg_files)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+.[setup] 环境就绪: /tmp/flow-compose-3pwvwbst/disc（2 agents: a, b）
+[setup] resultWriter=b, maxMeeting=10, maxRR=7, 立场=无, pure=False
+[19:58:51] a: 提交并推送 1 条新消息
+/root/pi-agents-helper/meeting_engine.py:82: ResourceWarning: unclosed file <_io.BufferedReader name=5>
+  contents = _cat_batch(bare, msg_files)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/root/pi-agents-helper/meeting_engine.py:57: ResourceWarning: unclosed file <_io.TextIOWrapper name='/tmp/flow-compose-3pwvwbst/disc/work-human/protocol.json' mode='r' encoding='UTF-8'>
+  proto = json.load(open(os.path.join(workdir, "protocol.json")))
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/root/pi-agents-helper/meeting_engine.py:82: ResourceWarning: unclosed file <_io.BufferedReader name=6>
+  contents = _cat_batch(bare, msg_files)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+.[setup] 环境就绪: /tmp/flow-compose-r9ot5_u6/disc（2 agents: a, b）
+[setup] resultWriter=b, maxMeeting=10, maxRR=7, 立场=无, pure=False
+[19:58:51] a: [loop] 写流程控制 freezing (a/0001.md)
+[19:58:51] b: [loop] 写流程控制 freezing (b/0001.md)
+/root/pi-agents-helper/meeting_engine.py:82: ResourceWarning: unclosed file <_io.BufferedReader name=5>
+  contents = _cat_batch(bare, msg_files)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/root/pi-agents-helper/meeting_engine.py:82: ResourceWarning: unclosed file <_io.BufferedReader name=5>
+  contents = _cat_batch(bare, msg_files)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+[19:58:51] a: [loop] 写流程控制 all-freezing (a/0002.md)
+/root/pi-agents-helper/meeting_engine.py:82: ResourceWarning: unclosed file <_io.BufferedReader name=5>
+  contents = _cat_batch(bare, msg_files)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+[19:58:52] b: [loop] 写流程控制 all-freezing (b/0002.md)
+/root/pi-agents-helper/meeting_engine.py:82: ResourceWarning: unclosed file <_io.BufferedReader name=5>
+  contents = _cat_batch(bare, msg_files)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+[19:58:52] a: [loop] 写流程控制 pass (a/0003.md)
+/root/pi-agents-helper/meeting_engine.py:82: ResourceWarning: unclosed file <_io.BufferedReader name=5>
+  contents = _cat_batch(bare, msg_files)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+[19:58:52] b: [loop] 写流程控制 pass (b/0003.md)
+/root/pi-agents-helper/meeting_engine.py:82: ResourceWarning: unclosed file <_io.BufferedReader name=5>
+  contents = _cat_batch(bare, msg_files)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+.[setup] 环境就绪: /tmp/flow-compose-cegtgulo/disc（2 agents: a, b）
+[setup] resultWriter=b, maxMeeting=10, maxRR=7, 立场=无, pure=False
+[19:58:52] a: [loop] 写流程控制 pass (a/0001.md)
+[19:58:52] b: [loop] 写流程控制 pass (b/0001.md)
+[19:58:52] a: [loop] 写流程控制 pass (a/0002.md)
+/root/pi-agents-helper/meeting_engine.py:82: ResourceWarning: unclosed file <_io.BufferedReader name=5>
+  contents = _cat_batch(bare, msg_files)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+[19:58:52] b: 收尾（consensus）——唤醒写 result.md
+[19:58:52] b: [loop] 写流程控制 concluded (b/0002.md)
+/root/pi-agents-helper/meeting_engine.py:82: ResourceWarning: unclosed file <_io.BufferedReader name=5>
+  contents = _cat_batch(bare, msg_files)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+./root/pi-agents-helper/meeting_engine.py:57: ResourceWarning: unclosed file <_io.TextIOWrapper name='/tmp/flow-compose-7uj6_5pt/disc/work-human/protocol.json' mode='r' encoding='UTF-8'>
+  proto = json.load(open(os.path.join(workdir, "protocol.json")))
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/root/pi-agents-helper/meeting_engine.py:82: ResourceWarning: unclosed file <_io.BufferedReader name=5>
+  contents = _cat_batch(bare, msg_files)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+.[setup] 环境就绪: /tmp/flow-compose-7uj6_5pt/disc（2 agents: a, b）
+[setup] resultWriter=b, maxMeeting=10, maxRR=7, 立场=无, pure=False
+[setup] 环境就绪: /tmp/flow-compose-32nslq34/disc（2 agents: a, b）
+[setup] resultWriter=b, maxMeeting=10, maxRR=7, 立场=无, pure=False
+[19:58:52] a: [loop] 写流程控制 pass (a/0001.md)
+[19:58:52] b: [loop] 写流程控制 pass (b/0001.md)
+[19:58:52] a: [loop] 写流程控制 pass (a/0002.md)
+[19:58:52] b: 收尾（consensus）——唤醒写 result.md
+[19:58:52] b: [loop] 写流程控制 concluded (b/0002.md)
+../root/pi-agents-helper/meeting_engine.py:57: ResourceWarning: unclosed file <_io.TextIOWrapper name='/tmp/meeting-test/human-e2e/work-human/protocol.json' mode='r' encoding='UTF-8'>
+  proto = json.load(open(os.path.join(workdir, "protocol.json")))
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/root/pi-agents-helper/meeting_engine.py:82: ResourceWarning: unclosed file <_io.BufferedReader name=6>
+  contents = _cat_batch(bare, msg_files)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/root/pi-agents-helper/meeting_engine.py:57: ResourceWarning: unclosed file <_io.TextIOWrapper name='/tmp/meeting-test/human-e2e/work-human/protocol.json' mode='r' encoding='UTF-8'>
+  proto = json.load(open(os.path.join(workdir, "protocol.json")))
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/root/pi-agents-helper/meeting_engine.py:82: ResourceWarning: unclosed file <_io.BufferedReader name=6>
+  contents = _cat_batch(bare, msg_files)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+.....[cleanup] 已保存 result.md → /tmp/flow-compose-32nslq34/disc-result.md
+[cleanup] 已删除目录 /tmp/flow-compose-32nslq34/disc（含 pi-sessions）
+[setup] 环境就绪: /tmp/flow-compose-ykguovcs/disc（2 agents: a, b）
+[setup] resultWriter=b, maxMeeting=10, maxRR=7, 立场=无, pure=False
+[cleanup] 已删除目录 /tmp/flow-compose-ykguovcs/disc（含 pi-sessions）
+[19:59:06] a: meeting engine v2 启动 (meeting配额=1, rr配额=5)
+[19:59:06] b: meeting engine v2 启动 (meeting配额=1, rr配额=5)
+/root/pi-agents-helper/meeting_engine.py:57: ResourceWarning: unclosed file <_io.TextIOWrapper name='/tmp/meeting-test/quota-inc/work-b/protocol.json' mode='r' encoding='UTF-8'>
+  proto = json.load(open(os.path.join(workdir, "protocol.json")))
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/root/pi-agents-helper/meeting_engine.py:57: ResourceWarning: unclosed file <_io.TextIOWrapper name='/tmp/meeting-test/quota-inc/work-a/protocol.json' mode='r' encoding='UTF-8'>
+  proto = json.load(open(os.path.join(workdir, "protocol.json")))
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/root/pi-agents-helper/meeting_engine.py:63: ResourceWarning: unclosed file <_io.TextIOWrapper name='/tmp/meeting-test/quota-inc/work-b/protocol.json' mode='r' encoding='UTF-8'>
+  proto = json.load(open(os.path.join(workdir, "protocol.json")))
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/root/pi-agents-helper/meeting_engine.py:63: ResourceWarning: unclosed file <_io.TextIOWrapper name='/tmp/meeting-test/quota-inc/work-a/protocol.json' mode='r' encoding='UTF-8'>
+  proto = json.load(open(os.path.join(workdir, "protocol.json")))
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/root/pi-agents-helper/meeting_engine.py:82: ResourceWarning: unclosed file <_io.BufferedReader name=7>
+  contents = _cat_batch(bare, msg_files)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/root/pi-agents-helper/meeting_engine.py:82: ResourceWarning: unclosed file <_io.BufferedReader name=6>
+  contents = _cat_batch(bare, msg_files)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/root/pi-agents-helper/meeting_engine.py:82: ResourceWarning: unclosed file <_io.BufferedReader name=12>
+  contents = _cat_batch(bare, msg_files)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+[19:59:06] a: 首启——参与讨论
+[19:59:06] b: 首启——参与讨论
+[19:59:06] a: 提交并推送 1 条新消息
+/root/pi-agents-helper/meeting_engine.py:82: ResourceWarning: unclosed file <_io.BufferedReader name=6>
+  contents = _cat_batch(bare, msg_files)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/root/pi-agents-helper/meeting_engine.py:82: ResourceWarning: unclosed file <_io.BufferedReader name=5>
+  contents = _cat_batch(bare, msg_files)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+[19:59:06] b: 提交并推送 1 条新消息
+/root/pi-agents-helper/meeting_engine.py:82: ResourceWarning: unclosed file <_io.BufferedReader name=5>
+  contents = _cat_batch(bare, msg_files)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+[19:59:06] b: 触发——新消息 1 条
+[19:59:06] b: 提交并推送 1 条新消息
+/root/pi-agents-helper/meeting_engine.py:82: ResourceWarning: unclosed file <_io.BufferedReader name=5>
+  contents = _cat_batch(bare, msg_files)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+[19:59:06] b: meeting 配额耗尽（2 轮，含 human 增量1）——确定性 freezing
+[19:59:06] b: [loop] 写流程控制 freezing (b/0003.md)
+/root/pi-agents-helper/meeting_engine.py:82: ResourceWarning: unclosed file <_io.BufferedReader name=5>
+  contents = _cat_batch(bare, msg_files)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+[19:59:06] b: 异常（不终止讨论）: ValueError: sleep length must be non-negative
+/root/pi-agents-helper/meeting_engine.py:82: ResourceWarning: unclosed file <_io.BufferedReader name=5>
+  contents = _cat_batch(bare, msg_files)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/root/pi-agents-helper/meeting_engine.py:82: ResourceWarning: unclosed file <_io.BufferedReader name=5>
+  contents = _cat_batch(bare, msg_files)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+[19:59:06] b: 异常（不终止讨论）: ValueError: sleep length must be non-negative
+/root/pi-agents-helper/meeting_engine.py:82: ResourceWarning: unclosed file <_io.BufferedReader name=5>
+  contents = _cat_batch(bare, msg_files)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+[19:59:07] a: 触发——新消息 3 条
+[19:59:07] a: 提交并推送 1 条新消息
+/root/pi-agents-helper/meeting_engine.py:82: ResourceWarning: unclosed file <_io.BufferedReader name=6>
+  contents = _cat_batch(bare, msg_files)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/root/pi-agents-helper/meeting_engine.py:82: ResourceWarning: unclosed file <_io.BufferedReader name=7>
+  contents = _cat_batch(bare, msg_files)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+[19:59:07] a: meeting 配额耗尽（2 轮，含 human 增量1）——确定性 freezing
+[19:59:07] a: [loop] 写流程控制 freezing (a/0003.md)
+/root/pi-agents-helper/meeting_engine.py:82: ResourceWarning: unclosed file <_io.BufferedReader name=5>
+  contents = _cat_batch(bare, msg_files)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/root/pi-agents-helper/meeting_engine.py:82: ResourceWarning: unclosed file <_io.BufferedReader name=5>
+  contents = _cat_batch(bare, msg_files)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+[19:59:07] a: [loop] 写流程控制 all-freezing (a/0004.md)
+/root/pi-agents-helper/meeting_engine.py:82: ResourceWarning: unclosed file <_io.BufferedReader name=6>
+  contents = _cat_batch(bare, msg_files)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/root/pi-agents-helper/meeting_engine.py:82: ResourceWarning: unclosed file <_io.BufferedReader name=5>
+  contents = _cat_batch(bare, msg_files)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/root/pi-agents-helper/meeting_engine.py:82: ResourceWarning: unclosed file <_io.BufferedReader name=5>
+  contents = _cat_batch(bare, msg_files)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+[19:59:07] b: [loop] 写流程控制 all-freezing (b/0004.md)
+/root/pi-agents-helper/meeting_engine.py:82: ResourceWarning: unclosed file <_io.BufferedReader name=5>
+  contents = _cat_batch(bare, msg_files)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/root/pi-agents-helper/meeting_engine.py:82: ResourceWarning: unclosed file <_io.BufferedReader name=5>
+  contents = _cat_batch(bare, msg_files)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+[19:59:07] a: start RR——有冻结期间新消息，唤醒 LLM 读取
+/root/pi-agents-helper/meeting_engine.py:57: ResourceWarning: unclosed file <_io.TextIOWrapper name='/tmp/meeting-test/quota-inc/work-a/protocol.json' mode='r' encoding='UTF-8'>
+  proto = json.load(open(os.path.join(workdir, "protocol.json")))
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+[19:59:07] a: 提交并推送 1 条新消息
+/root/pi-agents-helper/meeting_engine.py:82: ResourceWarning: unclosed file <_io.BufferedReader name=5>
+  contents = _cat_batch(bare, msg_files)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/root/pi-agents-helper/meeting_engine.py:82: ResourceWarning: unclosed file <_io.BufferedReader name=5>
+  contents = _cat_batch(bare, msg_files)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/root/pi-agents-helper/meeting_engine.py:82: ResourceWarning: unclosed file <_io.BufferedReader name=7>
+  contents = _cat_batch(bare, msg_files)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/root/pi-agents-helper/meeting_engine.py:57: ResourceWarning: unclosed file <_io.TextIOWrapper name='/tmp/meeting-test/quota-inc/work-b/protocol.json' mode='r' encoding='UTF-8'>
+  proto = json.load(open(os.path.join(workdir, "protocol.json")))
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+[19:59:07] b: 提交并推送 1 条新消息
+/root/pi-agents-helper/meeting_engine.py:82: ResourceWarning: unclosed file <_io.BufferedReader name=5>
+  contents = _cat_batch(bare, msg_files)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+[19:59:07] b: 收尾（consensus）——唤醒写 result.md
+[19:59:07] b: result.md 未生成或无效——重试
+[19:59:07] b: result.md 未生成或无效——重试
+[19:59:07] b: result.md 未生成或无效——重试
+[19:59:07] b: result.md 重试后仍无效——loop 兜底代写
+/root/pi-agents-helper/meeting_engine.py:82: ResourceWarning: unclosed file <_io.BufferedReader name=7>
+  contents = _cat_batch(bare, msg_files)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+[19:59:07] b: [loop] 写流程控制 concluded (b/0006.md)
+/root/pi-agents-helper/meeting_engine.py:82: ResourceWarning: unclosed file <_io.BufferedReader name=5>
+  contents = _cat_batch(bare, msg_files)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+[19:59:07] b: 讨论已收尾，退出
+/root/pi-agents-helper/meeting_engine.py:82: ResourceWarning: unclosed file <_io.BufferedReader name=5>
+  contents = _cat_batch(bare, msg_files)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+[19:59:07] a: 讨论已收尾，退出
+/root/pi-agents-helper/meeting_engine.py:82: ResourceWarning: unclosed file <_io.BufferedReader name=5>
+  contents = _cat_batch(bare, msg_files)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/root/pi-agents-helper/meeting_engine.py:82: ResourceWarning: unclosed file <_io.BufferedReader name=5>
+  contents = _cat_batch(bare, msg_files)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+.../root/pi-agents-helper/meeting_engine.py:82: ResourceWarning: unclosed file <_io.BufferedReader name=5>
+  contents = _cat_batch(bare, msg_files)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+............../root/pi-agents-helper/meeting_engine.py:57: ResourceWarning: unclosed file <_io.TextIOWrapper name='/tmp/meeting-test/sayer-multi/work-human/protocol.json' mode='r' encoding='UTF-8'>
+  proto = json.load(open(os.path.join(workdir, "protocol.json")))
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+./root/pi-agents-helper/meeting_engine.py:57: ResourceWarning: unclosed file <_io.TextIOWrapper name='/tmp/meeting-test/sayer-seq/work-human/protocol.json' mode='r' encoding='UTF-8'>
+  proto = json.load(open(os.path.join(workdir, "protocol.json")))
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/root/pi-agents-helper/meeting_engine.py:57: ResourceWarning: unclosed file <_io.TextIOWrapper name='/tmp/meeting-test/sayer-seq/work-human/protocol.json' mode='r' encoding='UTF-8'>
+  proto = json.load(open(os.path.join(workdir, "protocol.json")))
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/root/pi-agents-helper/meeting_engine.py:82: ResourceWarning: unclosed file <_io.BufferedReader name=6>
+  contents = _cat_batch(bare, msg_files)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+./root/pi-agents-helper/meeting_engine.py:57: ResourceWarning: unclosed file <_io.TextIOWrapper name='/tmp/meeting-test/sayer-basic/work-human/protocol.json' mode='r' encoding='UTF-8'>
+  proto = json.load(open(os.path.join(workdir, "protocol.json")))
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/root/pi-agents-helper/meeting_engine.py:82: ResourceWarning: unclosed file <_io.BufferedReader name=6>
+  contents = _cat_batch(bare, msg_files)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+../root/pi-agents-helper/meeting_engine.py:57: ResourceWarning: unclosed file <_io.TextIOWrapper name='/tmp/meeting-test/sayer-trunc/work-human/protocol.json' mode='r' encoding='UTF-8'>
+  proto = json.load(open(os.path.join(workdir, "protocol.json")))
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+./root/pi-agents-helper/meeting_engine.py:82: ResourceWarning: unclosed file <_io.BufferedReader name=5>
+  contents = _cat_batch(bare, msg_files)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+./root/pi-agents-helper/meeting_engine.py:82: ResourceWarning: unclosed file <_io.BufferedReader name=7>
+  contents = _cat_batch(bare, msg_files)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/root/pi-agents-helper/meeting_engine.py:82: ResourceWarning: unclosed file <_io.BufferedReader name=5>
+  contents = _cat_batch(bare, msg_files)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+../root/pi-agents-helper/meeting_engine.py:82: ResourceWarning: unclosed file <_io.BufferedReader name=5>
+  contents = _cat_batch(bare, msg_files)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+./root/pi-agents-helper/meeting_engine.py:82: ResourceWarning: unclosed file <_io.BufferedReader name=5>
+  contents = _cat_batch(bare, msg_files)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+.错误: 插话内容为空（传 <文本> 参数或经 stdin 输入）
+.错误: 讨论不存在: /nonexistent
+.错误: work-human 不存在: /tmp/tmpj1qis539/disc/work-human（讨论创建于 human 功能之前?）
+.................................................../root/pi-agents-helper/meeting_engine.py:82: ResourceWarning: unclosed file <_io.BufferedReader name=5>
+  contents = _cat_batch(bare, msg_files)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+./root/pi-agents-helper/tests/test_meeting_engine.py:143: ResourceWarning: unclosed file <_io.BufferedReader name=5>
+  contents = _cat_batch(bare, paths)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/root/pi-agents-helper/tests/test_meeting_engine.py:147: ResourceWarning: unclosed file <_io.BufferedReader name=5>
+  self.assertEqual(_cat_batch(bare, ["a/9999.md"]), {})
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+./root/pi-agents-helper/meeting_engine.py:82: ResourceWarning: unclosed file <_io.BufferedReader name=5>
+  contents = _cat_batch(bare, msg_files)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+./root/pi-agents-helper/meeting_engine.py:82: ResourceWarning: unclosed file <_io.BufferedReader name=5>
+  contents = _cat_batch(bare, msg_files)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+..已发送 human/0001.md（摘要: stdin 内容）
+已发送 human/0001.md（摘要: 插话文本）
+[spec-gen] 已生成骨架: /tmp/tmpkzk5h_98/myspec
+[20:00:10] a: [fix] 0001.md 校验失败: ["type 'concluded' 非法，应为 ['freezing', 'message', 'pass']"]——删除，等待重写
+[20:00:10] a: 提交并推送 1 条新消息
+.[20:00:10] a: [fix] 0001.md 无 frontmatter 或块不完整（parse 返回 None，A1），删除等待重写
+[20:00:10] a: 提交并推送 1 条新消息
+..[20:00:10] a: 提交并推送 1 条新消息
+/root/pi-agents-helper/meeting_engine.py:82: ResourceWarning: unclosed file <_io.BufferedReader name=5>
+  contents = _cat_batch(bare, msg_files)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+./root/pi-agents-helper/meeting_engine.py:57: ResourceWarning: unclosed file <_io.TextIOWrapper name='/tmp/eng-test-4otcxq07/disc/work-a/protocol.json' mode='r' encoding='UTF-8'>
+  proto = json.load(open(os.path.join(workdir, "protocol.json")))
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+[20:00:10] a: 提交并推送 1 条新消息
+/root/pi-agents-helper/meeting_engine.py:82: ResourceWarning: unclosed file <_io.BufferedReader name=5>
+  contents = _cat_batch(bare, msg_files)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/root/pi-agents-helper/meeting_engine.py:57: ResourceWarning: unclosed file <_io.TextIOWrapper name='/tmp/eng-test-4otcxq07/disc/work-b/protocol.json' mode='r' encoding='UTF-8'>
+  proto = json.load(open(os.path.join(workdir, "protocol.json")))
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+[20:00:11] b: 提交并推送 1 条新消息
+/root/pi-agents-helper/meeting_engine.py:82: ResourceWarning: unclosed file <_io.BufferedReader name=5>
+  contents = _cat_batch(bare, msg_files)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+..[20:00:11] b: result.md 无改动——跳过 commit（幂等）
+.[20:00:11] b: 收尾（consensus）——唤醒写 result.md
+[20:00:11] b: [loop] 写流程控制 concluded (b/0001.md)
+/root/pi-agents-helper/meeting_engine.py:82: ResourceWarning: unclosed file <_io.BufferedReader name=5>
+  contents = _cat_batch(bare, msg_files)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+.[20:00:11] b: 收尾（consensus）——唤醒写 result.md
+[20:00:11] b: result.md 未生成或无效——重试
+[20:00:11] b: result.md 未生成或无效——重试
+[20:00:11] b: result.md 未生成或无效——重试
+[20:00:11] b: result.md 重试后仍无效——loop 兜底代写
+[20:00:11] b: [loop] 写流程控制 concluded (b/0001.md)
+/root/pi-agents-helper/meeting_engine.py:82: ResourceWarning: unclosed file <_io.BufferedReader name=5>
+  contents = _cat_batch(bare, msg_files)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+./root/pi-agents-helper/meeting_engine.py:57: ResourceWarning: unclosed file <_io.TextIOWrapper name='/tmp/eng-test-7xnwf88v/disc/work-a/protocol.json' mode='r' encoding='UTF-8'>
+  proto = json.load(open(os.path.join(workdir, "protocol.json")))
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/root/pi-agents-helper/meeting_engine.py:63: ResourceWarning: unclosed file <_io.TextIOWrapper name='/tmp/eng-test-7xnwf88v/disc/work-a/protocol.json' mode='r' encoding='UTF-8'>
+  proto = json.load(open(os.path.join(workdir, "protocol.json")))
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+./root/pi-agents-helper/meeting_engine.py:63: ResourceWarning: unclosed file <_io.TextIOWrapper name='/tmp/eng-test-74p51mr4/disc/work-a/protocol.json' mode='r' encoding='UTF-8'>
+  proto = json.load(open(os.path.join(workdir, "protocol.json")))
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/root/pi-agents-helper/meeting_engine.py:57: ResourceWarning: unclosed file <_io.TextIOWrapper name='/tmp/eng-test-74p51mr4/disc/work-a/protocol.json' mode='r' encoding='UTF-8'>
+  proto = json.load(open(os.path.join(workdir, "protocol.json")))
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+./root/pi-agents-helper/meeting_engine.py:82: ResourceWarning: unclosed file <_io.BufferedReader name=5>
+  contents = _cat_batch(bare, msg_files)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+[20:00:11] b: bare 已有 RR 启动——放弃补写 af
+/root/pi-agents-helper/meeting_engine.py:82: ResourceWarning: unclosed file <_io.BufferedReader name=5>
+  contents = _cat_batch(bare, msg_files)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+.[20:00:11] a: [loop] 写流程控制 all-freezing (a/0001.md)
+/root/pi-agents-helper/meeting_engine.py:82: ResourceWarning: unclosed file <_io.BufferedReader name=5>
+  contents = _cat_batch(bare, msg_files)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+.[20:00:11] a: [loop] 写流程控制 freezing (a/0001.md)
+/root/pi-agents-helper/meeting_engine.py:82: ResourceWarning: unclosed file <_io.BufferedReader name=5>
+  contents = _cat_batch(bare, msg_files)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+.[20:00:11] b: 提交并推送 1 条新消息
+[20:00:11] a: [loop] 写流程控制 freezing (a/0001.md)
+/root/pi-agents-helper/meeting_engine.py:82: ResourceWarning: unclosed file <_io.BufferedReader name=5>
+  contents = _cat_batch(bare, msg_files)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+.[20:00:12] a: [loop] 写流程控制 pass (a/0001.md)
+/root/pi-agents-helper/meeting_engine.py:82: ResourceWarning: unclosed file <_io.BufferedReader name=5>
+  contents = _cat_batch(bare, msg_files)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/root/pi-agents-helper/meeting_engine.py:82: ResourceWarning: unclosed file <_io.BufferedReader name=5>
+  contents = _cat_batch(bare, msg_files)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+../root/pi-agents-helper/meeting_engine.py:82: ResourceWarning: unclosed file <_io.BufferedReader name=5>
+  contents = _cat_batch(bare, msg_files)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+../root/pi-agents-helper/meeting_engine.py:82: ResourceWarning: unclosed file <_io.BufferedReader name=5>
+  contents = _cat_batch(bare, msg_files)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+.....[20:00:12] a: 无产出（无静默铁律）——重试
+[20:00:12] a: 无产出（无静默铁律）——重试
+[20:00:12] a: 无产出（无静默铁律）——重试
+[20:00:12] a: responder 无法产出——loop 代写 freezing
+[20:00:13] a: [loop] 写流程控制 freezing (a/0001.md)
+/root/pi-agents-helper/meeting_engine.py:82: ResourceWarning: unclosed file <_io.BufferedReader name=5>
+  contents = _cat_batch(bare, msg_files)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+.[20:00:13] a: 无产出（无静默铁律）——重试
+[20:00:13] a: 无产出（无静默铁律）——重试
+[20:00:13] a: 无产出（无静默铁律）——重试
+[20:00:13] a: responder 无法产出——loop 代写 pass（无静默铁律最后执行）
+[20:00:13] a: [loop] 写流程控制 pass (a/0001.md)
+/root/pi-agents-helper/meeting_engine.py:82: ResourceWarning: unclosed file <_io.BufferedReader name=5>
+  contents = _cat_batch(bare, msg_files)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+.[20:00:13] a: 提交并推送 1 条新消息
+/root/pi-agents-helper/meeting_engine.py:82: ResourceWarning: unclosed file <_io.BufferedReader name=5>
+  contents = _cat_batch(bare, msg_files)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+.....................................[20:00:16] a: 唤醒 pi (session=discuss-wake-llm-test-p__pafdg-a)
+[20:00:16] a: 讨论目录已清理——终止唤醒中的 pi
+...[20:00:16] 已保存 result.md → /tmp/preserve-qgbywu5t/disc-x-result.md
+..[20:00:16] a: 检测到 .git 残留锁（上次中断）——已恢复
+......[20:00:16] a: 唤醒 pi (session=discuss-wake-llm-test-5iq22th7-a)
+[20:00:16] a: 讨论目录已清理——终止唤醒中的 pi
+.[20:00:16] a: 唤醒 pi (session=discuss-wake-llm-test-g8zmzl43-a)
+[20:00:16] a: 讨论目录已清理——终止唤醒中的 pi
+.[20:00:16] a: 唤醒 pi (session=old)
+[20:00:16] a: 唤醒失败（session 无效）——清空重试
+.[20:00:16] a: 唤醒 pi (session=discuss-wake-llm-test-l18plz94-a)
+.[20:00:16] a: 唤醒 pi (session=discuss-wake-llm-test-cugx_ik_-a)
+..[20:00:16] a: 唤醒 pi (session=old)
+.[20:00:16] a: 唤醒 pi (session=discuss-wake-llm-test-e9xoy674-a)
+............................./root/pi-agents-helper/tests/test_spec.py:216: ResourceWarning: unclosed file <_io.TextIOWrapper name='/tmp/tmpjsy08cp4/env/work-a/.pi/agent/a.md' mode='r' encoding='UTF-8'>
+  adef = open(os.path.join(base, "work-a/.pi/agent/a.md")).read()
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/root/pi-agents-helper/tests/test_spec.py:218: ResourceWarning: unclosed file <_io.TextIOWrapper name='/tmp/tmpjsy08cp4/env/work-a/pi-agent.json' mode='r' encoding='UTF-8'>
+  acfg = json.load(open(os.path.join(base, "work-a/pi-agent.json")))
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/root/pi-agents-helper/tests/test_spec.py:221: ResourceWarning: unclosed file <_io.TextIOWrapper name='/tmp/tmpjsy08cp4/env/work-b/.pi/agent/b.md' mode='r' encoding='UTF-8'>
+  bdef = open(os.path.join(base, "work-b/.pi/agent/b.md")).read()
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/root/pi-agents-helper/tests/test_spec.py:222: ResourceWarning: unclosed file <_io.TextIOWrapper name='/tmp/tmpjsy08cp4/env/work-b/pi-agent.json' mode='r' encoding='UTF-8'>
+  bcfg = json.load(open(os.path.join(base, "work-b/pi-agent.json")))
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+./root/pi-agents-helper/tests/test_spec.py:161: ResourceWarning: unclosed file <_io.TextIOWrapper name='/tmp/tmp930g37yz/models.md' mode='r' encoding='UTF-8'>
+  md = open(os.path.join(d, "models.md")).read()
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+..../root/pi-agents-helper/tests/test_spec.py:320: ResourceWarning: unclosed file <_io.TextIOWrapper name='/tmp/tmp7ydjo5wx/env/work-a/question.md' mode='r' encoding='UTF-8'>
+  q = open(os.path.join(base, "work-a/question.md")).read()
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/root/pi-agents-helper/tests/test_spec.py:324: ResourceWarning: unclosed file <_io.TextIOWrapper name='/tmp/tmp7ydjo5wx/env/work-b/AGENTS.md' mode='r' encoding='UTF-8'>
+  md = open(os.path.join(base, "work-b/AGENTS.md")).read()
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/root/pi-agents-helper/tests/test_spec.py:327: ResourceWarning: unclosed file <_io.TextIOWrapper name='/tmp/tmp7ydjo5wx/env/work-a/.pi/agent/a.md' mode='r' encoding='UTF-8'>
+  adef = open(os.path.join(base, "work-a/.pi/agent/a.md")).read()
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/root/pi-agents-helper/tests/test_spec.py:330: ResourceWarning: unclosed file <_io.TextIOWrapper name='/tmp/tmp7ydjo5wx/env/work-b/.pi/agent/b.md' mode='r' encoding='UTF-8'>
+  bdef = open(os.path.join(base, "work-b/.pi/agent/b.md")).read()
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/root/pi-agents-helper/tests/test_spec.py:333: ResourceWarning: unclosed file <_io.TextIOWrapper name='/tmp/tmp7ydjo5wx/env/work-a/protocol.json' mode='r' encoding='UTF-8'>
+  proto = json.load(open(os.path.join(base, "work-a/protocol.json")))
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+./root/pi-agents-helper/tests/test_spec.py:352: ResourceWarning: unclosed file <_io.TextIOWrapper name='/tmp/tmpek3jt3wc/env/work-a/AGENTS.md' mode='r' encoding='UTF-8'>
+  md = open(os.path.join(base, "work-a/AGENTS.md")).read()
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/root/pi-agents-helper/tests/test_spec.py:354: ResourceWarning: unclosed file <_io.TextIOWrapper name='/tmp/tmpek3jt3wc/env/work-b/.pi/agent/b.md' mode='r' encoding='UTF-8'>
+  bdef = open(os.path.join(base, "work-b/.pi/agent/b.md")).read()
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/root/pi-agents-helper/tests/test_spec.py:357: ResourceWarning: unclosed file <_io.TextIOWrapper name='/tmp/tmpek3jt3wc/env/work-a/question.md' mode='r' encoding='UTF-8'>
+  q = open(os.path.join(base, "work-a/question.md")).read()
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+./root/pi-agents-helper/tests/test_spec.py:112: ResourceWarning: unclosed file <_io.TextIOWrapper name='/tmp/tmppob4h11n/question.md' mode='r' encoding='UTF-8'>
+  q = open(os.path.join(d, "question.md")).read()
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/root/pi-agents-helper/tests/test_spec.py:119: ResourceWarning: unclosed file <_io.TextIOWrapper name='/tmp/tmppob4h11n/background.md' mode='r' encoding='UTF-8'>
+  b = open(os.path.join(d, "background.md")).read()
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/root/pi-agents-helper/tests/test_spec.py:121: ResourceWarning: unclosed file <_io.TextIOWrapper name='/tmp/tmppob4h11n/agents/a.md' mode='r' encoding='UTF-8'>
+  a = open(os.path.join(d, "agents/a.md")).read()
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/root/pi-agents-helper/tests/test_spec.py:124: ResourceWarning: unclosed file <_io.TextIOWrapper name='/tmp/tmppob4h11n/README.md' mode='r' encoding='UTF-8'>
+  r = open(os.path.join(d, "README.md")).read()
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+....warning: You appear to have cloned an empty repository.
+/root/pi-agents-helper/tests/test_stage4.py:168: ResourceWarning: unclosed file <_io.BufferedReader name=5>
+  r = _cat_batch(d + "/repo.git", ["a/0001.md"])
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/root/pi-agents-helper/tests/test_stage4.py:171: ResourceWarning: unclosed file <_io.BufferedReader name=5>
+  r2 = _cat_batch(d + "/repo.git", ["a/0001.md", "x/no.md"])
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+.....................................错误: 讨论不存在: /tmp/tmplzhnsc38/nope
+.....................
+----------------------------------------------------------------------
+Ran 283 tests in 258.157s
+
+OK
