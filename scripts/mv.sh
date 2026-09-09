@@ -192,7 +192,7 @@ cmd_prepare() {
     # 数字 → 生成 a..<n> 名称列表
     if [[ "$agents_list" =~ ^[0-9]+$ ]]; then
         local n="$agents_list" name="" list=""
-        [ "$n" -ge 1 ] || fail "agents 数量至少为 1"
+        [ "$n" -ge 2 ] || fail "agents 数量至少为 2（meeting 至少两个 LLM agents）"
         [ "$n" -le 26 ] || fail "agents 数量最多 26（a..z）"
         for ((i = 0; i < n; i++)); do
             name=$(printf "\\$(printf '%03o' $((97 + i)))")

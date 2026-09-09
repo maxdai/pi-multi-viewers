@@ -477,6 +477,11 @@ def _resolve_spec(spec, agents, topic, background, stances, questions, models,
                 "（项目 cwd 下建 viewers/<视角名>.md，或 --spec-gen --agents 生成）")
         if "human" in participants:
             return None, None, None, _check_reserved(participants)
+        # meeting 至少两个 LLM agents（用户 2026-09-09）：1 个视角无对话可言
+        if len(participants) < 2:
+            return None, None, None, (
+                f"错误: viewers/ 下仅发现 {len(participants)} 个视角"
+                f"（{', '.join(participants)}）——多视角分析至少需要 2 个")
     # spec 必须有 question.md（讨论起点不可缺）
     if not os.path.isfile(os.path.join(spec_dir, "question.md")):
         return None, None, None, "错误: spec 缺少 question.md（讨论起点，先 --spec-gen 生成）"

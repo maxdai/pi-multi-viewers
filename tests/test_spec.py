@@ -343,6 +343,23 @@ class TestResolveSpec(unittest.TestCase):
             self.assertEqual(briefs["林然"], "性格视角")
             self.assertEqual(briefs["苏晚"], "命运视角")
 
+    def test_viewers_min_two(self):
+        """meeting 至少两个 LLM agents（用户 2026-09-09）：viewers 仅 1 个
+        .md → 专属错误（非通用"未找到"）。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            spec = os.path.join(tmp, "spec")
+            # 注意：不建 agents/（agents/ 存在 = 显式模式，不会走 viewers 分支）
+            os.makedirs(spec)
+            vd = os.path.join(tmp, "viewers")
+            os.makedirs(vd)
+            with open(os.path.join(vd, "唯一.md"), "w") as f:
+                f.write("唯一视角")
+            sd, parts, briefs, err = _resolve_spec(
+                spec, None, None, None, None, None, None, viewers_dir=vd)
+            self.assertIsNone(sd)
+            self.assertIn("仅发现 1 个视角", err)
+            self.assertIn("至少需要 2 个", err)
+
     def test_viewers_human_reserved(self):
         with tempfile.TemporaryDirectory() as d:
             os.makedirs(os.path.join(d, "viewers"))
