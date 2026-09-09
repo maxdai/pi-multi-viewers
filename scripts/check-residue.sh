@@ -48,7 +48,25 @@ for d in "$SESS_DIR"/*/; do
             esac
         done
         if [ "$whitelisted" = "0" ]; then
-            echo "[残留-1] 测试 session（24h 内，cwd=$cwd）: $f"
+            # 附判断依据（防误删，2026-09-09）：首条 user 消息摘要 +
+            # 创建时间——人一眼分辨"测试引导（就绪/测试字样）" vs 真实
+            # 会话。检查器永远只读不删；误报时把 cwd 加白名单即可。
+            first_user=$(python3 -c "
+import json, sys
+try:
+    for l in open('$f'):
+        e = json.loads(l)
+        if e.get('type') == 'message' and e.get('message', {}).get('role') == 'user':
+            c = e['message'].get('content')
+            t = c if isinstance(c, str) else ''.join(x.get('text','') for x in (c or []) if isinstance(x, dict) and x.get('type') == 'text')
+            print((t or '')[:60].replace('\\n', ' '))
+            break
+except Exception:
+    print('')
+" 2>/dev/null)
+            echo "[残留-1] session（24h 内 cwd=$cwd，创建 $(stat -c %y "$f" | cut -d. -f1)）"
+            echo "        首条消息: ${first_user:-（无 user 消息）}"
+            echo "        路径: $f"
             RESIDUE=1
         fi
     done
