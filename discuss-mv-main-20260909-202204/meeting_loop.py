@@ -144,15 +144,8 @@ def read_agent_config(workdir, agent):
 
 
 def build_wake_prompt(agent, meta, is_first, state, retry,
-                      msg_path=None, perspective_brief=None):
+                      msg_path=None):
     """唤醒 prompt（动态信息；协议规则在 AGENTS.md）。
-
-    wake prompt 是**最后一条 user 消息**——与 system prompt（协议+视角
-    任务书）前后呼应的最后一道角色锚定（用户 2026-09-09：e2e 三轮实测，
-    fork 全量历史的行为先例会淹没中段注入，末位 user 必须自带身份）。
-
-    perspective_brief: 视角任务书正文（身份重申用，取自 pi-agent.json
-    指向的文件内容）——首段原文注入。
 
     msg_path: loop 计算的下一个消息路径（如 'a/0003.md'）——指定 LLM
     应写的文件（用户 9618：文件名由 loop 决定而非 LLM 自己算，可靠性
@@ -161,19 +154,10 @@ def build_wake_prompt(agent, meta, is_first, state, retry,
     传 HEAD 给 LLM 反而引入 git 概念——彻底脱离。
     """
     lines = []
-    # 角色锚定（最后一条 user 的首位——紧邻生成时刻，权重最高）
-    lines.append(f"你是本次多视角分析的参与者「{agent}」，"
-                 "你的视角任务书在 system prompt 中。")
-    if perspective_brief:
-        lines.append(f"你的视角：{perspective_brief}")
-    lines.append("你的当前任务只有一个：按下述要求写一条消息文件。"
-                 "上下文中的历史（开发过程、对话、监控命令等）都只是背景，"
-                 "与写这条消息无关。不要执行任何等待、监控或其它动作。")
     if retry:
         lines.append("你刚才被唤醒但没写消息。必须写一条消息文件。")
     if is_first:
-        lines.append("（无新消息，你是讨论的第一位发言者——直接产出你的"
-                     "第一条视角分析，作为消息正文）")
+        lines.append("（无新消息，你是讨论的第一位发言者）")
     if msg_path:
         lines.append(f"请把你的消息写到: {msg_path}（不要写别的文件名）")
     lines.append(f"当前状态: {state}")
@@ -335,24 +319,6 @@ def wake_llm(workdir, agent, prompt, pure=False, fork_source=None, fork_cwd=None
     return new_sid, r.returncode
 
 
-def _read_perspective_brief(workdir, agent):
-    """读视角任务书正文（wake prompt 身份重申用）。
-
-    来源：work-<agent>/.pi/agent/<agent>.md（prompt_file 注入源的同一份）。
-    缺失/超长（>500 字，任务书是全量正文，wake 只需首段锚定）→ 截取前
-    500 字；文件不存在 → None（不影响唤醒，仅少一段重申）。
-    """
-    fp = os.path.join(workdir, ".pi/agent", f"{agent}.md")
-    try:
-        with open(fp, encoding="utf-8") as f:
-            brief = f.read().strip()
-    except OSError:
-        return None
-    if len(brief) > 500:
-        brief = brief[:500] + "…（见 system prompt 完整任务书）"
-    return brief or None
-
-
 def make_responder(pure, fork_source=None, fork_cwd=None):
     """构造真实 LLM responder：唤醒 pi，LLM 写内容文件。
 
@@ -392,9 +358,7 @@ def make_responder(pure, fork_source=None, fork_cwd=None):
         meta_abs = [dict(m, path=os.path.join(workdir, m["path"]))
                     for m in meta]
         prompt = build_wake_prompt(agent, meta_abs, is_first, state, retry,
-                                   msg_path=msg_path,
-                                   perspective_brief=_read_perspective_brief(
-                                       workdir, agent))
+                                   msg_path=msg_path)
         if mem_available_mb() < MIN_MEM_MB:
             log(agent, "内存不足——抛可恢复异常（不代写 freezing，下轮重试）")
             raise RecoverableWakeError("内存不足")

@@ -1,0 +1,10 @@
+CMD: pi --mode json --fork /root/.pi/agent/sessions/--root-pi-multi-viewers--/2026-09-09T03-06-53-820Z_mv-main.jsonl --session-id fa582b5c-adaf-480b-b5ab-d4dfd8d972d9 --name discuss-mv-main-20260909-202204-性能 --session-dir /root/pi-multi-viewers/discuss-mv-main-20260909-202204/pi-sessions --model zai-coding-cn/glm-5.3-flash --thinking max --append-system-prompt /root/pi-multi-viewers/discuss-mv-main-20260909-202204/work-性能/.pi/agent/性能.md --append-system-prompt /root/pi-multi-viewers/discuss-mv-main-20260909-202204/work-性能/AGENTS.md --approve --print （无新消息，你是讨论的第一位发言者）
+请把你的消息写到: /root/pi-multi-viewers/discuss-mv-main-20260909-202204/work-性能/性能/0001.md（不要写别的文件名）
+当前状态: meeting（有未读新消息，可发言或 freezing）
+必须写完整 frontmatter：from（你）、type（message/freezing/pass）、summary（message 类型必填，一句话概括你说了什么）
+
+PROMPT:
+（无新消息，你是讨论的第一位发言者）
+请把你的消息写到: /root/pi-multi-viewers/discuss-mv-main-20260909-202204/work-性能/性能/0001.md（不要写别的文件名）
+当前状态: meeting（有未读新消息，可发言或 freezing）
+必须写完整 frontmatter：from（你）、type（message/freezing/pass）、summary（message 类型必填，一句话概括你说了什么）

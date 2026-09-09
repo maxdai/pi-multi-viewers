@@ -342,6 +342,41 @@ class TestForkWake(unittest.TestCase):
         cmd = pm.call_args[0][0]
         self.assertNotIn(os.path.join(self.workdir, "AGENTS.md"), cmd)
 
+class TestWakePromptIdentity(unittest.TestCase):
+    """wake prompt 身份锚定（2026-09-09 e2e 三轮对策）：最后一条 user
+    与 system prompt 前后呼应——角色 + 视角 + 单一任务声明。"""
+
+    def test_identity_anchor_first_line(self):
+        from meeting_loop import build_wake_prompt
+        p = build_wake_prompt("性能", [], True, "meeting", False,
+                              msg_path="/w/性能/0001.md",
+                              perspective_brief="性能视角正文")
+        self.assertTrue(p.startswith("你是本次多视角分析的参与者「性能」"))
+        self.assertIn("你的视角：性能视角正文", p)
+        self.assertIn("不要执行任何等待、监控或其它动作", p)
+        self.assertIn("第一位发言者", p)
+
+    def test_no_brief_still_anchors(self):
+        from meeting_loop import build_wake_prompt
+        p = build_wake_prompt("a", [], True, "meeting", False,
+                              msg_path="/w/a/0001.md")
+        self.assertIn("「a」", p)
+        self.assertNotIn("你的视角：", p)
+
+    def test_read_perspective_brief_truncates(self):
+        import tempfile, os
+        from meeting_loop import _read_perspective_brief
+        with tempfile.TemporaryDirectory() as tmp:
+            wd = os.path.join(tmp, "work-性能")
+            os.makedirs(os.path.join(wd, ".pi/agent"))
+            with open(os.path.join(wd, ".pi/agent/性能.md"), "w") as f:
+                f.write("长" * 800)
+            brief = _read_perspective_brief(wd, "性能")
+            self.assertEqual(len(brief), 500 + len("…（见 system prompt 完整任务书）"))
+            # 文件缺失 → None
+            self.assertIsNone(_read_perspective_brief(os.path.join(tmp, "nope"), "x"))
+
+
 class TestResponderAbsolutePaths(unittest.TestCase):
     """make_responder：fork 模式（cwd=主项目）下 prompt 路径必须绝对。"""
 
