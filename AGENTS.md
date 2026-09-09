@@ -60,10 +60,6 @@ tests/               测试（unittest discover tests）
 meeting_loop 通过注入 responder 复用。human 插话不改变状态机——只在
 判定函数的**输入过滤**与**配额增量**两处扩展（沿用 pi-agents-helper）。
 
-## 消息质量规范（沿用 pi-agents-helper 讨论产出 2026-08-31）
-
-正文引用他人观点必须写 `作者/序号`（如 `回应 性能/0003`）——不能只说"某人"
-或模糊描述。templates/AGENTS.md.tpl 的「message 质量」节同步。
 
 ## 开发铁律（每次修改代码后必核验三条，用户要求 2026-08-09）
 
