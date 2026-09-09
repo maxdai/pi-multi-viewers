@@ -200,22 +200,30 @@ def _strip_empty_sections(question):
     return "\n".join(out)
 
 
-def gen_spec_skeleton(spec_dir, participants, topic=None, background=None):
-    """生成 spec 骨架（--spec-gen，wrapper --prepare 的唯一实现）：
-    question.md + background.md + models.md + agents/X.md（仅显式 --agents）。
+def gen_spec_skeleton(spec_dir, participants, topic=None, background=None,
+                      viewers_dir=None):
+    """生成 spec 骨架（--spec-gen，唯一实现）：question.md + background.md +
+    models.md + agents/。
 
+    agents/ 三态：viewers_dir 给定 → _snapshot_viewers（校验+快照，失败
+    返回 (None, err)、零产物）；显式 participants → 占位骨架；两者皆无 →
+    无 agents/（start 报错提示）。
     topic/background: wrapper --prepare 传入（直接填进骨架）；CLI 直用
       时缺省 = 占位文案。
     models.md 预填主 pi 当前 model/thinking（_detect_pi_model_thinking，
     对齐旧 wrapper read_pi_model_thinking 语义——用户少改一个文件）。
     每个文件第一行 = 用途说明（不注入，设计 16.4）。
     """
+    if viewers_dir:
+        participants, err = _snapshot_viewers(spec_dir, viewers_dir)
+        if err:
+            return None, err
     # spec 目录本身无条件创建（2026-09-09 回归修复：agents 创建并入条件
     # 分支后，viewers 骨架曾连 spec_dir 都不建 → README copy 崩）
     os.makedirs(spec_dir, exist_ok=True)
-    # agents/ 骨架仅显式 --agents 时生成（viewers 模式：启动时从项目
-    # cwd/viewers/ 发现——空 agents/ 目录会阻断 viewers 回退，故不建）
-    if participants:
+    # agents/ 占位骨架仅显式 --agents 时生成（viewers 快照路径已建好并
+    # 含内容——不能被占位覆盖；两者皆无 = viewers 发现留给启动时点）
+    if participants and not viewers_dir:
         os.makedirs(os.path.join(spec_dir, "agents"), exist_ok=True)
     # README.md：从模板复制（内容不变——模板化，用户 7909）
     shutil.copyfile(os.path.join(TPL_DIR, "spec-readme.md.tpl"),
@@ -256,8 +264,9 @@ def gen_spec_skeleton(spec_dir, participants, topic=None, background=None):
             else:
                 lines.append(f"{p}: default")
         f.write("\n".join(lines) + "\n")
-    # agents/X.md + .order（仅显式 --agents 时，同上）
-    if participants:
+    # agents/X.md 占位 + .order（仅显式 --agents 时；快照路径的 .order
+    # 由 _snapshot_viewers 写入，此处不得重写）
+    if participants and not viewers_dir:
         for p in participants:
             with open(os.path.join(spec_dir, "agents", f"{p}.md"), "w") as f:
                 f.write(f"# {p}.md——agent {p} 的分工/补充（追加到 agent {p} 定义正文）。"
@@ -266,6 +275,7 @@ def gen_spec_skeleton(spec_dir, participants, topic=None, background=None):
         # starter/默认 resultWriter/RR 轮转链依赖 participants 顺序）
         with open(os.path.join(spec_dir, "agents", ".order"), "w") as f:
             f.write("\n".join(participants) + "\n")
+    return participants, None
 
 
 def gen_agens_md(args, agent, participants, spec_background=None,
@@ -408,6 +418,45 @@ def _discover_viewers(viewers_dir):
         with open(os.path.join(viewers_dir, f"{n}.md")) as f:
             briefs[n] = f.read().strip("\n")
     return names, briefs
+
+
+def _snapshot_viewers(spec_dir, viewers_dir):
+    """viewers 校验（prepare 时点）+ 快照进 spec/agents/（单一事实源：
+    所有视角都源自 viewers/，spec agents/ = 本场快照，可按场修改，
+    分析结束 spec 即删、资产永续；用户 2026-09-09 设计）。
+
+    校验（任何违规 → 返回错误，不产生任何 spec 文件——用户：不合规
+    根本不应该开始 spec-gen）：目录存在 / ≥2 个合法 .md（排除隐藏）/
+    无 human / 名字合法（空白/路径分隔符/≤32）。
+    快照文件含说明行首行（spec 约定：_spec_read 跳过首行——裸拷贝会
+    把正文首行当说明吃掉，实测缺口）。
+    返回 (participants, error)。
+    """
+    names, _briefs = _discover_viewers(viewers_dir)
+    if names is None:
+        return None, ("错误: 未找到 viewers/ 目录——多视角分析的视角资产"
+                      "必须先建好（项目 cwd 下 viewers/<视角名>.md，至少 2 个）")
+    for n in names:
+        if not n or re.search(r"[/\\\s]", n) or len(n) > 32:
+            return None, f"错误: 非法视角名（禁止空白/路径分隔符，≤32 字符）：{n}"
+        if n == "human":
+            return None, ("错误: human 是保留名（插话通道），"
+                          "不能作为视角文件名")
+    if len(names) < 2:
+        return None, (f"错误: viewers/ 下仅发现 {len(names)} 个视角"
+                      f"——多视角分析至少需要 2 个")
+    agents_dir = os.path.join(spec_dir, "agents")
+    os.makedirs(agents_dir, exist_ok=True)
+    for n in names:
+        with open(os.path.join(viewers_dir, f"{n}.md")) as f:
+            brief = f.read()
+        with open(os.path.join(agents_dir, f"{n}.md"), "w") as f:
+            f.write(f"# {n}.md——快照自 viewers/{n}.md（本行说明不注入；"
+                    f"按场修改这里，不影响 viewers/ 资产）\n\n")
+            f.write(brief)
+    with open(os.path.join(agents_dir, ".order"), "w") as f:
+        f.write("\n".join(names) + "\n")
+    return names, None
 
 
 def _resolve_spec(spec, agents, topic, background, stances, questions, models,
@@ -765,12 +814,18 @@ def main():
 
     # --spec-gen 直接带目录位置参数（--spec-gen myspec/，不需 --dir/--spec）
     if args.spec_gen:
-        # --agents 可选（2026-09-09 viewers 模式）：缺省 = 只生成
-        # question/background/models/README（无 agents/——启动时从项目
-        # cwd/viewers/ 发现视角）；显式 --agents = 覆盖 viewers（review5 F5）
+        # agents/ 三态（2026-09-09）：显式 --agents = 占位骨架（覆盖路径）；
+        # 缺省 = viewers 快照（校验前移——不合规零产物）；python 单一事实源，
+        # bash --prepare 与 CLI 直用产出一致
         spec_dir = _resolve_path(args.spec_gen)   # L10
-        gen_spec_skeleton(spec_dir, participants,
-                          topic=args.topic, background=args.background)
+        viewers_dir = (os.path.join(os.getcwd(), "viewers")
+                       if not participants else None)
+        participants, err = gen_spec_skeleton(
+            spec_dir, participants, topic=args.topic,
+            background=args.background, viewers_dir=viewers_dir)
+        if err:
+            print(err)
+            sys.exit(1)
         print(f"[spec-gen] 已生成骨架: {spec_dir}")
         return
 
