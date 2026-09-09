@@ -286,7 +286,8 @@ def gen_question(topic, stances, background, questions):
 
 
 def gen_protocol(topic, participants, max_meeting, max_rr, pure=False,
-                 result_writer=None, stall_timeout=600):
+                 result_writer=None, stall_timeout=600,
+                 fork_source=None, fork_cwd=None):
     """protocol.json（meeting 模式）。"""
     rw = result_writer or participants[-1]
     proto = {
@@ -302,6 +303,11 @@ def gen_protocol(topic, participants, max_meeting, max_rr, pure=False,
     }
     if pure:
         proto["pure"] = True
+    if fork_source:
+        # fork 模式（多视角）：首唤挂载主 session 全量上下文 + cwd=主项目
+        # （agent 可直接读项目文件）。实测 2026-09-09 全部验证通过。
+        proto["forkSource"] = fork_source
+        proto["forkCwd"] = fork_cwd or os.getcwd()
     return proto
 
 
@@ -446,7 +452,9 @@ def setup_environment(args, participants, base, spec_dir=None):
     with open(os.path.join(wa, "protocol.json"), "w") as f:
         json.dump(gen_protocol(args.topic, participants, args.max_meeting,
                                args.max_rr, args.pure, args.result_writer,
-                               args.stall_timeout),
+                               args.stall_timeout,
+                               fork_source=getattr(args, "fork_source", None),
+                               fork_cwd=os.getcwd()),
                   f, indent=2, ensure_ascii=False)
     with open(os.path.join(wa, "question.md"), "w") as f:
         if spec_question is not None:
@@ -619,6 +627,10 @@ def main():
     parser.add_argument("--prepare-file", default=None,
                         help="背景提炼文件绝对路径（discuss_prepare_<sid>.md，"
                              "wrapper 检测存在才传）；有则写入各 agent AGENTS.md 引用节")
+    parser.add_argument("--fork-source", default=None,
+                        help="主 session 文件绝对路径（多视角 fork 模式）："
+                             "写入 protocol.json，各 agent 首唤 --fork 挂载主上下文；"
+                             "不传 = legacy 形态（workdir cwd + 新建 session）")
     parser.add_argument("--pure", action="store_true", help="--pure 模式（禁外部插件）")
     parser.add_argument("--start", action="store_true", help="创建后启动讨论")
     parser.add_argument("--skip-setup", action="store_true",

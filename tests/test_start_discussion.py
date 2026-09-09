@@ -43,6 +43,19 @@ class TestGenProtocol(unittest.TestCase):
         self.assertNotIn("pure", p2)
 
 
+    def test_fork_fields(self):
+        """fork 模式（多视角）：--fork-source → protocol.json 写入
+        forkSource/forkCwd；不传则两字段不出现（legacy 兼容）。"""
+        p = gen_protocol("t", ["a", "b"], 5, 5,
+                         fork_source="/x/sessions/main.jsonl",
+                         fork_cwd="/proj")
+        self.assertEqual(p["forkSource"], "/x/sessions/main.jsonl")
+        self.assertEqual(p["forkCwd"], "/proj")
+        p2 = gen_protocol("t", ["a", "b"], 5, 5)
+        self.assertNotIn("forkSource", p2)
+        self.assertNotIn("forkCwd", p2)
+
+
 class TestGenQuestion(unittest.TestCase):
     def test_topic_only(self):
         q = gen_question("主题", None, None, None)

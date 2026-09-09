@@ -204,19 +204,35 @@ def recover_git_lock(workdir, agent):
         log(agent, "检测到 .git 残留锁（上次中断）——已恢复")
 
 
-def wake_llm(workdir, agent, prompt, pure=False):
+def wake_llm(workdir, agent, prompt, pure=False, fork_source=None, fork_cwd=None):
     """唤醒 pi（session 复用 + 失败回退）。返回 sessionID。
 
     每次唤醒记录完整命令行 + prompt 到 wake-logs/（排错第一手段）。
+
+    fork 模式（多视角，可选）：首次唤醒（无已存 sid）以 --fork 挂载主
+    session 全量上下文 + --name 可读显示名（id 由 pi 生成 UUID——id 归
+    机制、名字归人）；agent 进程 cwd = fork_cwd（主项目，可直接读项目
+    文件）。后续唤醒 sid 已存 → 走常规 --session-id 续接。
+    实测 2026-09-09（docs/examples/first-experiment）：fork 上下文携带、
+    --name 落盘（session_info label）、续接模式全部通过。
     """
     cfg = read_agent_config(workdir, agent)
     sid = load_session_id(workdir, agent)
-    if not sid:
-        sid = session_id(workdir, agent)
     base = os.path.dirname(workdir)
     session_dir = os.path.join(base, "pi-sessions")
-    cmd = ["pi", "--mode", "json", "--session-id", sid,
-           "--session-dir", session_dir]
+    fork_mode = bool(fork_source) and not sid
+    if fork_mode:
+        base_name = os.path.basename(base.rstrip("/")) or "discussion"
+        display_name = f"{base_name}-{agent}"
+        cmd = ["pi", "--mode", "json", "--fork", fork_source,
+               "--name", display_name, "--session-dir", session_dir]
+        spawn_cwd = fork_cwd or workdir
+    else:
+        if not sid:
+            sid = session_id(workdir, agent)
+        cmd = ["pi", "--mode", "json", "--session-id", sid,
+               "--session-dir", session_dir]
+        spawn_cwd = workdir
     if pure:
         # Pi 的 pure 近似：关闭外部扩展/技能/prompt-template/主题加载，
         # 保留内置工具（read/bash/edit/write）与项目内 AGENTS.md。
@@ -242,7 +258,7 @@ def wake_llm(workdir, agent, prompt, pure=False):
     _lock_git(workdir)
     global _current_proc
     try:
-        proc = subprocess.Popen(cmd, cwd=workdir, stdout=subprocess.PIPE,
+        proc = subprocess.Popen(cmd, cwd=spawn_cwd, stdout=subprocess.PIPE,
                                 stderr=subprocess.PIPE, text=True)
         _current_proc = proc
         try:
@@ -288,7 +304,7 @@ def wake_llm(workdir, agent, prompt, pure=False):
     return new_sid, r.returncode
 
 
-def make_responder(pure):
+def make_responder(pure, fork_source=None, fork_cwd=None):
     """构造真实 LLM responder：唤醒 pi，LLM 写内容文件。
 
     LLM 只提供内容（写消息文件），流程（补全字段/commit/push）
@@ -302,28 +318,37 @@ def make_responder(pure):
                 reason_txt = "达到轮次上限，未完全共识"
             else:
                 reason_txt = "无进展超时（stall），未完全共识"
+            # fork 模式（cwd=主项目）下“工作区根目录”有歧义——路径必须绝对
+            result_path = os.path.join(workdir, "result.md")
             prompt = (f"讨论已收敛（{reason_txt}）。"
-                      f"请写 result.md 到工作区根目录，总结讨论结论。")
+                      f"请写 result.md 到 {result_path}，总结讨论结论。")
             if retry:
                 prompt = (f"你上一次被唤醒但未生成有效的 result.md。"
-                          f"请现在写 result.md（非空，总结讨论结论）到工作区根目录。")
+                          f"请现在写 result.md（非空，总结讨论结论）到 {result_path}。")
             if mem_available_mb() < MIN_MEM_MB:
                 log(agent, "内存不足——抛可恢复异常（不代写 freezing，下轮重试）")
                 raise RecoverableWakeError("内存不足")
-            wake_llm(workdir, agent, prompt, pure)
+            wake_llm(workdir, agent, prompt, pure,
+                     fork_source=fork_source, fork_cwd=fork_cwd)
             return True
         if rr_turn:
             state = "round-robin（轮到你：写 pass 确认共识，单向流无异议）"
         else:
             state = "meeting（有未读新消息，可发言或 freezing）"
         from meeting_fs import next_msg_id
-        msg_path = f"{agent}/{next_msg_id(workdir, agent)}.md"
-        prompt = build_wake_prompt(agent, meta, is_first, state, retry,
+        # fork 模式（cwd=主项目）下 LLM 不在 workdir——msg_path/meta 必须
+        # 绝对路径（legacy 模式下绝对路径同样有效，统一一条路径）
+        msg_path = os.path.join(workdir, agent,
+                                f"{next_msg_id(workdir, agent)}.md")
+        meta_abs = [dict(m, path=os.path.join(workdir, m["path"]))
+                    for m in meta]
+        prompt = build_wake_prompt(agent, meta_abs, is_first, state, retry,
                                    msg_path=msg_path)
         if mem_available_mb() < MIN_MEM_MB:
             log(agent, "内存不足——抛可恢复异常（不代写 freezing，下轮重试）")
             raise RecoverableWakeError("内存不足")
-        wake_llm(workdir, agent, prompt, pure)
+        wake_llm(workdir, agent, prompt, pure,
+                 fork_source=fork_source, fork_cwd=fork_cwd)
         return True
     return responder
 
@@ -383,7 +408,10 @@ if __name__ == "__main__":
             else:
                 st = int(sys.argv[i + 1])
     try:
-        agent_loop(workdir, agent, make_responder(pure),
+        agent_loop(workdir, agent,
+                   make_responder(pure,
+                                  fork_source=proto.get("forkSource") or "",
+                                  fork_cwd=proto.get("forkCwd") or ""),
                    max_meeting=mm, max_rr=mr, stall_timeout=st)
     except KeyboardInterrupt:
         log(agent, "被中断")

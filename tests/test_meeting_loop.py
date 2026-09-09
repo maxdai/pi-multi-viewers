@@ -223,6 +223,155 @@ class TestKillProc(unittest.TestCase):
         self.assertTrue(proc.killed)
 
 
+class TestForkWake(unittest.TestCase):
+    """fork 模式（多视角）：首唤 --fork+--name、后续 --session-id、spawn cwd。
+
+    设计（2026-09-09，实测 docs/examples/first-experiment 后集成）：
+    - 首唤（无已存 sid + 配置 forkSource）→ --fork <src> + --name，不指定
+      --session-id（pi 生成 UUID），spawn cwd = fork_cwd（主项目）
+    - 后续唤醒（sid 已存）→ 常规 --session-id 续接，cwd = workdir
+    - 未配置 forkSource → 完全 legacy 行为（向后兼容）
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="fork-wake-test-")
+        self.workdir = os.path.join(self.tmp, "work-a")
+        os.makedirs(self.workdir)
+        self.base = os.path.dirname(self.workdir)
+        self.src = os.path.join(self.tmp, "main-session.jsonl")
+        with open(self.src, "w") as f:
+            f.write('{"type":"session","id":"src"}\n')
+        self.cwd_main = os.path.join(self.tmp, "main-project")
+        os.makedirs(self.cwd_main)
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmp, ignore_errors=True)
+        meeting_loop._current_proc = None
+
+    def _run(self, proc, **kwargs):
+        orig_popen = subprocess.Popen
+        orig_isdir = os.path.isdir
+        try:
+            popen_mock = mock.Mock(return_value=proc)
+            subprocess.Popen = popen_mock
+
+            def fake_isdir(p):
+                if isinstance(p, str) and p.endswith("repo.git"):
+                    return True
+                return orig_isdir(p)
+
+            os.path.isdir = fake_isdir
+            result = meeting_loop.wake_llm(self.workdir, "a", "PROMPT", **kwargs)
+            return result, popen_mock
+        finally:
+            subprocess.Popen = orig_popen
+            os.path.isdir = orig_isdir
+
+    def test_first_wake_uses_fork_and_name_no_session_id(self):
+        """首唤：--fork <src> + --name（可读名），无 --session-id；cwd=主项目。"""
+        proc = FakeProc("ok", out='{"type":"session","id":"uuid-1"}')
+        result, pm = self._run(proc, fork_source=self.src, fork_cwd=self.cwd_main)
+        args, kwargs = pm.call_args
+        cmd = args[0]
+        self.assertIn("--fork", cmd)
+        self.assertEqual(cmd[cmd.index("--fork") + 1], self.src)
+        self.assertIn("--name", cmd)
+        self.assertTrue(cmd[cmd.index("--name") + 1].endswith("-a"))
+        self.assertNotIn("--session-id", cmd)
+        self.assertEqual(kwargs["cwd"], self.cwd_main)
+        # sid 从输出解析并保存
+        self.assertEqual(result, ("uuid-1", 0))
+        with open(os.path.join(self.base, "status-a.json")) as f:
+            self.assertEqual(json.load(f), {"sessionID": "uuid-1"})
+
+    def test_second_wake_uses_session_id_no_fork(self):
+        """续接：sid 已存 → --session-id，无 --fork；cwd 回 workdir。"""
+        meeting_loop.save_session_id(self.workdir, "a", "uuid-1")
+        proc = FakeProc("ok", out='{"type":"session","id":"uuid-1"}')
+        _, pm = self._run(proc, fork_source=self.src, fork_cwd=self.cwd_main)
+        args, kwargs = pm.call_args
+        cmd = args[0]
+        self.assertNotIn("--fork", cmd)
+        self.assertIn("--session-id", cmd)
+        self.assertEqual(cmd[cmd.index("--session-id") + 1], "uuid-1")
+        self.assertEqual(kwargs["cwd"], self.workdir)
+
+    def test_no_fork_config_is_legacy(self):
+        """未配置 forkSource：完全 legacy（--session-id + cwd=workdir）。"""
+        proc = FakeProc("ok")
+        _, pm = self._run(proc)
+        args, kwargs = pm.call_args
+        cmd = args[0]
+        self.assertNotIn("--fork", cmd)
+        self.assertIn("--session-id", cmd)
+        self.assertEqual(kwargs["cwd"], self.workdir)
+
+
+class TestResponderAbsolutePaths(unittest.TestCase):
+    """make_responder：fork 模式（cwd=主项目）下 prompt 路径必须绝对。"""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="resp-abs-test-")
+        self.workdir = os.path.join(self.tmp, "work-a")
+        os.makedirs(self.workdir)  # next_msg_id 要在其中跑 git ls-files
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _capture(self, **kwargs):
+        captured = {}
+        orig = meeting_loop.wake_llm
+
+        def fake_wake(workdir, agent, prompt, pure=False, **kw):
+            captured["prompt"] = prompt
+            captured["workdir"] = workdir
+            captured["kwargs"] = kw
+            return "sid", 0
+
+        meeting_loop.wake_llm = fake_wake
+        try:
+            resp = meeting_loop.make_responder(False, **kwargs)
+            resp(self.workdir, "a", "HEAD", [{"path": "b/0001.md", "to": "all"}],
+                 False, False, False)
+        finally:
+            meeting_loop.wake_llm = orig
+        return captured
+
+    def test_msg_path_absolute(self):
+        cap = self._capture()
+        self.assertIn(os.path.join(self.workdir, "a", "0001.md"), cap["prompt"])
+        self.assertNotIn("a/0001.md", cap["prompt"].replace(
+            os.path.join(self.workdir, "a", "0001.md"), ""))  # 无裸相对形式
+
+    def test_meta_paths_absolute(self):
+        cap = self._capture()
+        self.assertIn(os.path.join(self.workdir, "b/0001.md"), cap["prompt"])
+
+    def test_fork_kwargs_forwarded(self):
+        cap = self._capture(fork_source="/src/s.jsonl", fork_cwd="/proj")
+        self.assertEqual(cap["kwargs"]["fork_source"], "/src/s.jsonl")
+        self.assertEqual(cap["kwargs"]["fork_cwd"], "/proj")
+
+    def test_finalizing_result_path_absolute(self):
+        captured = {}
+        orig = meeting_loop.wake_llm
+
+        def fake_wake(workdir, agent, prompt, pure=False, **kw):
+            captured["prompt"] = prompt
+            return "sid", 0
+
+        meeting_loop.wake_llm = fake_wake
+        try:
+            resp = meeting_loop.make_responder(False)
+            resp(self.workdir, "a", "HEAD", [], False, False, False,
+                 finalizing=True)
+        finally:
+            meeting_loop.wake_llm = orig
+        self.assertIn(os.path.join(self.workdir, "result.md"), captured["prompt"])
+
+
 class TestBuildWakePrompt(unittest.TestCase):
     """build_wake_prompt：未读消息清单格式（打磨项 2026-09-01 去陈旧标注）。"""
 

@@ -395,7 +395,21 @@ cmd_start() {
         prepare_args=(--prepare-file "$(readlink -f "discuss_prepare_${PI_SESSION_ID}.md")")
         echo "[start] 检测到背景文件：${prepare_args[1]}（将写入各 agent AGENTS.md 引用）"
     fi
-    if ! "$PYTHON" "$START_DISCUSSION" --dir "$dir_path" --spec "$spec_dir" --max-meeting "$DEFAULT_MAX_MEETING" --max-rr "$DEFAULT_MAX_RR" "${prepare_args[@]+"${prepare_args[@]}"}"; then
+    # fork 模式（多视角）：主 pi 触发时（PI_SESSION_ID 存在）解析当前
+    # session 文件绝对路径 → protocol.json → 各 agent 首唤 --fork 挂载
+    # 主 session 全量上下文。解析不到（手动 shell 跑 wrapper）不传参，
+    # 退化为 legacy 形态。session 目录名编码：/root/x → --root-x--
+    local fork_args=()
+    if [ -n "${PI_SESSION_ID:-}" ]; then
+        local enc="-${PWD//\//-}-"
+        local fork_src
+        fork_src="$(ls -t "$HOME/.pi/agent/sessions/$enc/"*"$PI_SESSION_ID".jsonl 2>/dev/null | head -1)"
+        if [ -n "$fork_src" ]; then
+            fork_args=(--fork-source "$fork_src")
+            echo "[start] fork 源：$fork_src"
+        fi
+    fi
+    if ! "$PYTHON" "$START_DISCUSSION" --dir "$dir_path" --spec "$spec_dir" --max-meeting "$DEFAULT_MAX_MEETING" --max-rr "$DEFAULT_MAX_RR" "${prepare_args[@]+"${prepare_args[@]}"}" "${fork_args[@]+"${fork_args[@]}"}"; then
         fail "讨论环境创建失败，请查看上方输出"
     fi
 
@@ -406,6 +420,9 @@ cmd_start() {
     # 操作（用户级包照常全量加载，aft 进程照常 spawn）② 无 autoload:false
     # 的资源 [] 形态 = project wins → 触发项目级 npm install 到 .pi/npm
     # （每 work 一次 install magic-context）。delta 不装项目副本）
+    # 注：fork 模式（--fork-source 传入，agent cwd=主项目）下此文件
+    # 不生效（pi 读的是主项目 .pi/settings.json）——保留仅为 legacy
+    # 形态兼容；多视角产品语义下上下文工具激活是特性，非问题。
     local agent
     # agents 列表来自 spec（--agents 参数化后不能硬编码 a b c——
     # 自定义数量/名称时硬编码会漏写 work-d/work-x 的 settings，
