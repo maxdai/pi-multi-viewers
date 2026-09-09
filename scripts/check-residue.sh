@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+# 残留检查器——测试/验证结束后的清理验收（一条命令代替人工逐项记忆）
+#
+# 用法: ./scripts/check-residue.sh [--verbose]
+# 退出码: 0 = 干净；1 = 有残留（列出清单）
+#
+# 检查三类测试残留形态（2026-09-09 建立——此前靠人工记忆逐项检查，
+# 反复漏检：afk-e2e 引导 session 漏删即反例）：
+#   1. 主 pi 侧 session：~/.pi/agent/sessions/<编码目录>/*.jsonl 中
+#      近 24h 创建且 cwd 不在白名单（真实项目）的——测试引导 session
+#      散落形态（--tmp-xxx-- 等）
+#   2. 讨论进程：meeting_loop / pi --mode json 子进程
+#   3. 讨论目录：$PWD 下 discuss-* 残留（另有 gitignore 兜底不入库）
+#
+# 白名单：cwd 为真实项目目录的 session 不算残留（mv-main 等长期会话）。
+WHITELIST=(
+    "/root/pi-multi-viewers"
+    "/root/pi-agents-helper"
+    "/root/pi-agents-meeting-discuss"
+    "/root/research"
+    "/root/book"
+    "/root/.dsh"
+)
+
+RESIDUE=0
+
+say() { [ "$1" = "--verbose" ] || [ -n "$VERBOSE" ] && echo "$2"; }
+
+# --- 1. 主 pi 侧近期 session（非白名单 cwd） ---
+SESS_DIR="$HOME/.pi/agent/sessions"
+NOW=$(date +%s)
+for d in "$SESS_DIR"/*/; do
+    [ -d "$d" ] || continue
+    # 编码目录名还原 cwd 近似判断（--tmp-xxx-- / --root-xxx-- 形态）
+    enc=$(basename "$d")
+    for f in "$d"*.jsonl; do
+        [ -f "$f" ] || continue
+        age=$((NOW - $(stat -c %Y "$f")))
+        if [ "$age" -gt 86400 ]; then
+            continue  # 超过 24h，不是本次测试产物
+        fi
+        # 解析 header cwd（第一行 JSON 的 cwd 字段）
+        cwd=$(head -1 "$f" | python3 -c "import json,sys; print(json.loads(sys.stdin.readline()).get('cwd',''))" 2>/dev/null)
+        whitelisted=0
+        for w in "${WHITELIST[@]}"; do
+            case "$cwd" in
+                "$w"*|"$w") whitelisted=1 ;;
+            esac
+        done
+        if [ "$whitelisted" = "0" ]; then
+            echo "[残留-1] 测试 session（24h 内，cwd=$cwd）: $f"
+            RESIDUE=1
+        fi
+    done
+done
+
+# --- 2. 讨论/pi 进程 ---
+for p in $(pgrep -f "[m]eeting_loop.py" 2>/dev/null); do
+    echo "[残留-2] meeting_loop 进程 PID=$p: $(ps -p $p -o cmd= 2>/dev/null)"
+    RESIDUE=1
+done
+for p in $(pgrep -f "[p]i --mode json" 2>/dev/null); do
+    echo "[残留-2] pi 进程 PID=$p"
+    RESIDUE=1
+done
+
+# --- 3. 当前目录 discuss-* 残留 ---
+for d in discuss-*/; do
+    [ -d "$d" ] || continue
+    echo "[残留-3] 讨论目录: $PWD/$d"
+    RESIDUE=1
+done
+
+if [ "$RESIDUE" = "0" ]; then
+    echo "干净：无测试残留"
+fi
+exit "$RESIDUE"

@@ -75,6 +75,12 @@ session（含主 pi 侧 `~/.pi/agent/sessions/<编码目录>/`，不只讨论目
 pi-sessions）。注意与"失败保留现场"（总原则 3）的边界：失败现场在
 bug 定位完成前保留；成功/定位完成的 session 随手清。
 
+**清理验收机制（2026-09-09 建）**：靠记忆逐项检查必然漏（afk-e2e 引导
+session 漏删即反例——两代项目重复犯）。测试/验证结束跑
+`scripts/check-residue.sh`（残留检查器）：一条命令报告三类残留——
+主 pi 侧近 24h 非白名单 session / loop+pi 进程 / discuss-* 目录，
+输出"干净"或残留清单。退出码 0=干净 1=有残留。
+
 ### 8. 测试与产品目录隔离 + 用例级 teardown
 
 wrapper/spec/环境类测试在 scratch 项目目录跑（临时 git 仓库 + 临时
