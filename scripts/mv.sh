@@ -187,9 +187,7 @@ cmd_prepare() {
     done
     [ -n "$topic" ] || fail "问题不能为空"
 
-    # --agents 未传 = viewers 模式骨架（无 agents/ 目录——启动时从
-    # 项目 cwd/viewers/ 发现视角；--agents 显式指定 = 覆盖 viewers）
-    # 数字 → 生成 a..<n> 名称列表
+    # 数字 → 生成 a..<n> 名称列表（显式 --agents 时）
     if [[ "$agents_list" =~ ^[0-9]+$ ]]; then
         local n="$agents_list" name="" list=""
         [ "$n" -ge 2 ] || fail "agents 数量至少为 2（meeting 至少两个 LLM agents）"
@@ -200,32 +198,70 @@ cmd_prepare() {
         done
         agents_list="$list"
     fi
-    # 转行分隔 + 校验保留名 human
     local agents_lines agents_name
-    agents_lines="$(echo "$agents_list" | tr ',' '\n' | sed '/^[[:space:]]*$/d')"
-    for agents_name in $agents_lines; do
-        [ "$agents_name" != "human" ] || fail "human 是保留名，不能作为参与者"
-    done
+    if [ -n "$agents_list" ]; then
+        agents_lines="$(echo "$agents_list" | tr ',' '\n' | sed '/^[[:space:]]*$/d')"
+        for agents_name in $agents_lines; do
+            [ "$agents_name" != "human" ] || fail "human 是保留名，不能作为参与者"
+        done
+    fi
+    # viewers 模式（无 --agents）：viewers/ 必须合规才生成 spec（用户
+    # 2026-09-09：不合规根本不应该开始 spec-gen）——校验全部前置，任何
+    # 违规在骨架生成之前失败；合规则把 viewers/*.md 快照进 spec/agents/
+    # （单一事实源：所有视角都源自 viewers/，spec agents/ = 本场快照，
+    # 启动前可按场修改，分析结束 spec 即删、资产永续）
+    local snapshot_mode=0
+    if [ -z "$agents_list" ]; then
+        local viewers_dir="$PWD/viewers"
+        [ -d "$viewers_dir" ] || fail "未找到 viewers/ 目录——多视角分析的视角资产必须先建好（项目 cwd 下 viewers/<视角名>.md，至少 2 个）"
+        local names=() f name
+        for f in "$viewers_dir"/*.md; do
+            [ -e "$f" ] || continue
+            name="$(basename "$f" .md)"
+            if [[ "$name" =~ [[:space:]] || "$name" == *[/\\]* || -z "$name" || ${#name} -gt 32 ]]; then
+                fail "非法视角名（禁止空白/路径分隔符，≤32 字符）：$name"
+            fi
+            [ "$name" != "human" ] || fail "human 是保留名（插话通道），不能作为视角文件名：$f"
+            names+=("$name")
+        done
+        [ "${#names[@]}" -ge 2 ] || fail "viewers/ 下仅发现 ${#names[@]} 个视角——多视角分析至少需要 2 个"
+        agents_lines="$(printf '%s\n' "${names[@]}")"
+        snapshot_mode=1
+    fi
 
     local stamp
     stamp="$(date +%Y%m%d-%H%M%S)"
     local spec_dir="$PWD/mv-spec-${stamp}"
     mkdir -p "$spec_dir"
-    local agents_lines="" agents_name=""
-    if [ -n "$agents_list" ]; then
-        mkdir -p "$spec_dir/agents"
-        agents_lines="$(echo "$agents_list" | tr ',' '\n' | sed '/^[[:space:]]*$/d')"
-    fi
+    # （agents_lines 已在前置校验段算好——此处不得重复 local 声明，
+    # bash local 重复声明会重置变量值，2026-09-09 实测踩坑）
 
     # 骨架生成 = start_discussion --spec-gen（单一事实源，2026-09-09 收敛：
     # 此前 bash/python 双实现并存——models 主 pi 预填等语义已在 python 侧
-    # 对齐；agents 空列表 = viewers 模式骨架，由 python 决定不建 agents/）
+    # 对齐）。显式 --agents：python 生成占位骨架；viewers 模式：骨架不建
+    # agents/，随后 bash 把 viewers/*.md 快照进来（内容 = 视角任务书原文，
+    # 启动前可按场修改；分析结束 spec 即删、资产永续）
     local skeleton_args=(--spec-gen "$spec_dir" --topic "$topic")
     [ -n "$background" ] && skeleton_args+=(--background "$background")
-    [ -n "$agents_lines" ] && skeleton_args+=(--agents "$agents_list")
+    if [ "$snapshot_mode" -eq 0 ]; then
+        skeleton_args+=(--agents "$agents_list")
+    fi
     "$PYTHON" "$START_DISCUSSION" "${skeleton_args[@]}" || {
         fail "spec 骨架生成失败（start_discussion --spec-gen）"
     }
+    if [ "$snapshot_mode" -eq 1 ]; then
+        mkdir -p "$spec_dir/agents"
+        for agents_name in $agents_lines; do
+            # 快照须符合 spec 约定（所有文件第一行 = 说明行，_spec_read 跳过）：
+            # 直接 cp 会把视角正文首行当说明吃掉（2026-09-09 实测缺口）
+            {
+                echo "# $agents_name.md——快照自 viewers/$agents_name.md（本行说明不注入；按场修改这里，不影响 viewers/ 资产）"
+                echo ""
+                cat "$viewers_dir/$agents_name.md"
+            } > "$spec_dir/agents/$agents_name.md"
+        done
+        printf '%s\n' $agents_lines > "$spec_dir/agents/.order"
+    fi
 
     cat <<OUTPUT_EOF
 已生成分析 spec:

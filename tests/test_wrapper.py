@@ -69,7 +69,13 @@ class TestPrepare(unittest.TestCase):
         self.assertNotEqual(r.returncode, 0)
 
     def test_prepare_background_written(self):
+        """viewers 模式 prepare：viewers 合规才生成 spec，快照进 agents/。"""
         with tempfile.TemporaryDirectory() as tmp:
+            vd = os.path.join(tmp, "viewers")
+            os.makedirs(vd)
+            for name, brief in ("性能", "性能视角正文"), ("可读性", "可读性视角正文"):
+                with open(os.path.join(vd, f"{name}.md"), "w") as f:
+                    f.write(brief)
             r = run_wrapper(["--prepare", "T", "--background", "背景内容"],
                             cwd=tmp)
             self.assertEqual(r.returncode, 0, r.stderr)
@@ -77,6 +83,46 @@ class TestPrepare(unittest.TestCase):
                                       if d.startswith("mv-spec-")][0])
             with open(os.path.join(spec, "background.md")) as f:
                 self.assertIn("背景内容", f.read())
+            # viewers 快照：spec agents/ 含视角文件 + .order
+            agents_dir = os.path.join(spec, "agents")
+            self.assertTrue(os.path.isdir(agents_dir))
+            with open(os.path.join(agents_dir, "性能.md")) as f:
+                self.assertIn("性能视角正文", f.read())
+            with open(os.path.join(agents_dir, ".order")) as f:
+                self.assertEqual([l.strip() for l in f if l.strip()],
+                                 ["可读性", "性能"])
+
+    def test_prepare_rejects_missing_viewers(self):
+        """viewers/ 缺失 → prepare 失败（校验前移：不生成 spec）。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            r = run_wrapper(["--prepare", "T"], cwd=tmp)
+            self.assertNotEqual(r.returncode, 0)
+            self.assertIn("viewers", r.stderr + r.stdout)
+            self.assertEqual([d for d in os.listdir(tmp)
+                              if d.startswith("mv-spec-")], [])
+
+    def test_prepare_rejects_single_viewer(self):
+        """viewers/ 仅 1 个视角 → 失败（meeting 至少 2 agents）。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            vd = os.path.join(tmp, "viewers")
+            os.makedirs(vd)
+            with open(os.path.join(vd, "唯一.md"), "w") as f:
+                f.write("x")
+            r = run_wrapper(["--prepare", "T"], cwd=tmp)
+            self.assertNotEqual(r.returncode, 0)
+            self.assertIn("至少需要 2 个", r.stderr + r.stdout)
+
+    def test_prepare_rejects_human_viewer(self):
+        """viewers/ 含 human.md → 失败（保留名）。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            vd = os.path.join(tmp, "viewers")
+            os.makedirs(vd)
+            for name in ("性能", "human"):
+                with open(os.path.join(vd, f"{name}.md"), "w") as f:
+                    f.write("x")
+            r = run_wrapper(["--prepare", "T"], cwd=tmp)
+            self.assertNotEqual(r.returncode, 0)
+            self.assertIn("human", r.stderr + r.stdout)
 
 
 class TestErrorPaths(unittest.TestCase):
