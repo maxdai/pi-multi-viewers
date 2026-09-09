@@ -18,7 +18,6 @@ PYTHON="${PYTHON:-python3}"
 START_DISCUSSION="$ROOT_DIR/start_discussion.py"
 HUMAN_VIEWER="$ROOT_DIR/human_viewer.py"
 HUMAN_SAYER="$ROOT_DIR/human_sayer.py"
-SPEC_README_TPL="$ROOT_DIR/templates/spec-readme.md.tpl"
 
 DEFAULT_AGENTS="a,b,c"
 DEFAULT_MAX_MEETING=10
@@ -152,86 +151,8 @@ cmd_say() {
 }
 
 # 定位主 pi 的 session 文件：优先 PI_SESSION_FILE，否则用当前 cwd 编码路径查找
-find_pi_session_file() {
-    local session_file="${PI_SESSION_FILE:-}"
-    if [ -n "$session_file" ] && [ -f "$session_file" ]; then
-        echo "$session_file"
-        return
-    fi
-    # cwd 编码：/root/book/sh -> --root-book-sh--
-    local encoded
-    encoded="--$(printf '%s' "$PWD" | sed 's|^/||; s|/|-|g')--"
-    local session_dir="$HOME/.pi/agent/sessions/$encoded"
-    ls -t "$session_dir"/*.jsonl 2>/dev/null | head -1
-}
-
-# 从主 pi session 文件读取最后一个 model_change / thinking_level_change
-read_pi_model_thinking_from_session() {
-    local session_file
-    session_file="$(find_pi_session_file)"
-    if [ -z "$session_file" ] || [ ! -f "$session_file" ]; then
-        echo "|"
-        return
-    fi
-    "$PYTHON" - "$session_file" <<'PYEOF'
-import json, sys
-model = ""
-thinking = ""
-try:
-    with open(sys.argv[1], encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                ev = json.loads(line)
-            except ValueError:
-                continue
-            if ev.get("type") == "model_change":
-                provider = ev.get("provider", "")
-                model_id = ev.get("modelId", "")
-                if provider and model_id:
-                    model = f"{provider}/{model_id}"
-                elif model_id:
-                    model = model_id
-            elif ev.get("type") == "thinking_level_change":
-                thinking = ev.get("thinkingLevel", "")
-except Exception:
-    pass
-print(f"{model}|{thinking}")
-PYEOF
-}
-
 # 读取主 pi 的 model/thinking（用户 2026-08-31：aft 不再替换 bash 后
 # 环境变量可用且是当前生效值——优先环境变量，session 文件解析仅为兜底）
-read_pi_model_thinking() {
-    local provider="${PI_PROVIDER:-}"
-    local model="${PI_MODEL:-}"
-    local thinking="${PI_REASONING_LEVEL:-}"
-    local full_model=""
-
-    if [ -n "$provider" ] && [ -n "$model" ]; then
-        full_model="$provider/$model"
-    elif [ -n "$model" ]; then
-        full_model="$model"
-    fi
-
-    # 兜底：环境变量缺失时解析 session 文件（旧路径，aft 替换 bash 时代的产物）
-    if [ -z "$full_model" ] || [ -z "$thinking" ]; then
-        local from_session
-        from_session="$(read_pi_model_thinking_from_session)"
-        local session_model="${from_session%%|*}"
-        local session_thinking="${from_session##*|}"
-        if [ -z "$full_model" ] && [ -n "$session_model" ]; then
-            full_model="$session_model"
-        fi
-        if [ -z "$thinking" ] && [ -n "$session_thinking" ]; then
-            thinking="$session_thinking"
-        fi
-    fi
-    echo "$full_model|$thinking"
-}
-
 # agents 列表（DEFAULT_AGENTS 逗号分隔 → 行分隔写入 .order；
 # --agents 可覆盖：名称列表 "a,b,c" 或纯数字 "4"（生成 a..<n>））
 cmd_prepare() {
@@ -296,72 +217,15 @@ cmd_prepare() {
         agents_lines="$(echo "$agents_list" | tr ',' '\n' | sed '/^[[:space:]]*$/d')"
     fi
 
-    # question.md（初始立场行按 agents 列表；viewers 模式无立场占位）
-    local stance_lines=""
-    for agents_name in $agents_lines; do
-        stance_lines="${stance_lines}- $agents_name: 立场\n"
-    done
-    cat > "$spec_dir/question.md" <<EOF
-# question.md——说明行，不注入
-
-# 分析主题：$topic
-
-## 初始立场（可选，每参与者一行）
-$(printf '%b' "$stance_lines")
-## 待回答的问题（可选）
-- 问题
-EOF
-
-    # background.md
-    if [ -n "$background" ]; then
-        cat > "$spec_dir/background.md" <<EOF
-# background.md——说明行，不注入
-
-$background
-EOF
-    else
-        cat > "$spec_dir/background.md" <<EOF
-# background.md——说明行，不注入
-
-EOF
-    fi
-
-    # models.md：延用主 pi 的 model/thinking，缺失则 default
-    local mt
-    mt="$(read_pi_model_thinking)"
-    local pi_model="${mt%%|*}"
-    local pi_thinking="${mt##*|}"
-    {
-        echo "# models.md——说明行，不注入"
-        for agents_name in $agents_lines; do
-            if [ -n "$pi_model" ] && [ -n "$pi_thinking" ]; then
-                echo "$agents_name: $pi_model, $pi_thinking"
-            elif [ -n "$pi_model" ]; then
-                echo "$agents_name: $pi_model"
-            elif [ -n "$pi_thinking" ]; then
-                echo "$agents_name: default, $pi_thinking"
-            else
-                echo "$agents_name: default"
-            fi
-        done
-    } > "$spec_dir/models.md"
-
-    # agents/*.md + .order（仅显式 --agents 时；viewers 模式不生成——
-    # 启动时从项目 cwd/viewers/ 发现）
-    if [ -n "$agents_lines" ]; then
-        for agents_name in $agents_lines; do
-            cat > "$spec_dir/agents/$agents_name.md" <<EOF
-# $agents_name.md——说明行，不注入
-
-EOF
-        done
-        echo "$agents_lines" > "$spec_dir/agents/.order"
-    fi
-
-    # README
-    if [ -f "$SPEC_README_TPL" ]; then
-        cp "$SPEC_README_TPL" "$spec_dir/README.md"
-    fi
+    # 骨架生成 = start_discussion --spec-gen（单一事实源，2026-09-09 收敛：
+    # 此前 bash/python 双实现并存——models 主 pi 预填等语义已在 python 侧
+    # 对齐；agents 空列表 = viewers 模式骨架，由 python 决定不建 agents/）
+    local skeleton_args=(--spec-gen "$spec_dir" --topic "$topic")
+    [ -n "$background" ] && skeleton_args+=(--background "$background")
+    [ -n "$agents_lines" ] && skeleton_args+=(--agents "$agents_list")
+    "$PYTHON" "$START_DISCUSSION" "${skeleton_args[@]}" || {
+        fail "spec 骨架生成失败（start_discussion --spec-gen）"
+    }
 
     cat <<OUTPUT_EOF
 已生成分析 spec:

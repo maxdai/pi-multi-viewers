@@ -79,6 +79,58 @@ def _default_model():
 
 
 
+def _detect_pi_model_thinking():
+    """探测主 pi 当前 model/thinking（spec models.md 预填，对齐 wrapper 旧语义）。
+
+    顺序：PI_MODEL/PI_PROVIDER/PI_REASONING_LEVEL 环境变量（wrapper 由主 pi
+    bash 注入）→ session 文件最后 model_change/thinking_level_change 事件
+    （PI_SESSION_FILE 或 cwd 编码目录最新 jsonl）→ settings 默认（_default_model）。
+    返回 (model, thinking)——缺失项为空串。
+    """
+    model = os.environ.get("PI_MODEL") or ""
+    provider = os.environ.get("PI_PROVIDER") or ""
+    thinking = os.environ.get("PI_REASONING_LEVEL") or ""
+    if model and "/" not in model and provider:
+        model = f"{provider}/{model}"
+    if model and thinking:
+        return model, thinking
+    # session 文件兜底
+    try:
+        sf = os.environ.get("PI_SESSION_FILE") or ""
+        if not (sf and os.path.isfile(sf)):
+            enc = "--" + os.getcwd().strip("/").replace("/", "-") + "--"
+            sd = os.path.join(PI_AGENT_DIR, "sessions", enc)
+            cands = sorted(
+                f for f in os.listdir(sd) if f.endswith(".jsonl")
+            ) if os.path.isdir(sd) else []
+            sf = os.path.join(sd, cands[-1]) if cands else ""
+        if sf and os.path.isfile(sf):
+            sm = st = ""
+            with open(sf, encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        ev = json.loads(line)
+                    except ValueError:
+                        continue
+                    t = ev.get("type")
+                    if t == "model_change":
+                        sm = ev.get("modelId") or sm
+                    elif t == "thinking_level_change":
+                        st = ev.get("thinkingLevel") or st
+            if not model and sm:
+                model = sm
+            if not thinking and st:
+                thinking = st
+    except OSError:
+        pass
+    if not model:
+        model = _default_model() or ""
+    return model, thinking
+
+
 def _spec_models(spec_dir, participants):
     """解析 models.md（容错，用户 8024/9204 定）：返回 {agent: (model, variant)}。
 
@@ -148,12 +200,19 @@ def _strip_empty_sections(question):
     return "\n".join(out)
 
 
-def gen_spec_skeleton(spec_dir, participants):
-    """生成 spec 骨架（--spec-gen）：question.md + background.md + models.md + agents/X.md。
+def gen_spec_skeleton(spec_dir, participants, topic=None, background=None):
+    """生成 spec 骨架（--spec-gen，wrapper --prepare 的唯一实现）：
+    question.md + background.md + models.md + agents/X.md（仅显式 --agents）。
 
-    每个文件第一行 = 用途说明（不注入，设计 16.4）；文件预先 touch 好
-    方便手工修改（用户设计 2026-08-11）。
+    topic/background: wrapper --prepare 传入（直接填进骨架）；CLI 直用
+      时缺省 = 占位文案。
+    models.md 预填主 pi 当前 model/thinking（_detect_pi_model_thinking，
+    对齐旧 wrapper read_pi_model_thinking 语义——用户少改一个文件）。
+    每个文件第一行 = 用途说明（不注入，设计 16.4）。
     """
+    # spec 目录本身无条件创建（2026-09-09 回归修复：agents 创建并入条件
+    # 分支后，viewers 骨架曾连 spec_dir 都不建 → README copy 崩）
+    os.makedirs(spec_dir, exist_ok=True)
     # agents/ 骨架仅显式 --agents 时生成（viewers 模式：启动时从项目
     # cwd/viewers/ 发现——空 agents/ 目录会阻断 viewers 回退，故不建）
     if participants:
@@ -163,9 +222,9 @@ def gen_spec_skeleton(spec_dir, participants):
                     os.path.join(spec_dir, "README.md"))
     # question.md：第一行说明 + 基本结构模板（用户 7713：提供基本结构）
     q = [
-        "# question.md——讨论起点（话题/立场/待答问题，自由 markdown）。本行是说明行，不会注入。",
+        "# question.md——分析起点（话题/立场/待答问题，自由 markdown）。本行是说明行，不会注入。",
         "",
-        "# 讨论主题：请填写",
+        f"# 分析主题：{topic or "请填写"}",
         "",
         "## 初始立场（可选，每参与者一行）",
     ]
@@ -173,17 +232,29 @@ def gen_spec_skeleton(spec_dir, participants):
     q += ["", "## 待回答的问题（可选）", "- 问题", ""]
     with open(os.path.join(spec_dir, "question.md"), "w") as f:
         f.write("\n".join(q))
-    # background.md（第一行说明 + 空正文——用户 7707：文件可以是空的）
+    # background.md（第一行说明 + 正文；用户 7707：文件可以是空的）
     with open(os.path.join(spec_dir, "background.md"), "w") as f:
-        f.write("# background.md——共享背景（注入每个 work 的 AGENTS.md 背景节）。"
+        f.write("# background.md——显式边界与约定（注入每个 work 的 AGENTS.md 背景节）。"
                 "本行是说明行，不会注入。\n\n")
+        if background:
+            f.write(background + "\n")
     # models.md（用户 8024/9204/9271：预列各 agent，每行 agent名: model，
-    # variant 默认 max 隐式——只有非 max 才写 `, variant`，日常更简洁）
+    # variant 默认 max 隐式——只有非 max 才写 `, variant`，日常更简洁；
+    # model/thinking 预填主 pi 当前值，用户少改一个文件）
+    pm, pt = _detect_pi_model_thinking()
     with open(os.path.join(spec_dir, "models.md"), "w") as f:
-        lines = ["# models.md——模型配置（可选）。每行：agent名: model[， variant]。"
+        lines = ["# models.md——模型配置（可选）。每行：agent名: model[, variant]。"
                  "model 默认 default，variant 默认 max（只有不用 max 才写 variant）。"
                  "本行是说明行，不会注入。"]
-        lines += [f"{p}: default" for p in participants]
+        for p in participants:
+            if pm and pt:
+                lines.append(f"{p}: {pm}, {pt}")
+            elif pm:
+                lines.append(f"{p}: {pm}")
+            elif pt:
+                lines.append(f"{p}: default, {pt}")
+            else:
+                lines.append(f"{p}: default")
         f.write("\n".join(lines) + "\n")
     # agents/X.md + .order（仅显式 --agents 时，同上）
     if participants:
@@ -693,7 +764,8 @@ def main():
         # question/background/models/README（无 agents/——启动时从项目
         # cwd/viewers/ 发现视角）；显式 --agents = 覆盖 viewers（review5 F5）
         spec_dir = _resolve_path(args.spec_gen)   # L10
-        gen_spec_skeleton(spec_dir, participants)
+        gen_spec_skeleton(spec_dir, participants,
+                          topic=args.topic, background=args.background)
         print(f"[spec-gen] 已生成骨架: {spec_dir}")
         return
 

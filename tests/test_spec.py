@@ -14,6 +14,7 @@ import tempfile
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from unittest import mock
 
 from start_discussion import (
     _spec_read, _spec_models, _resolve_spec, gen_spec_skeleton,
@@ -111,7 +112,7 @@ class TestSpecSkeleton(unittest.TestCase):
             # question.md 第一行是说明 + 基本结构（# 讨论主题 / ## 初始立场）
             q = open(os.path.join(d, "question.md")).read()
             self.assertTrue(q.startswith("# question.md"))
-            self.assertIn("# 讨论主题：请填写", q)
+            self.assertIn("# 分析主题：请填写", q)
             self.assertIn("## 初始立场", q)
             for p in ["a", "b", "c"]:
                 self.assertIn(f"- {p}: 立场", q)
@@ -155,13 +156,35 @@ class TestSpecInjection(unittest.TestCase):
 
 
 class TestSpecModels(unittest.TestCase):
+    def test_skeleton_prefills_pi_model(self):
+        """PI_MODEL/PI_PROVIDER/PI_REASONING_LEVEL 注入 → models.md 预填
+        （对齐旧 wrapper read_pi_model_thinking 语义，2026-09-09）。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            env = {"PI_MODEL": "deepseek-v4-flash", "PI_PROVIDER": "deepseek",
+                   "PI_REASONING_LEVEL": "max", "PI_SESSION_FILE": ""}
+            with mock.patch.dict(os.environ, env):
+                d = os.path.join(tmp, "spec")
+                gen_spec_skeleton(d, ["a"])
+                with open(os.path.join(d, "models.md")) as f:
+                    t = f.read()
+                self.assertIn("a: deepseek/deepseek-v4-flash, max", t)
+
     def test_skeleton_has_all_default(self):
-        with tempfile.TemporaryDirectory() as d:
-            gen_spec_skeleton(d, ["a", "b", "c"])
-            md = open(os.path.join(d, "models.md")).read()
-            self.assertTrue(md.startswith("# models.md"))
-            for p in ["a", "b", "c"]:
-                self.assertIn(f"{p}: default", md)   # variant 隐式 max（9271）
+        """无 env/session 探测 → 'agent: default' 兜底行（探测逻辑单独测）。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            env = {"PI_MODEL": "", "PI_PROVIDER": "",
+                   "PI_REASONING_LEVEL": "", "PI_SESSION_FILE": ""}
+            with mock.patch.dict(os.environ, env):
+                with mock.patch("start_discussion._default_model",
+                                return_value=None):
+                    with mock.patch("start_discussion.os.path.isdir",
+                                    return_value=False):
+                        d = os.path.join(tmp, "spec")
+                        gen_spec_skeleton(d, ["a", "b", "c"])
+                        with open(os.path.join(d, "models.md")) as f:
+                            t = f.read()
+                        self.assertIn("a: default", t)
+
 
     def test_parse_valid_and_default(self):
         with tempfile.TemporaryDirectory() as d:
