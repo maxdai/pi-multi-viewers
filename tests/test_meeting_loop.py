@@ -74,7 +74,18 @@ class TestWakeLlm(unittest.TestCase):
         self.base = os.path.dirname(self.workdir)
         self.src = os.path.join(self.tmp, "main-session.jsonl")
         with open(self.src, "w") as f:
-            f.write('{"type":"session","id":"src"}\n')
+            # 含 header + compaction + firstKept 起的一条 message
+            # （活跃视图裁剪需要 compaction——无则 build 报错拒绝）
+            f.write('{"type":"session","id":"src","version":3}\n')
+            f.write('{"type":"message","id":"old1","parentId":null,'
+                    '"timestamp":"2026-09-09T00:00:00.000Z",'
+                    '"message":{"role":"user","content":"旧历史"}}\n')
+            f.write('{"type":"compaction","id":"c1","parentId":"old1",'
+                    '"timestamp":"2026-09-09T00:01:00.000Z",'
+                    '"summary":"压缩摘要","firstKeptEntryId":"keep1"}\n')
+            f.write('{"type":"message","id":"keep1","parentId":"c1",'
+                    '"timestamp":"2026-09-09T00:02:00.000Z",'
+                    '"message":{"role":"assistant","content":"保留的内容"}}\n')
         self.fork_cwd = os.path.join(self.tmp, "main")
         os.makedirs(self.fork_cwd)
 
@@ -250,7 +261,17 @@ class TestForkWake(unittest.TestCase):
         self.base = os.path.dirname(self.workdir)
         self.src = os.path.join(self.tmp, "main-session.jsonl")
         with open(self.src, "w") as f:
-            f.write('{"type":"session","id":"src"}\n')
+            # 活跃视图裁剪需要 compaction（无则 build 报错拒绝）
+            f.write('{"type":"session","id":"src","version":3}\n')
+            f.write('{"type":"message","id":"old1","parentId":null,'
+                    '"timestamp":"2026-09-09T00:00:00.000Z",'
+                    '"message":{"role":"user","content":"旧历史"}}\n')
+            f.write('{"type":"compaction","id":"c1","parentId":"old1",'
+                    '"timestamp":"2026-09-09T00:01:00.000Z",'
+                    '"summary":"压缩摘要","firstKeptEntryId":"keep1"}\n')
+            f.write('{"type":"message","id":"keep1","parentId":"c1",'
+                    '"timestamp":"2026-09-09T00:02:00.000Z",'
+                    '"message":{"role":"assistant","content":"保留的内容"}}\n')
         self.cwd_main = os.path.join(self.tmp, "main-project")
         os.makedirs(self.cwd_main)
 
@@ -281,20 +302,28 @@ class TestForkWake(unittest.TestCase):
             os.path.isdir = orig_isdir
 
     def test_first_wake_uses_fork_name_and_predetermined_sid(self):
-        """首唤：--fork <src> + --name + 预生成 --session-id；cwd=主项目。"""
+        """首唤：活跃视图 fork 源 + --session 直接打开 + --name；cwd=主项目。"""
         proc = FakeProc("ok", out='{"type":"session","id":"uuid-1"}')
         result, pm = self._run(proc)
         args, kwargs = pm.call_args
         cmd = args[0]
-        self.assertIn("--fork", cmd)
-        self.assertEqual(cmd[cmd.index("--fork") + 1], self.src)
+        self.assertNotIn("--fork", cmd)
+        self.assertIn("--session", cmd)
+        active_src = cmd[cmd.index("--session") + 1]
+        self.assertTrue(active_src.endswith(".jsonl"))
+        self.assertIn("fork-src-", active_src)
+        # 活跃视图内容：header(新id/cwd) + compaction + firstKept 起
+        with open(active_src) as f:
+            fl = [json.loads(x) for x in f]
+        self.assertEqual(fl[0]["type"], "session")
+        self.assertEqual(fl[0]["cwd"], self.cwd_main)
+        self.assertEqual(fl[1]["type"], "compaction")
+        self.assertEqual([e.get("id") for e in fl[1:]], ["c1", "keep1"])
         self.assertIn("--name", cmd)
         self.assertTrue(cmd[cmd.index("--name") + 1].endswith("-a"))
-        self.assertIn("--session-id", cmd)
-        sid = cmd[cmd.index("--session-id") + 1]
-        self.assertRegex(sid, r"^[0-9a-f-]{36}$")  # 预生成 UUID
+        self.assertNotIn("--session-id", cmd)  # id 已写进 header，pi 沿用
         self.assertEqual(kwargs["cwd"], self.cwd_main)
-        self.assertEqual(result, ("uuid-1", 0))  # 输出解析成功 → 用输出的
+        self.assertEqual(result, ("uuid-1", 0))
         with open(os.path.join(self.base, "status-a.json")) as f:
             self.assertEqual(json.load(f), {"sessionID": "uuid-1"})
 

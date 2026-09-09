@@ -7,7 +7,6 @@
 - 所有 git 操作用 subprocess（与生产 local_loop 一致）
 """
 
-import json
 import os
 import re
 import subprocess
@@ -346,52 +345,3 @@ def parse_log_nameonly(output):
         commits.append((cur, files))
     return commits
 
-def build_active_fork_source(src_session, out_path, new_id, new_cwd):
-    """生成"活跃视图"fork 源（方案 b，用户 2026-09-09）：裁剪版 session
-    文件，供 wake_llm 首唤 --session 直接打开（不再用 pi --fork 全量复制）。
-
-    动机（e2e 四轮实测）：全量 fork 让 agent 携带主 session 的行为先例
-    （5000 条历史里"主 pi"的监控/开发动作），wake prompt 身份锚定也压不
-    住角色连续性——agent 继续扮演主 pi 而非视角参与者。活跃视图 =
-    主 session 当前的压缩态（最后 compaction + firstKeptEntryId 起的
-    条目），与 pi rebuild 上下文的算法一致（buildContextEntries）。
-
-    产物：out_path（jsonl）= 新 header（id=new_id, cwd=new_cwd,
-    parentSession=源路径）+ [compaction] + firstKept 起的条目。
-    无 compaction 的源 → 只写 header + 全部条目？否——返回错误
-    （行为先例风险不变，调用方决定兜底：bootstrap/拒绝启动）。
-
-    返回 (entries_written, error)。
-    """
-    try:
-        with open(src_session, encoding="utf-8") as f:
-            entries = [json.loads(l) for l in f if l.strip()]
-    except (OSError, ValueError) as e:
-        return 0, f"源 session 读取失败: {e}"
-    header = next((e for e in entries if e.get("type") == "session"), None)
-    if header is None:
-        return 0, "源 session 无 header"
-    comps = [(i, e) for i, e in enumerate(entries) if e.get("type") == "compaction"]
-    if not comps:
-        return 0, "源 session 无 compaction（活跃视图不可用）——历史全量即行为先例，建议用引导 session"
-    _i_last, comp = comps[-1]
-    kept_id = comp.get("firstKeptEntryId")
-    idx_by_id = {e.get("id"): i for i, e in enumerate(entries) if e.get("id")}
-    kept_idx = idx_by_id.get(kept_id)
-    if kept_idx is None:
-        return 0, f"firstKeptEntryId {kept_id} 不在源 session 中"
-    new_header = {
-        "type": "session",
-        "version": header.get("version", 3),
-        "id": new_id,
-        "timestamp": comp.get("timestamp") or header.get("timestamp"),
-        "cwd": new_cwd,
-        "parentSession": src_session,
-    }
-    active = [comp] + entries[kept_idx:]
-    os.makedirs(os.path.dirname(out_path), exist_ok=True)
-    with open(out_path, "w", encoding="utf-8") as f:
-        f.write(json.dumps(new_header, ensure_ascii=False) + "\n")
-        for e in active:
-            f.write(json.dumps(e, ensure_ascii=False) + "\n")
-    return len(active) + 1, None

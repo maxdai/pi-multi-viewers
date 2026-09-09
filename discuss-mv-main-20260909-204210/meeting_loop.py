@@ -17,7 +17,6 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import meeting_fs
 from meeting_engine import agent_loop
 
 MIN_MEM_MB = 2000
@@ -247,27 +246,15 @@ def wake_llm(workdir, agent, prompt, pure=False, fork_source=None, fork_cwd=None
     session_dir = os.path.join(base, "pi-sessions")
     first_wake = not sid
     if first_wake:
-        # 预生成 UUID 并显式传 --session-id：即使输出解析失败，本进程
-        # 也有确定 sid（续接不依赖 parse 成功）
+        # 预生成 UUID 并显式传 --session-id：pi --fork 接受指定 id——
+        # 即使输出解析失败，本进程也有确定 sid（续接不依赖 parse 成功）
         import uuid
         sid = str(uuid.uuid4())
         base_name = os.path.basename(base.rstrip("/")) or "discussion"
         display_name = f"{base_name}-{agent}"
-        # 活跃视图 fork 源（方案 b，用户 2026-09-09 定）：裁剪版 session
-        # 文件 + --session 直接打开——不再用 pi --fork 全量复制。动机：
-        # e2e 四轮实测，全量历史的行为先例让 agent 继续扮演主 pi（wake
-        # 身份锚定也压不住）；活跃视图 = 最后 compaction + firstKept 起
-        # 条目（pi rebuild 上下文同款算法），保留摘要语义、去行为先例。
-        # --session 打开后新消息 append 回本文件（agent session 独立演化）
-        active_src = os.path.join(session_dir, f"fork-src-{sid}.jsonl")
-        n, err = meeting_fs.build_active_fork_source(
-            fork_source, active_src, sid, fork_cwd or workdir)
-        if err:
-            log(agent, f"[fatal] 活跃视图 fork 源生成失败: {err}")
-            raise RuntimeError(err)
-        log(agent, f"fork 源（活跃视图 {n} 条）: {os.path.basename(active_src)}")
-        cmd = ["pi", "--mode", "json", "--session", active_src,
-               "--name", display_name, "--session-dir", session_dir]
+        cmd = ["pi", "--mode", "json", "--fork", fork_source,
+               "--session-id", sid, "--name", display_name,
+               "--session-dir", session_dir]
         spawn_cwd = fork_cwd or workdir
     else:
         cmd = ["pi", "--mode", "json", "--session-id", sid,

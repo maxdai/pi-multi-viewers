@@ -4,6 +4,7 @@
 git 行为差异）。覆盖：正常路径 + 边界（空/缺失/畸形）+ 异常（git 失败）。
 """
 
+import json
 import os
 import shutil
 import subprocess
@@ -15,6 +16,7 @@ from unittest import mock
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from meeting_fs import (
+    build_active_fork_source,
     run_git, git_head, git_pull, git_commit, git_push,
     git_ls_files, git_show, _frontmatter_end, parse_frontmatter,
     extract_body, read_message, _fm_to_lines, write_message,
@@ -356,6 +358,59 @@ class TestMessages(unittest.TestCase):
             self.assertTrue(meta["a/0001.md"]["stale"])
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+class TestActiveForkSource(unittest.TestCase):
+    """活跃视图 fork 源（方案 b，2026-09-09）：compaction 裁剪 + header 重写。"""
+
+    def _make_src(self, tmp, with_compaction=True):
+        src = os.path.join(tmp, "src.jsonl")
+        with open(src, "w") as f:
+            f.write('{"type":"session","id":"src","version":3}\n')
+            f.write('{"type":"message","id":"m1","parentId":null,'
+                    '"timestamp":"2026-09-09T00:00:00.000Z",'
+                    '"message":{"role":"user","content":"旧"}}\n')
+            if with_compaction:
+                f.write('{"type":"compaction","id":"c1","parentId":"m1",'
+                        '"timestamp":"2026-09-09T00:01:00.000Z",'
+                        '"summary":"摘要","firstKeptEntryId":"k1"}\n')
+                f.write('{"type":"message","id":"k1","parentId":"c1",'
+                        '"timestamp":"2026-09-09T00:02:00.000Z",'
+                        '"message":{"role":"assistant","content":"新"}}\n')
+        return src
+
+    def test_active_view(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            src = self._make_src(tmp)
+            out = os.path.join(tmp, "sub", "fork-src.jsonl")
+            n, err = build_active_fork_source(src, out, "uuid-x", "/proj")
+            self.assertIsNone(err)
+            lines = [json.loads(x) for x in open(out)]
+            self.assertEqual(len(lines), 3)  # header + compaction + kept
+            self.assertEqual(lines[0]["id"], "uuid-x")
+            self.assertEqual(lines[0]["cwd"], "/proj")
+            self.assertEqual(lines[1]["type"], "compaction")
+            self.assertEqual(lines[2]["id"], "k1")  # 旧历史 m1 被裁掉
+
+    def test_no_compaction_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            src = self._make_src(tmp, with_compaction=False)
+            n, err = build_active_fork_source(
+                src, os.path.join(tmp, "out.jsonl"), "u", "/p")
+            self.assertEqual(n, 0)
+            self.assertIn("无 compaction", err)
+
+    def test_bad_source(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            n, err = build_active_fork_source(
+                os.path.join(tmp, "nope.jsonl"),
+                os.path.join(tmp, "out.jsonl"), "u", "/p")
+            self.assertEqual(n, 0)
+            self.assertIn("读取失败", err)
 
 
 if __name__ == "__main__":
