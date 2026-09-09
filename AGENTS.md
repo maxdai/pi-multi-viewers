@@ -143,10 +143,12 @@ loop、状态从 git 共享事实推导、单一事实源 = protocol.json、无�
 7. **测试不留 session**（用户 2026-09-04 定）：pi 冒烟/连通性测试产生的
    session 是垃圾——测试结束后清理自己产生的 session（含主 pi 侧
    `~/.pi/agent/sessions/<编码目录>/`，不只讨论目录 pi-sessions）。
-8. **测试与产品目录隔离**：wrapper/spec/环境类测试在 scratch 项目目录跑
-   （临时 git 仓库 + 临时 session），不污染真仓库；同一命令里多次
-   `--prepare` 注意**目录名时间戳同秒覆写**（第二次覆盖第一次——验证
-   两种骨架时分开执行或 sleep）。
+8. **测试与产品目录隔离 + 用例级 teardown**：wrapper/spec/环境类测试在
+   scratch 项目目录跑（临时 git 仓库 + 临时 session），不污染真仓库；
+   每个用例结束**立即删除自己的产物**（setup→act→assert→teardown 闭环），
+   再跑下一个——产物路径同名也无所谓（已被释放），不靠 sleep 赌时间戳
+   （反例实测 2026-09-09：两条 prepare 同秒写同一 mv-spec-* 目录互相
+   叠写，因验证命令未做用例级清理）。
 
 ## Git 准则（用户约定，沿用）
 
