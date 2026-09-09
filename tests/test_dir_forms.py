@@ -90,7 +90,7 @@ class TestDirFormMatrix(unittest.TestCase):
         args = sd.argparse.Namespace(
             dir="mydisc", cleanup=False, status=False, wait=False,
             skip_setup=False, spec=None, spec_gen=None, topic=None,
-            background=None, start=False, pure=False, prepare_file=None,
+            background=None, start=False, pure=False,
             stances=None, models=None, questions=None, agents=None,
             result_writer=None, max_meeting=10, max_rr=7, stall_timeout=600)
         # 复制 main() 的语义分支（与实现保持同步的断言）

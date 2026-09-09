@@ -194,7 +194,7 @@ def gen_spec_skeleton(spec_dir, participants):
 
 
 def gen_agens_md(args, agent, participants, spec_background=None,
-                 main_pi_cwd=None, prepare_file=None):
+                 main_pi_cwd=None):
     """meeting 协议 AGENTS.md（共享协议 + background；身份/立场在 agent
     定义/question.md）。
 
@@ -203,21 +203,11 @@ def gen_agens_md(args, agent, participants, spec_background=None,
       AGENTS.md（注入 system prompt 的载体），不经 background.md 转接：
       background.md 是人工编辑的讨论内容（用户审核 spec 时看），cwd 是
       环境事实（程序化写入），分开保持各自干净。None（手动场景）→ 节隐藏。
-    prepare_file: 背景提炼文件绝对路径（discuss_prepare_<sid>.md，用户
-      2026-09-02 两 prompt 拆分）——存在时模板 {PREPARE_FILE_SECTION}
-      位置填充引用节（位置在模板显式可见，文本单份定义在 python 避免
-      双份耦合）；None → 空串（无节）。
     """
     others = [p for p in participants if p != agent]
     sample = others[0] if others else "x"
     background = (spec_background if spec_background is not None
                   else (args.background or "（无）"))
-    prepare_section = (
-        "\n## 讨论背景文件\n\n"
-        f"本次讨论的背景提炼文件位于 `{prepare_file}`"
-        "（含讨论主题与背景信息），需要了解完整背景时可读取。\n"
-        if prepare_file else ""
-    )
     with open(os.path.join(TPL_DIR, "AGENTS.md.tpl")) as f:
         tpl = f.read()
     out = tpl.format(
@@ -227,7 +217,6 @@ def gen_agens_md(args, agent, participants, spec_background=None,
         SAMPLE_OTHER=sample,
         BACKGROUND=background,
         MAIN_PI_CWD=main_pi_cwd or "（未提供）",
-        PREPARE_FILE_SECTION=prepare_section,
     )
     if not main_pi_cwd:
         # 手动场景不注入 cwd 节（隐藏，不写占位）
@@ -472,8 +461,7 @@ def setup_environment(args, participants, base, spec_dir=None):
         run(["git", "config", "user.email", GIT_EMAIL], cwd=workdir)
         with open(os.path.join(workdir, "AGENTS.md"), "w") as f:
             f.write(gen_agens_md(args, p, participants, spec_background,
-                                 main_pi_cwd=os.getcwd(),
-                                 prepare_file=getattr(args, "prepare_file", None)))
+                                 main_pi_cwd=os.getcwd()))
         mv = models.get(p, (None, "max"))
         with open(os.path.join(workdir, ".pi/agent", f"{p}.md"), "w") as f:
             f.write(gen_agent_def(p, participants, {p: mv[0]} if mv[0] else None,
@@ -624,9 +612,6 @@ def main():
                         help="生成 spec 骨架到 DIR（如 --spec-gen myspec/；不需 --dir）")
     parser.add_argument("--spec", default=None,
                         help="讨论规格目录（内容源：question/background/agents，优先于 CLI 内容参数）")
-    parser.add_argument("--prepare-file", default=None,
-                        help="背景提炼文件绝对路径（discuss_prepare_<sid>.md，"
-                             "wrapper 检测存在才传）；有则写入各 agent AGENTS.md 引用节")
     parser.add_argument("--fork-source", default=None,
                         help="主 session 文件绝对路径（多视角 fork 模式）："
                              "写入 protocol.json，各 agent 首唤 --fork 挂载主上下文；"

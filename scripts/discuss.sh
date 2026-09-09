@@ -114,12 +114,6 @@ cmd_cleanup() {
     dir="$(normalize_dir "$1")"
     require_dir "$dir"
     "$PYTHON" "$START_DISCUSSION" --dir "$dir" --cleanup
-    # 清理同 session 的 prepare 背景文件（agents-helper-prepare 产物；
-    # 不变式：cleanup 后无 discuss_prepare 文件。不存在则幂等跳过）
-    if [ -n "${PI_SESSION_ID:-}" ] && [ -f "discuss_prepare_${PI_SESSION_ID}.md" ]; then
-        rm -f "discuss_prepare_${PI_SESSION_ID}.md"
-        echo "[cleanup] 已删除 discuss_prepare_${PI_SESSION_ID}.md"
-    fi
 }
 
 cmd_view() {
@@ -387,14 +381,6 @@ cmd_start() {
     local dir_path="$PWD/$dir_name"
 
     # 第 1 步：创建讨论环境（不启动）
-    # prepare 背景文件（agents-helper-prepare 产物，主 pi cwd 下）：存在则
-    # 以绝对路径传入（agents 在 work-<agent> 子目录，相对路径找不到）——
-    # 机制判断非 LLM 判断；不存在不传参（agents-helper 单独跑也正常）
-    local prepare_args=()
-    if [ -n "${PI_SESSION_ID:-}" ] && [ -f "discuss_prepare_${PI_SESSION_ID}.md" ]; then
-        prepare_args=(--prepare-file "$(readlink -f "discuss_prepare_${PI_SESSION_ID}.md")")
-        echo "[start] 检测到背景文件：${prepare_args[1]}（将写入各 agent AGENTS.md 引用）"
-    fi
     # fork 模式（多视角）：主 pi 触发时（PI_SESSION_ID 存在）解析当前
     # session 文件绝对路径 → protocol.json → 各 agent 首唤 --fork 挂载
     # 主 session 全量上下文。解析不到（手动 shell 跑 wrapper）不传参，
@@ -413,7 +399,7 @@ cmd_start() {
             echo "[start] 警告：未找到主 session 文件（$enc/*_$PI_SESSION_ID.jsonl）——退化 legacy 形态" >&2
         fi
     fi
-    if ! "$PYTHON" "$START_DISCUSSION" --dir "$dir_path" --spec "$spec_dir" --max-meeting "$DEFAULT_MAX_MEETING" --max-rr "$DEFAULT_MAX_RR" "${prepare_args[@]+"${prepare_args[@]}"}" "${fork_args[@]+"${fork_args[@]}"}"; then
+    if ! "$PYTHON" "$START_DISCUSSION" --dir "$dir_path" --spec "$spec_dir" --max-meeting "$DEFAULT_MAX_MEETING" --max-rr "$DEFAULT_MAX_RR" "${fork_args[@]+"${fork_args[@]}"}"; then
         fail "讨论环境创建失败，请查看上方输出"
     fi
 

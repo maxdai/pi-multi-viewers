@@ -128,18 +128,13 @@ class TestGenAgensMd(unittest.TestCase):
         self.assertNotIn("主 pi 工作目录", md2)
         self.assertNotIn("（未提供）", md2)
 
-    def test_prepare_file_reference(self):
-        """背景文件引用节（2026-09-02 两 prompt 拆分）：有则节含绝对路径，
-        无则空占位（无节、无残留标记）。"""
-        md = gen_agens_md(Args(), "a", ["a", "b"], main_pi_cwd="/x",
-                          prepare_file="/abs/discuss_prepare_s1.md")
-        self.assertIn("## 讨论背景文件", md)
-        self.assertIn("/abs/discuss_prepare_s1.md", md)
-        # 无 → 无节且无占位符残留
-        md2 = gen_agens_md(Args(), "a", ["a", "b"], main_pi_cwd="/x")
-        self.assertNotIn("讨论背景文件", md2)
-        self.assertNotIn("PREPARE_FILE_SECTION", md2)
-        self.assertNotIn("{", md2)
+    def test_no_prepare_section(self):
+        """prepare 机制已移除（fork 模式上下文自带）：模板与产物均无引用节。"""
+        md = gen_agens_md(Args(), "a", ["a", "b"], main_pi_cwd="/x")
+        self.assertNotIn("讨论背景文件", md)
+        self.assertNotIn("discuss_prepare", md)
+        self.assertNotIn("PREPARE_FILE_SECTION", md)
+        self.assertNotIn("{BACKGROUND}", md)
 
 
 class TestMisc(unittest.TestCase):
