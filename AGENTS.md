@@ -16,13 +16,14 @@ pi-agents-helper（多方讨论达成共识）的平行第四代：**多视角�
 meeting_core.py      纯逻辑判定——无 I/O（判定只看参与者，human 视而不见）
 meeting_fs.py        git/文件层
 meeting_engine.py    【唯一状态机】+ 协议信号 + responder 注入
-meeting_loop.py      Pi 薄壳：首唤 --fork+--name → 存 sid → --session-id 续接
+meeting_loop.py      Pi 薄壳：首唤生成 fork 源 + `--session` 打开 → 存 sid → `--session-id` 续接
 fake_agent.py        测试薄壳：responder = 随机决策
 start_discussion.py  环境生成/启动/清理（viewers 发现 / spec 解析 / fork 源）
 human_viewer.py      【human 通道】只读展示（增量/--follow/游标）
 human_sayer.py       【human 通道】插话命令（单次/stdin/交互 -i）
 scripts/mv.sh        wrapper（prepare/start/status/wait/cleanup/view/say）
 prompts/multi-viewers.md  /multi-viewers 入口（视角设计三原则 + 审核闸门）
+docs/design.md       设计文档（fork 源模式与规模口径 + 决策记录）
 package.json         npm 包 pi-multi-viewers（pi.prompts 注册；发版待办）
 templates/           AGENTS.md.tpl / agent.md.tpl / gitignore.tpl / spec-readme.md.tpl
 viewers/             示范稳定视角（性能/可读性——对立视角，措辞经实验验证）
@@ -32,10 +33,10 @@ tests/               测试（unittest discover tests）
 
 **fork 三件套**（初始化层与 pi-agents-helper 的全部差异所在）：
 
-1. **session fork**：首唤 `pi --fork <主session> --session-id <预生成UUID>
-   --name <分析名>-<视角名>`——agent 携带主 session 全量上下文；后续唤醒
-   `--session-id <sid>` 续接（sid 存 `status-<agent>.json`）。`--name` 是
-   显示名 label（session_info entry），不劫持 id（id 归机制=UUID，名字归人）
+1. **session fork**：首唤由本地循环生成 **fork 源文件**（`meeting_fs.build_fork_source`：从主 session 按模式裁剪——默认 `budget` 预算+折叠；`compaction` 按 compaction 边界；`full` 全量），再用 `pi --session <fork 源> --name <分析名>-<视角名>` 打开；后续唤醒 `--session-id <sid>` 续接（sid 存 `status-<agent>.json`，预生成 UUID）。
+   - **不用 `pi --fork`**：那是全量拷贝（长会话必超窗，实测 731k/930k tokens + 384k completion 预留 > 1M），且无法在尾部注入切换叙事
+   - 切换叙事（2 对"停止旧任务 → 新任务说明"对话）注入在 fork 源尾部——切断历史叙事惯性；主题取自 `protocol.json.topic`（**不**二次解析 question.md）
+   - `--name` 是显示名 label（session_info entry），不劫持 id（id 归机制=UUID，名字归人）；规模/口径见 `docs/design.md`
 2. **cwd = 主项目**（forkCwd）：agent 直接读项目文件；work_dir 仅消息交换
    区，prompt 中所有路径**绝对化**（msg_path/meta/result.md）
 3. **协议注入**：work-X/AGENTS.md（讨论协议）不在主项目祖先链上，pi 不会
@@ -50,6 +51,12 @@ tests/               测试（unittest discover tests）
 （`/tmp` → `--tmp--`；wrapper 解析 fork 源依赖它，编码错一根横线 = 静默
 解析不到——已加显式报错）。**fork-only fail-fast**：缺 fork 源 = 明确报错
 （loop/start/wrapper 三层），无静默退化（无上下文的视角分析违背产品本质）。
+
+**fork 容量约束（2026-09-10 实测）**：fork 携带的是 session **原始条目**
+（主 pi 实际发送的上下文由压缩层在渲染时生成，不在条目里）——长会话的
+原始条目远超模型窗口（实测 930k tokens + 384k completion 预留 > 1M，provider
+直接 400；`pi --fork` 原生命令同样超窗）。因此 **budget 是长会话唯一可行
+模式**；compaction/full 只适合中小会话（数字口径见 `docs/design.md`）。
 
 **viewers/ 分支约定**：spec 的 `agents/` 目录存在 = 显式模式（优先）；
 不存在 → 项目 cwd 的 `viewers/*.md` 发现（文件名即 agent 名：中文合法，
@@ -96,7 +103,9 @@ loop、状态从 git 共享事实推导、单一事实源 = protocol.json、无�
 
 ## 设计文档
 
-- `docs/examples/first-experiment/`：首次实验存档——机制验证结论、
+- `docs/design.md`：本项目设计文档——fork 源模式与**规模口径**（产物侧
+  指纹 / 消费侧规模 / 校准比）、决策记录（含被否决方案与重估触发条件）
+- `docs/examples/first-experiment/`：首次实验存档（2026-09-09，历史）——机制验证结论、
   协议/视角模板原型（措辞经实验验证）、三条真实消息（可作 loop 测试 fixture）
 - 上游设计文档：`../pi-agents-helper/docs/pi-helper-design.md`（共享协议
   核心的行为定义——信息层/流程层分离、配额语义、状态机推演对本项目

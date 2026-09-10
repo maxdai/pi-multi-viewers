@@ -225,7 +225,7 @@ def _prepare_fork_session(workdir, agent, sid, fork_source, fork_cwd,
     日志），后者是纯命令拼装——混在一起曾让单函数 125 行。
     """
     fork_src = os.path.join(session_dir, f"fork-src-{sid}.jsonl")
-    n, err = meeting_fs.build_active_fork_source(
+    n, err = meeting_fs.build_fork_source(
         fork_source, fork_src, sid, fork_cwd or workdir, mode=fork_mode)
     if err:
         log(agent, f"[fatal] fork 源生成失败（mode={fork_mode}）: {err}")
@@ -262,12 +262,12 @@ def _prepare_fork_session(workdir, agent, sid, fork_source, fork_cwd,
 
 
 def _build_wake_cmd(workdir, agent, sid, cfg, fork_source, fork_cwd,
-                    session_dir, first_wake, pure, prompt, fork_mode="active",
+                    session_dir, first_wake, pure, prompt, fork_mode="budget",
                     topic=""):
     """组装唤醒命令（#3 拆分，e2e7 评审）：返回 (cmd, spawn_cwd)。
 
-    首唤：fork 源生成（_prepare_fork_session，fork_mode=active|full|
-    curated）→ `--session` 直接打开；续接：`--session-id`。
+    首唤：fork 源生成（_prepare_fork_session，fork_mode=compaction|budget|
+    full）→ `--session` 直接打开；续接：`--session-id`。
     cwd = fork_cwd（主项目）优先。协议/视角注入在此追加。
     """
     base = os.path.dirname(workdir)
@@ -351,7 +351,7 @@ def _run_wake_proc(cmd, spawn_cwd, workdir, agent):
 
 
 def wake_llm(workdir, agent, prompt, pure=False, fork_source=None, fork_cwd=None,
-             fork_mode="active", topic=""):
+             fork_mode="budget", topic=""):
     """唤醒 pi（fork-only：首唤 --session 活跃视图，后续 --session-id
     续接）。返回 (sessionID, returncode)。
 
@@ -429,7 +429,7 @@ def _read_perspective_brief(workdir, agent):
     return brief or None
 
 
-def make_responder(pure, fork_source=None, fork_cwd=None, fork_mode="active",
+def make_responder(pure, fork_source=None, fork_cwd=None, fork_mode="budget",
                    topic=""):
     """构造真实 LLM responder：唤醒 pi，LLM 写内容文件。
 
@@ -525,7 +525,7 @@ if __name__ == "__main__":
                    make_responder(pure,
                                   fork_source=fork_source,
                                   fork_cwd=proto.get("forkCwd") or "",
-                                  fork_mode=proto.get("forkMode") or "active",
+                                  fork_mode=proto.get("forkMode") or "budget",
                                   topic=proto.get("topic") or ""),
                    max_meeting=mm, max_rr=mr, stall_timeout=st)
     except KeyboardInterrupt:

@@ -394,7 +394,7 @@ def parse_log_nameonly(output):
 #   （实测 w1 132k → w5 192–207k）。
 # - pi 默认 compaction（keepRecentTokens=20000 / reserveTokens=16384，
 #   见 pi DEFAULT_COMPACTION_SETTINGS）——讨论 agent 需要更宽的近期窗口。
-CURATED_KEEP_TOKENS = 80000
+BUDGET_KEEP_TOKENS = 80000
 _TOOL_RESULT_KEEP = 8          # 最近 N 条工具输出保留（其余省略）
 _TOOL_RESULT_MAX_CHARS = 4000  # 保留范围内单条工具输出上限
 _TOOL_CALL_MAX_CHARS = 1200    # 工具调用参数上限
@@ -465,7 +465,7 @@ def _shrink_value(v, limit):
 
 
 def _fold_entry(entry, full_result):
-    """折叠单条目（curated）：返回新条目（无改动则原样返回）。
+    """折叠单条目（budget）：返回新条目（无改动则原样返回）。
 
     - thinking 块整体丢弃——推理痕迹不承担信息职责，但占原始文本约 40%
     - toolCall 参数超限截断（保留名字与开头，够辨认“做了什么”）
@@ -526,8 +526,8 @@ def _fold_entry(entry, full_result):
     return n
 
 
-def _curate_entries(entries, keep_tokens, summary=""):
-    """按预算裁剪 + 折叠（curated）。返回 **(preface 文本, kept 条目,
+def _budget_entries(entries, keep_tokens, summary=""):
+    """按预算裁剪 + 折叠（budget）。返回 **(preface 文本, kept 条目,
     丢弃条数)**（估算值由调用方对最终产物统一计算——单一测点）。
 
     两步顺序很重要：**先折叠、再按折叠后规模从尾部裁**（按原始规模
@@ -583,26 +583,26 @@ def _curate_entries(entries, keep_tokens, summary=""):
     return preface, kept, len(dropped)
 
 
-def build_active_fork_source(src_session, out_path, new_id, new_cwd,
-                             mode="active", keep_tokens=None):
+def build_fork_source(src_session, out_path, new_id, new_cwd,
+                             mode="budget", keep_tokens=None):
     """生成 fork 源 session 文件——供 wake_llm 首唤 `--session` 直接打开
     （不用 `pi --fork`：那是一份全量拷贝，且我们需在尾部注入切换叙事）。
 
     三种裁剪策略（header 的 forkSourceMode 标记可核查）：
-      active：最后 compaction + firstKeptEntryId 起的条目——主 session 的
-        **条目级**压缩态（无 compaction 的源全量兜底，标记 full）
+      budget：**预算 + 折叠**（默认）——恢复 pi 自身的压缩不变量（摘要 +
+        最近窗口），不依赖任何扩展。为什么需要：主 pi 实际发送的上下文
+        比文件条目小得多（压缩层不在条目里）——实测本会话原始条目
+        919k/934k tokens，加 384k completion 预留 > 1M 窗口。
+        compaction/full 都是条目级裁剪、无总量上限，对长会话不够。
+      compaction：最后 compaction + firstKeptEntryId 起的条目——主 session
+        的**条目级**压缩态，内容原样保留（thinking/工具输出不折叠）
       full：全部条目（含无 compaction 的引导 session）
-      curated：预算裁剪 + 折叠——**恢复 pi 自身的压缩不变量**
-        （摘要 + 最近窗口），不依赖任何扩展。为什么需要：主 pi 实际发送
-        的上下文比文件条目小得多（压缩层不在条目里）——实测本会话
-        原始条目 919k/934k tokens，加 384k completion 预留 > 1M 窗口。
-        active/full 都是条目级裁剪，对长会话不够。
-      curated 与 active 在**无 compaction 时**均全量（引导 session 本就
-      干净无先例）；curated 仍会跑折叠与统计。
+    budget 与 compaction 在**无 compaction 时**均全量（引导 session 本就
+    干净无先例）；budget 仍会跑折叠与统计。
 
     产物 header 自描述（P15 单一来源）：forkSourceMode /
     forkSourceTokensEst（估算基准，**不预测请求规模**）/ forkSourceDropped。
-    keep_tokens：curated 的预算（默认 CURATED_KEEP_TOKENS）。
+    keep_tokens：budget 的预算（默认 BUDGET_KEEP_TOKENS）。
     返回 (entries_written, error)。
     """
     try:
@@ -629,18 +629,18 @@ def build_active_fork_source(src_session, out_path, new_id, new_cwd,
                      if e.get("id")}
         kept_idx = idx_by_id.get(kept_id)
         if kept_idx is None:
-            if mode == "active":
+            if mode == "compaction":
                 return 0, f"firstKeptEntryId {kept_id} 不在源 session 中"
             kept_idx = comp_idx + 1         # curated 容错：边界 ID 失效
         body = entries[kept_idx:]
-        if mode == "active":
+        if mode == "compaction":
             body = [comp] + body
-    elif mode == "active":
+    elif mode == "compaction":
         # 无 compaction 的源（如引导 session）：full 分支（既有语义）
         mode = "full"
-    if mode == "curated":
-        preface, body, dropped_n = _curate_entries(
-            body, keep_tokens or CURATED_KEEP_TOKENS, summary)
+    if mode == "budget":
+        preface, body, dropped_n = _budget_entries(
+            body, keep_tokens or BUDGET_KEEP_TOKENS, summary)
         if preface:
             pid = uuid.uuid4().hex[:8]
             body = [{
@@ -663,7 +663,7 @@ def build_active_fork_source(src_session, out_path, new_id, new_cwd,
         "parentSession": src_session,
         "forkSourceMode": mode,
     }
-    if mode == "curated":
+    if mode == "budget":
         # 产物侧指纹（口径见设计文档「规模口径」）：对**最终产物**统一
         # 计算（单一测点；边界对齐后重算，P3）；不预测请求规模
         new_header["forkSourceTokensEst"] = sum(

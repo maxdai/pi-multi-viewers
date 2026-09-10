@@ -383,7 +383,7 @@ def gen_question(topic, stances, background, questions):
 
 def gen_protocol(topic, participants, max_meeting, max_rr, pure=False,
                  result_writer=None, stall_timeout=600,
-                 fork_source=None, fork_cwd=None, fork_mode="active"):
+                 fork_source=None, fork_cwd=None, fork_mode="budget"):
     """protocol.json（meeting 模式）。"""
     rw = result_writer or participants[-1]
     proto = {
@@ -401,9 +401,9 @@ def gen_protocol(topic, participants, max_meeting, max_rr, pure=False,
         proto["pure"] = True
     if fork_source:
         # fork 模式（多视角）：首唤挂载主 session + cwd=主项目
-        # forkMode: active（默认，压缩态）/ curated（预算裁剪 + 折叠，
-        # 恢复 pi 压缩不变量——长会话 fork 的可行模式）/ full（全量，
-        # 用户 2026-09-10 参数化：验证/保留上下文两种策略均一等公民）
+        # forkMode: budget（默认：预算 + 折叠，长会话唯一可行形态）/
+        # compaction（按 compaction 边界，零信息损失，中小会话）/
+        # full（全量，小会话或验证用）
         proto["forkSource"] = fork_source
         proto["forkCwd"] = fork_cwd or os.getcwd()
         proto["forkMode"] = fork_mode
@@ -734,7 +734,7 @@ def setup_environment(args, participants, base, spec_dir=None,
                                args.stall_timeout,
                                fork_source=getattr(args, "fork_source", None),
                                fork_cwd=os.getcwd(),
-                               fork_mode=getattr(args, "fork_mode", "active")),
+                               fork_mode=getattr(args, "fork_mode", "budget")),
                   f, indent=2, ensure_ascii=False)
     with open(os.path.join(wa, "question.md"), "w") as f:
         if spec_question is not None:
@@ -912,10 +912,11 @@ def main():
                         help="生成 spec 骨架到 DIR（如 --spec-gen myspec/；不需 --dir）")
     parser.add_argument("--spec", default=None,
                         help="讨论规格目录（内容源：question/background/agents，优先于 CLI 内容参数）")
-    parser.add_argument("--fork-mode", default="active",
-                        choices=["active", "full", "curated"],
-                        help="fork 裁剪策略：active=压缩态（默认，条目级）；"
-                             "full=全量；curated=预算裁剪+折叠（长会话可行）")
+    parser.add_argument("--fork-mode", default="budget",
+                        choices=["compaction", "budget", "full"],
+                        help="fork 裁剪策略：budget=预算+折叠（默认，长会话可行）；"
+                             "compaction=按 compaction 边界（中小会话零损失）；"
+                             "full=全量（小会话/验证）")
     parser.add_argument("--fork-source", default=None,
                         help="主 session 文件绝对路径（fork-only）：写入 "
                              "protocol.json，各 agent 首唤用活跃视图挂载主 "

@@ -75,7 +75,7 @@ class TestWakeLlm(unittest.TestCase):
         self.src = os.path.join(self.tmp, "main-session.jsonl")
         with open(self.src, "w") as f:
             # 含 header + compaction + firstKept 起的一条 message
-            # （活跃视图裁剪需要 compaction——无则 build 报错拒绝）
+            # （compaction 裁剪需要 compaction 条目）
             f.write('{"type":"session","id":"src","version":3}\n')
             f.write('{"type":"message","id":"old1","parentId":null,'
                     '"timestamp":"2026-09-09T00:00:00.000Z",'
@@ -261,7 +261,7 @@ class TestForkWake(unittest.TestCase):
         self.base = os.path.dirname(self.workdir)
         self.src = os.path.join(self.tmp, "main-session.jsonl")
         with open(self.src, "w") as f:
-            # 活跃视图裁剪需要 compaction（无则 build 报错拒绝）
+            # compaction 裁剪需要 compaction 条目
             f.write('{"type":"session","id":"src","version":3}\n')
             f.write('{"type":"message","id":"old1","parentId":null,'
                     '"timestamp":"2026-09-09T00:00:00.000Z",'
@@ -283,6 +283,9 @@ class TestForkWake(unittest.TestCase):
     def _run(self, proc, **kwargs):
         kwargs.setdefault("fork_source", self.src)
         kwargs.setdefault("fork_cwd", self.cwd_main)
+        # 本类测命令构造：模式显式取 compaction（默认 budget 会折叠/加 preface，
+        # 断言对象不同）——budget 路径由 test_meeting_fs 覆盖
+        kwargs.setdefault("fork_mode", "compaction")
         orig_popen = subprocess.Popen
         orig_isdir = os.path.isdir
         try:
@@ -302,7 +305,7 @@ class TestForkWake(unittest.TestCase):
             os.path.isdir = orig_isdir
 
     def test_first_wake_uses_fork_name_and_predetermined_sid(self):
-        """首唤：活跃视图 fork 源 + --session 直接打开 + --name；cwd=主项目。"""
+        """首唤：fork 源 + --session 直接打开 + --name；cwd=主项目。"""
         proc = FakeProc("ok", out='{"type":"session","id":"uuid-1"}')
         result, pm = self._run(proc)
         args, kwargs = pm.call_args
@@ -312,13 +315,13 @@ class TestForkWake(unittest.TestCase):
         active_src = cmd[cmd.index("--session") + 1]
         self.assertTrue(active_src.endswith(".jsonl"))
         self.assertIn("fork-src-", active_src)
-        # 活跃视图内容：header(新id/cwd) + compaction + firstKept 起
+        # 内容：header(新id/cwd) + compaction + firstKept 起
         with open(active_src) as f:
             fl = [json.loads(x) for x in f]
         self.assertEqual(fl[0]["type"], "session")
         self.assertEqual(fl[0]["cwd"], self.cwd_main)
         self.assertEqual(fl[1]["type"], "compaction")
-        # 活跃视图条目 + 尾部切换叙事（4 回合：user/assistant ×2）
+        # 保留条目 + 尾部切换叙事（4 回合：user/assistant ×2）
         self.assertEqual([e.get("type") for e in fl[1:3]], ["compaction", "message"])
         self.assertEqual([e.get("id") for e in fl[1:3]], ["c1", "keep1"])
         turns = fl[3:]

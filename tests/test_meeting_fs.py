@@ -16,7 +16,7 @@ from unittest import mock
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from meeting_fs import (
-    build_active_fork_source,
+    build_fork_source,
     build_bootstrap,
     preserve_result_md,
     run_git, git_head, git_pull, git_commit, git_push,
@@ -371,7 +371,7 @@ if __name__ == "__main__":
 
 
 class TestActiveForkSource(unittest.TestCase):
-    """活跃视图 fork 源（方案 b，2026-09-09）：compaction 裁剪 + header 重写。"""
+    """fork 源生成（compaction 边界裁剪 + header 重写）。"""
 
     def _make_src(self, tmp, with_compaction=True):
         src = os.path.join(tmp, "src.jsonl")
@@ -389,17 +389,18 @@ class TestActiveForkSource(unittest.TestCase):
                         '"message":{"role":"assistant","content":"新"}}\n')
         return src
 
-    def test_active_view(self):
+    def test_compaction_view(self):
         with tempfile.TemporaryDirectory() as tmp:
             src = self._make_src(tmp)
             out = os.path.join(tmp, "sub", "fork-src.jsonl")
-            n, err = build_active_fork_source(src, out, "uuid-x", "/proj")
+            n, err = build_fork_source(src, out, "uuid-x", "/proj",
+                                       mode="compaction")
             self.assertIsNone(err)
             lines = [json.loads(x) for x in open(out)]
             self.assertEqual(len(lines), 3)  # header + compaction + kept
             self.assertEqual(lines[0]["id"], "uuid-x")
             self.assertEqual(lines[0]["cwd"], "/proj")
-            self.assertEqual(lines[0]["forkSourceMode"], "active")  # 可核查标记
+            self.assertEqual(lines[0]["forkSourceMode"], "compaction")  # 可核查标记
             self.assertEqual(lines[1]["type"], "compaction")
             self.assertEqual(lines[2]["id"], "k1")  # 旧历史 m1 被裁掉
 
@@ -408,7 +409,8 @@ class TestActiveForkSource(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             src = self._make_src(tmp, with_compaction=False)
             out = os.path.join(tmp, "out.jsonl")
-            n, err = build_active_fork_source(src, out, "u", "/p")
+            n, err = build_fork_source(src, out, "u", "/p",
+                                       mode="compaction")
             self.assertIsNone(err)
             lines = [json.loads(x) for x in open(out)]
             self.assertEqual(len(lines), 2)  # header + 全量 1 条
@@ -421,7 +423,7 @@ class TestActiveForkSource(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             src = self._make_src(tmp)  # 含 compaction + keep1
             out = os.path.join(tmp, "full.jsonl")
-            n, err = build_active_fork_source(src, out, "u", "/p",
+            n, err = build_fork_source(src, out, "u", "/p",
                                               mode="full")
             self.assertIsNone(err)
             lines = [json.loads(x) for x in open(out)]
@@ -429,8 +431,8 @@ class TestActiveForkSource(unittest.TestCase):
             self.assertEqual(lines[0]["forkSourceMode"], "full")
             self.assertEqual(lines[1]["id"], "m1")  # 旧历史保留
 
-    def test_curated_budget_trim(self):
-        """curated：预算裁剪——只保留最近窗口，旧条目丢弃并生成上下文说明。
+    def test_budget_trim(self):
+        """budget：预算裁剪——只保留最近窗口，旧条目丢弃并生成上下文说明。
 
         对齐 pi 自身 compaction 的不变量（摘要 + 最近窗口）——长会话 fork
         唯一可行形态（原始条目会超模型窗口，实测 2026-09-10）。
@@ -453,11 +455,11 @@ class TestActiveForkSource(unittest.TestCase):
                     "summary": "早期摘要", "firstKeptEntryId": "m0"},
                     ensure_ascii=False) + "\n")
             out = os.path.join(tmp, "curated.jsonl")
-            n, err = build_active_fork_source(src, out, "u", "/p",
-                                              mode="curated", keep_tokens=10000)
+            n, err = build_fork_source(src, out, "u", "/p",
+                                              mode="budget", keep_tokens=10000)
             self.assertIsNone(err)
             lines = [json.loads(x) for x in open(out)]
-            self.assertEqual(lines[0]["forkSourceMode"], "curated")
+            self.assertEqual(lines[0]["forkSourceMode"], "budget")
             self.assertLessEqual(lines[0]["forkSourceTokensEst"], 10000)
             kept = [e for e in lines[1:] if e.get("type") == "message"]
             self.assertLess(len(kept), 11)              # 确实裁掉了旧条目
@@ -469,8 +471,8 @@ class TestActiveForkSource(unittest.TestCase):
             # P4：保留区首条 parentId 接回 preface（一条链）
             self.assertEqual(kept[1]["parentId"], kept[0]["id"])
 
-    def test_curated_folds_thinking_and_tool_results(self):
-        """curated 折叠：thinking 丢弃、旧工具输出换省略标记、保留当次输出。"""
+    def test_budget_folds_thinking_and_tool_results(self):
+        """budget 折叠：thinking 丢弃、旧工具输出换省略标记、保留当次输出。"""
         with tempfile.TemporaryDirectory() as tmp:
             src = os.path.join(tmp, "s.jsonl")
             with open(src, "w", encoding="utf-8") as f:
@@ -491,8 +493,8 @@ class TestActiveForkSource(unittest.TestCase):
                                                  "text": f"输出{i}"}]}},
                         ensure_ascii=False) + "\n")
             out = os.path.join(tmp, "c.jsonl")
-            _, err = build_active_fork_source(src, out, "u", "/p",
-                                              mode="curated")
+            _, err = build_fork_source(src, out, "u", "/p",
+                                              mode="budget")
             self.assertIsNone(err)
             msgs = [json.loads(x) for x in open(out)][1:]
             asst = next(e for e in msgs if e["id"] == "a1")
@@ -510,7 +512,7 @@ class TestActiveForkSource(unittest.TestCase):
             self.assertTrue(elided and full)          # 旧的省略、近的保留
             self.assertEqual(full[-1]["id"], "r19")   # 最新一条保留
 
-    def test_curated_cut_avoids_orphan_tool_result(self):
+    def test_budget_cut_avoids_orphan_tool_result(self):
         """边界对齐：保留区不得以 toolResult 开头（其 toolCall 已裁掉 →
         provider 报 "role 'tool' must be a response to ..."，e2e 实测）。"""
         with tempfile.TemporaryDirectory() as tmp:
@@ -539,8 +541,8 @@ class TestActiveForkSource(unittest.TestCase):
                     ensure_ascii=False) + "\n")
             out = os.path.join(tmp, "o.jsonl")
             # 预算小到只能容纳尾部（toolCall/toolResult 对）
-            _, err = build_active_fork_source(src, out, "u", "/p",
-                                              mode="curated", keep_tokens=10)
+            _, err = build_fork_source(src, out, "u", "/p",
+                                              mode="budget", keep_tokens=10)
             self.assertIsNone(err)
             msgs = [json.loads(x) for x in open(out, encoding="utf-8")][1:]
             msgs = [e for e in msgs if e.get("type") == "message"]
@@ -559,20 +561,20 @@ class TestActiveForkSource(unittest.TestCase):
                 if m.get("role") == "toolResult":
                     self.assertIn(m.get("toolCallId"), calls)   # 无孤儿
 
-    def test_curated_bootstrap_no_compaction(self):
-        """curated 遇无 compaction 的源（引导 session）：不崩、可用。"""
+    def test_budget_bootstrap_no_compaction(self):
+        """budget 遇无 compaction 的源（引导 session）：不崩、可用。"""
         with tempfile.TemporaryDirectory() as tmp:
             src = self._make_src(tmp, with_compaction=False)
             out = os.path.join(tmp, "o.jsonl")
-            n, err = build_active_fork_source(src, out, "u", "/p",
-                                              mode="curated")
+            n, err = build_fork_source(src, out, "u", "/p",
+                                              mode="budget")
             self.assertIsNone(err)
             lines = [json.loads(x) for x in open(out)]
-            self.assertEqual(lines[0]["forkSourceMode"], "curated")
+            self.assertEqual(lines[0]["forkSourceMode"], "budget")
 
     def test_bad_source(self):
         with tempfile.TemporaryDirectory() as tmp:
-            n, err = build_active_fork_source(
+            n, err = build_fork_source(
                 os.path.join(tmp, "nope.jsonl"),
                 os.path.join(tmp, "out.jsonl"), "u", "/p")
             self.assertEqual(n, 0)
