@@ -174,6 +174,34 @@ class TestMeetingLoopMain(unittest.TestCase):
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
+    def test_invalid_fork_mode_exits_nonzero(self):
+        """loop 门（P0，e2e10 评审）：protocol.json 的 forkMode 非法 →
+        [fatal] + 退出码非零（配置错误不进 engine 重试路径），且不生成
+        fork 源。历史值（rename 前的 curated）同样被拦。"""
+        tmp, base, w = self._make_done_env()
+        try:
+            proto_path = os.path.join(w, "protocol.json")
+            with open(proto_path) as f:
+                proto = json.load(f)
+            proto["forkMode"] = "curated"       # rename 前的历史值
+            with open(proto_path, "w") as f:
+                json.dump(proto, f)
+            r = subprocess.run(
+                [sys.executable, "meeting_loop.py", w, "b"],
+                cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                capture_output=True, text=True, timeout=60)
+            self.assertNotEqual(r.returncode, 0)
+            out = r.stdout + r.stderr
+            self.assertIn("[fatal]", out)
+            self.assertIn("forkMode", out)
+            # 未生成 fork 源（值域门在 open 之前）
+            sessions_dir = os.path.join(base, "pi-sessions")
+            self.assertFalse(os.path.isdir(sessions_dir) and
+                             [f for f in os.listdir(sessions_dir)
+                              if f.startswith("fork-src-")])
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
     def test_non_rw_loop_no_preserve(self):
         """非 rw 的 loop：concluded 退出，不保存 result.md。"""
         tmp, base, w = self._make_done_env()

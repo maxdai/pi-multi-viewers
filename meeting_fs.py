@@ -379,12 +379,22 @@ def parse_log_nameonly(output):
 # fork 源生成与裁剪（session 文件层）
 # ---------------------------------------------------------------
 #
-# curated 模式参数（fork 源裁剪，2026-09-10）
+# budget 模式参数（fork 源裁剪）
 #
-# 为什么需要 curated：fork 复制的是**原始条目**，而主 pi 实际发送的上下文
-# 是**被压缩过的**（压缩层不在条目里）——长会话的原始条目远超模型
-# 窗口（实测：本会话 919k/934k tokens + 384k completion 预留 > 1M 窗口）。
-# curated = 恢复 pi 自身的压缩不变量（摘要 + 最近窗口），不依赖任何扩展。
+# fork 源模式（**值集合与默认值的单一事实源**）：
+#   budget     —— 预算 + 折叠（默认；长会话唯一可行）
+#   compaction —— 按 compaction 边界（中小会话，内容原样）
+#   full       —— 全量（小会话/验证）
+# 两种语义角色（勿混）：FORK_MODES 是**处理哪个模式**（分派仍用字面量）；
+# DEFAULT_FORK_MODE 是**缺省填谁**（仅默认值位置，全仓引此常量）。
+# 历史值 active/curated（rename 前）按非法值处理（解析入口即报错）。
+FORK_MODES = ("budget", "compaction", "full")
+DEFAULT_FORK_MODE = "budget"
+#
+# 版本守卫（P0，e2e10 评审）：值域校验在 build_fork_source 入口
+# （open 之前）做——非法/历史值（rename 前的 active/curated）一律报错，
+# 绝不静默落到"混合分支"（实测：非法值走"边界后全量、不折叠、无预算"
+# → 930k tokens 超窗，且被 engine 异常边界吞成廉价重试）。
 #
 # 预算取值（口径见设计文档「规模口径」节）：
 # - 现行重估公式（**事后归纳，非原始设计目标**）：基线 ≤ 约 20%×
@@ -403,8 +413,8 @@ _TOOL_CALL_MAX_CHARS = 1200    # 工具调用参数上限
 def read_fork_stats(path):
     """读 fork 源 header 的统计字段（P15）。
 
-    日志所需的 mode/条数/估算/丢弃数取自**同一来源**（产物自描述
-    header）——header 格式知识只留本模块，调用方不内联解析。
+    日志所需的 mode/估算/丢弃数取自**同一来源**（产物自描述 header）
+    ——header 格式知识只留本模块，调用方不内联解析（条数由构建返回值提供）。
     读失败返回 {}（调用方降级为只打模式/条数，不阻塞首唤）。
     """
     try:
@@ -416,7 +426,6 @@ def read_fork_stats(path):
         return {}
     return {
         "mode": hdr.get("forkSourceMode") or "",
-        "entries": None,
         "est": hdr.get("forkSourceTokensEst"),
         "dropped": hdr.get("forkSourceDropped"),
     }
@@ -584,13 +593,14 @@ def _budget_entries(entries, keep_tokens, summary=""):
 
 
 def build_fork_source(src_session, out_path, new_id, new_cwd,
-                             mode="budget", keep_tokens=None):
+                      mode=DEFAULT_FORK_MODE, keep_tokens=None):
     """生成 fork 源 session 文件——供 wake_llm 首唤 `--session` 直接打开
     （不用 `pi --fork`：那是一份全量拷贝，且我们需在尾部注入切换叙事）。
 
     三种裁剪策略（header 的 forkSourceMode 标记可核查）：
       budget：**预算 + 折叠**（默认）——恢复 pi 自身的压缩不变量（摘要 +
-        最近窗口），不依赖任何扩展。为什么需要：主 pi 实际发送的上下文
+        最近窗口）；**构建期**不依赖任何扩展（运行期上下文仍受环境扩展
+        的渲染期裁剪影响）。为什么需要：主 pi 实际发送的上下文
         比文件条目小得多（压缩层不在条目里）——实测本会话原始条目
         919k/934k tokens，加 384k completion 预留 > 1M 窗口。
         compaction/full 都是条目级裁剪、无总量上限，对长会话不够。
@@ -605,6 +615,9 @@ def build_fork_source(src_session, out_path, new_id, new_cwd,
     keep_tokens：budget 的预算（默认 BUDGET_KEEP_TOKENS）。
     返回 (entries_written, error)。
     """
+    if mode not in FORK_MODES:
+        # 配置错误就地暴露（不落盘、不生成半成品）——见常量块"版本守卫"
+        return 0, f"未知 forkMode: {mode!r}（合法值: {'/'.join(FORK_MODES)}）"
     try:
         with open(src_session, encoding="utf-8") as f:
             entries = [json.loads(l) for l in f if l.strip()]
@@ -620,7 +633,7 @@ def build_fork_source(src_session, out_path, new_id, new_cwd,
     new_ts = header.get("timestamp")
     body = entries[1:]                     # full / 无 compaction：全量
     if mode != "full" and comps:
-        # active / curated 共用压缩态边界（最后 compaction 的 firstKeptEntryId）
+        # compaction / budget 共用压缩态边界（最后 compaction 的 firstKeptEntryId）
         comp_idx, comp = comps[-1]
         summary = comp.get("summary") or ""
         new_ts = comp.get("timestamp") or new_ts
@@ -631,14 +644,14 @@ def build_fork_source(src_session, out_path, new_id, new_cwd,
         if kept_idx is None:
             if mode == "compaction":
                 return 0, f"firstKeptEntryId {kept_id} 不在源 session 中"
-            kept_idx = comp_idx + 1         # curated 容错：边界 ID 失效
+            kept_idx = comp_idx + 1         # budget 容错：边界 ID 失效
         body = entries[kept_idx:]
-        if mode == "compaction":
+        if mode == "compaction":      # 分派用字面量（非默认值语义，勿换常量）
             body = [comp] + body
     elif mode == "compaction":
         # 无 compaction 的源（如引导 session）：full 分支（既有语义）
         mode = "full"
-    if mode == "budget":
+    if mode == "budget":              # 分派用字面量（非默认值语义，勿换常量）
         preface, body, dropped_n = _budget_entries(
             body, keep_tokens or BUDGET_KEEP_TOKENS, summary)
         if preface:
@@ -651,7 +664,7 @@ def build_fork_source(src_session, out_path, new_id, new_cwd,
                             "content": [{"type": "text", "text": preface}]},
             }] + body
             # 保留区首条接回 preface（P4）：不置 None——保持"一条链"
-            # 单一心智模型（curated 不保证原始链完整，docstring 已声明）
+            # 单一心智模型（budget 不保证原始链完整——见本函数 docstring）
             if len(body) > 1:
                 body[1] = dict(body[1], parentId=pid)
     new_header = {
@@ -686,7 +699,6 @@ SESSION_REGISTRY = os.path.join(
 
 def _registry_log(session_id, out_path, cwd):
     """登记一条测试引导 session 记录（追加）。"""
-    from datetime import datetime, timezone
     rec = {
         "created": datetime.now(timezone.utc).isoformat(),
         "session_id": session_id,
@@ -712,8 +724,6 @@ def build_bootstrap(out_path, cwd, session_id=None):
 
     返回 (out_path, error)。
     """
-    import uuid
-    from datetime import datetime, timezone
     sid = session_id or str(uuid.uuid4())
     ts = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     header = {"type": "session", "version": 3, "id": sid,

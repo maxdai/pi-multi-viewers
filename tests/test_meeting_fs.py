@@ -454,7 +454,7 @@ class TestActiveForkSource(unittest.TestCase):
                     "timestamp": "2026-09-10T00:01:00.000Z",
                     "summary": "早期摘要", "firstKeptEntryId": "m0"},
                     ensure_ascii=False) + "\n")
-            out = os.path.join(tmp, "curated.jsonl")
+            out = os.path.join(tmp, "budget.jsonl")
             n, err = build_fork_source(src, out, "u", "/p",
                                               mode="budget", keep_tokens=10000)
             self.assertIsNone(err)
@@ -571,6 +571,20 @@ class TestActiveForkSource(unittest.TestCase):
             self.assertIsNone(err)
             lines = [json.loads(x) for x in open(out)]
             self.assertEqual(lines[0]["forkSourceMode"], "budget")
+
+    def test_invalid_mode_rejected(self):
+        """值域守卫（P0，e2e10 评审）：非法/历史 forkMode 就地报错、
+        不生成产物（非法值曾静默落到"边界后全量、不折叠、无预算"分支
+        → 930k tokens 超窗，且被 engine 异常边界吞成廉价重试）。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            src = self._make_src(tmp)
+            out = os.path.join(tmp, "o.jsonl")
+            for bad in ("bogus", "curated", "active", ""):
+                n, err = build_fork_source(src, out, "u", "/p", mode=bad)
+                self.assertEqual(n, 0)
+                self.assertIn("未知 forkMode", err)
+                self.assertIn("budget", err)      # 错误文本枚举合法值
+                self.assertFalse(os.path.exists(out))   # 无半成品
 
     def test_bad_source(self):
         with tempfile.TemporaryDirectory() as tmp:

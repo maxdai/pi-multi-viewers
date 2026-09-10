@@ -262,8 +262,8 @@ def _prepare_fork_session(workdir, agent, sid, fork_source, fork_cwd,
 
 
 def _build_wake_cmd(workdir, agent, sid, cfg, fork_source, fork_cwd,
-                    session_dir, first_wake, pure, prompt, fork_mode="budget",
-                    topic=""):
+                    session_dir, first_wake, pure, prompt,
+                    fork_mode=meeting_fs.DEFAULT_FORK_MODE, topic=""):
     """组装唤醒命令（#3 拆分，e2e7 评审）：返回 (cmd, spawn_cwd)。
 
     首唤：fork 源生成（_prepare_fork_session，fork_mode=compaction|budget|
@@ -351,9 +351,9 @@ def _run_wake_proc(cmd, spawn_cwd, workdir, agent):
 
 
 def wake_llm(workdir, agent, prompt, pure=False, fork_source=None, fork_cwd=None,
-             fork_mode="budget", topic=""):
-    """唤醒 pi（fork-only：首唤 --session 活跃视图，后续 --session-id
-    续接）。返回 (sessionID, returncode)。
+             fork_mode=meeting_fs.DEFAULT_FORK_MODE, topic=""):
+    """唤醒 pi（fork-only：首唤由本地生成 fork 源 + `--session` 打开，
+    后续 `--session-id` 续接）。返回 (sessionID, returncode)。
 
     每次唤醒记录完整命令行 + prompt 到 wake-logs/（排错第一手段）。
     命令组装与进程等待拆为 _build_wake_cmd / _run_wake_proc（#3 拆分，
@@ -429,8 +429,8 @@ def _read_perspective_brief(workdir, agent):
     return brief or None
 
 
-def make_responder(pure, fork_source=None, fork_cwd=None, fork_mode="budget",
-                   topic=""):
+def make_responder(pure, fork_source=None, fork_cwd=None,
+                   fork_mode=meeting_fs.DEFAULT_FORK_MODE, topic=""):
     """构造真实 LLM responder：唤醒 pi，LLM 写内容文件。
 
     LLM 只提供内容（写消息文件），流程（补全字段/commit/push）
@@ -514,6 +514,14 @@ if __name__ == "__main__":
         st = proto["stallTimeoutSeconds"]
     # （CLI 配额覆盖通道已删——L5：协议是配额唯一事实源，生产无调用方；
     # docstring 用法行同步删除）
+    fork_mode_cfg = proto.get("forkMode") or meeting_fs.DEFAULT_FORK_MODE
+    if fork_mode_cfg not in meeting_fs.FORK_MODES:
+        # 配置错误不是运行期故障（不进 engine 重试路径）——照 forkSource 先例
+        print(f"[fatal] protocol.json 的 forkMode 非法: {fork_mode_cfg!r}"
+              f"（合法值: {'/'.join(meeting_fs.FORK_MODES)}）——若来自旧版本"
+              f"产物（rename 前的 active/curated），请清理分析目录后重跑",
+              flush=True)
+        sys.exit(1)
     fork_source = proto.get("forkSource") or ""
     if not fork_source:
         print("[fatal] protocol.json 缺 forkSource——多视角模式必须在主 pi "
@@ -525,7 +533,7 @@ if __name__ == "__main__":
                    make_responder(pure,
                                   fork_source=fork_source,
                                   fork_cwd=proto.get("forkCwd") or "",
-                                  fork_mode=proto.get("forkMode") or "budget",
+                                  fork_mode=fork_mode_cfg,
                                   topic=proto.get("topic") or ""),
                    max_meeting=mm, max_rr=mr, stall_timeout=st)
     except KeyboardInterrupt:

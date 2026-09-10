@@ -65,6 +65,21 @@ class TestPrepare(unittest.TestCase):
             self.assertIn("human", r.stderr + r.stdout)
             self.assertIn("保留名", r.stderr + r.stdout)
 
+    def test_start_forwards_fork_mode(self):
+        """P0（e2e10 评审）：--start 的余参必须转发给 python——此前 wrapper
+        静默丢弃（README 教的操作实际无效）。用非法值验证转发（argparse
+        早失败是 python 侧行为，wrapper 不解析值）。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            spec = os.path.join(tmp, "mv-spec-x")
+            os.makedirs(spec)
+            with open(os.path.join(spec, "question.md"), "w") as f:
+                f.write("# 分析主题：T\n")
+            r = run_wrapper(["--start", spec, "--fork-mode", "bogus"], cwd=tmp)
+            self.assertNotEqual(r.returncode, 0)
+            out = r.stdout + r.stderr
+            self.assertIn("--fork-mode", out)      # 参数确实到达 python
+            self.assertIn("invalid choice", out)   # python 侧早失败
+
     def test_prepare_no_topic(self):
         r = run_wrapper(["--prepare"])
         self.assertNotEqual(r.returncode, 0)

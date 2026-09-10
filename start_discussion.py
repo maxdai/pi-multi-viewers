@@ -383,7 +383,8 @@ def gen_question(topic, stances, background, questions):
 
 def gen_protocol(topic, participants, max_meeting, max_rr, pure=False,
                  result_writer=None, stall_timeout=600,
-                 fork_source=None, fork_cwd=None, fork_mode="budget"):
+                 fork_source=None, fork_cwd=None,
+                 fork_mode=meeting_fs.DEFAULT_FORK_MODE):
     """protocol.json（meeting 模式）。"""
     rw = result_writer or participants[-1]
     proto = {
@@ -401,9 +402,8 @@ def gen_protocol(topic, participants, max_meeting, max_rr, pure=False,
         proto["pure"] = True
     if fork_source:
         # fork 模式（多视角）：首唤挂载主 session + cwd=主项目
-        # forkMode: budget（默认：预算 + 折叠，长会话唯一可行形态）/
-        # compaction（按 compaction 边界，零信息损失，中小会话）/
-        # full（全量，小会话或验证用）
+        # forkMode 取值域与默认值的定义在 meeting_fs（FORK_MODES /
+        # DEFAULT_FORK_MODE，单一事实源）；此处只写入选定值
         proto["forkSource"] = fork_source
         proto["forkCwd"] = fork_cwd or os.getcwd()
         proto["forkMode"] = fork_mode
@@ -734,7 +734,7 @@ def setup_environment(args, participants, base, spec_dir=None,
                                args.stall_timeout,
                                fork_source=getattr(args, "fork_source", None),
                                fork_cwd=os.getcwd(),
-                               fork_mode=getattr(args, "fork_mode", "budget")),
+                               fork_mode=getattr(args, "fork_mode", meeting_fs.DEFAULT_FORK_MODE)),
                   f, indent=2, ensure_ascii=False)
     with open(os.path.join(wa, "question.md"), "w") as f:
         if spec_question is not None:
@@ -912,15 +912,15 @@ def main():
                         help="生成 spec 骨架到 DIR（如 --spec-gen myspec/；不需 --dir）")
     parser.add_argument("--spec", default=None,
                         help="讨论规格目录（内容源：question/background/agents，优先于 CLI 内容参数）")
-    parser.add_argument("--fork-mode", default="budget",
-                        choices=["compaction", "budget", "full"],
+    parser.add_argument("--fork-mode", default=meeting_fs.DEFAULT_FORK_MODE,
+                        choices=list(meeting_fs.FORK_MODES),
                         help="fork 裁剪策略：budget=预算+折叠（默认，长会话可行）；"
                              "compaction=按 compaction 边界（中小会话零损失）；"
                              "full=全量（小会话/验证）")
     parser.add_argument("--fork-source", default=None,
                         help="主 session 文件绝对路径（fork-only）：写入 "
-                             "protocol.json，各 agent 首唤用活跃视图挂载主 "
-                             "上下文；metadata 不传 = 从主 pi 环境自动解析"
+                             "protocol.json，各 agent 首唤由本地生成 fork "
+                             "源挂载主上下文；不传 = 从主 pi 环境自动解析"
                              "（PI_SESSION_ID；解析失败明确报错）")
     parser.add_argument("--pure", action="store_true", help="--pure 模式（禁外部插件）")
     parser.add_argument("--start", action="store_true", help="创建后启动讨论")
@@ -1003,6 +1003,14 @@ def main():
                 return 1
             if state == "not-exists":
                 print(f"[wait] 讨论不存在: {base}")
+                return 1
+            if state == "stopped":
+                # 终态（e2e10 评审）：无 result.md 且无 loop 存活——此前落入
+                # 10s 轮询无上界（与"loop 死后观察者不收敛"同族）。两种成因：
+                # 尚未启动，或启动后崩溃/被中断。
+                print("[wait] 讨论未在运行（无 result.md、无 loop 存活）——"
+                      "成因：尚未 --start，或启动后崩溃/被中断；"
+                      "查 status-*.json 与 loop-*.log，必要时 --cleanup")
                 return 1
             _mode, lines, head, done = human_viewer.incremental(
                 bare, agents, since)
@@ -1117,7 +1125,8 @@ def main():
                 procs.append(subprocess.Popen(cmd, stdout=f,
                                               stderr=subprocess.STDOUT,
                                               start_new_session=True))
-        print(f"[start] 已启动 {len(procs)} 个 meeting loop 进程（log: {base}/loop-*.log）")
+        print(f"[start] 已拉起 {len(procs)} 个进程"
+              f"（存活未校验；loop 状态见 status-*.json 与 {base}/loop-*.log）")
 
 
 if __name__ == "__main__":

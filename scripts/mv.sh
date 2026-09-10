@@ -4,7 +4,7 @@
 #
 # 用法：
 #   ./scripts/mv.sh --prepare "<主题>" [--agents "a,b,c"|4]
-#   ./scripts/mv.sh --start <spec目录>
+#   ./scripts/mv.sh --start <spec目录>   # 可选 --fork-mode compaction|budget|full
 #   ./scripts/mv.sh --status <dir>
 #   ./scripts/mv.sh --wait <dir>
 #   ./scripts/mv.sh --cleanup <dir>
@@ -24,7 +24,7 @@ usage() {
     cat <<'USAGE_EOF'
 用法:
   $0 --prepare "<问题>" [--background "<背景>"] [--agents "a,b,c"|4]
-  $0 --start <spec目录>
+  $0 --start <spec目录> [--fork-mode compaction|budget|full]
   $0 --status <dir>
   $0 --wait <dir>
   $0 --cleanup <dir>
@@ -233,6 +233,7 @@ OUTPUT_EOF
 cmd_start() {
     check_aft_bash
     local spec_dir="$1"
+    shift                      # 余参 = 透传给 python 的选项（如 --fork-mode X）
     require_dir "$spec_dir"
     [ -f "$spec_dir/question.md" ] || fail "spec 缺少 question.md: $spec_dir"
 
@@ -252,7 +253,9 @@ cmd_start() {
     # 配额（max-meeting/max-rr）是环境属性：唯一默认在 python argparse
     # （10/7），创建时固化 protocol.json——wrapper 不传（W1 双源分叉修复：
     # 此前 wrapper 5 与 python 7 不一致，两条入口 RR 上限差 40%）
-    if ! "$PYTHON" "$START_DISCUSSION" --dir "$dir_path" --spec "$spec_dir"; then
+    # 余参哑转发（P0，e2e10 评审：wrapper 不得静默丢弃参数——值识别/默认值
+    # 的唯一家在 python；本层只转发）
+    if ! "$PYTHON" "$START_DISCUSSION" --dir "$dir_path" --spec "$spec_dir" "$@"; then
         fail "环境创建失败，请查看上方输出"
     fi
 
@@ -294,7 +297,8 @@ if [ "$#" -ge 1 ]; then
             ;;
         --start)
             [ "$#" -ge 2 ] || fail "--start 需要 spec 目录参数"
-            cmd_start "$2"
+            shift
+            cmd_start "$@"
             exit $?
             ;;
         --status)
