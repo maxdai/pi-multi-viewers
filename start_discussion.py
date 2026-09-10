@@ -54,11 +54,33 @@ def _spec_read(spec_dir, rel):
     return "\n".join(lines[1:]).strip("\n")
 
 
+def _join_model_ref(provider, model_id):
+    """按 pi 契约把 (provider, model_id) 拼成完整 model ref。
+
+    契约（pi 源码 resolveSpawnContext）：PI_PROVIDER=provider、
+    PI_MODEL=model id；session 的 model_change 同样分 provider/modelId
+    两字段。**model id 本身可含 '/'**（聚合类 provider 的命名空间 id，
+    如 commandcode-goat 的 "deepseek/deepseek-v4-flash"）——因此不得按
+    "是否含斜杠"猜测（形状启发式会把 provider 丢掉，解析到同名的另一个
+    provider，静默失真；2026-09-10 实测 fix）。
+
+    幂等：id 已带该 provider 前缀时原样返回（兼容 PI_MODEL 已是完整
+    ref 的形态）；provider 缺失时只能原样返回。
+    """
+    provider = (provider or "").strip()
+    model_id = (model_id or "").strip()
+    if not model_id:
+        return ""
+    if not provider or model_id.lower().startswith(provider.lower() + "/"):
+        return model_id
+    return f"{provider}/{model_id}"
+
+
 def _default_model():
     """本机默认模型（如 opencode-go/deepseek-v4-flash）。
 
-    从 pi settings.json 读取 defaultProvider/defaultModel 拼接为
-    provider/model。若 defaultModel 已含 '/' 则直接使用。
+    从 pi settings.json 读取 defaultProvider/defaultModel，按契约拼接
+    （_join_model_ref——defaultModel 同样可能是含 '/' 的 id）。
     无默认模型配置 → 返回 None（pi-agent.json 不写 model，回退 pi 默认）。
     获取失败（pi 不可用/无 settings）→ 返回 None。
     """
@@ -69,11 +91,7 @@ def _default_model():
         model = cfg.get("defaultModel") or ""
         if not model:
             return None
-        if "/" in model:
-            return model
-        if provider:
-            return f"{provider}/{model}"
-        return model
+        return _join_model_ref(provider, model) or None
     except (OSError, ValueError):
         return None
 
@@ -89,8 +107,8 @@ def _detect_pi_model_thinking():
     model = os.environ.get("PI_MODEL") or ""
     provider = os.environ.get("PI_PROVIDER") or ""
     thinking = os.environ.get("PI_REASONING_LEVEL") or ""
-    if model and "/" not in model and provider:
-        model = f"{provider}/{model}"
+    # 契约拼接（不按形状猜——id 可含 '/'，见 _join_model_ref）
+    model = _join_model_ref(provider, model)
     if model and thinking:
         return model, thinking
     # session 文件兜底
@@ -103,7 +121,7 @@ def _detect_pi_model_thinking():
             ) if os.path.isdir(sd) else []
             sf = os.path.join(sd, cands[-1]) if cands else ""
         if sf and os.path.isfile(sf):
-            sm = st = ""
+            sm = st = sp = ""
             with open(sf, encoding="utf-8") as f:
                 for line in f:
                     line = line.strip()
@@ -116,10 +134,12 @@ def _detect_pi_model_thinking():
                     t = ev.get("type")
                     if t == "model_change":
                         sm = ev.get("modelId") or sm
+                        sp = ev.get("provider") or sp
                     elif t == "thinking_level_change":
                         st = ev.get("thinkingLevel") or st
             if not model and sm:
-                model = sm
+                # model_change 是 provider + modelId 两字段——同样按契约拼接
+                model = _join_model_ref(sp, sm)
             if not thinking and st:
                 thinking = st
     except OSError:

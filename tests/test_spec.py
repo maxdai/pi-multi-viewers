@@ -273,6 +273,74 @@ class TestSpecModels(unittest.TestCase):
             with mock.patch.object(sd, "PI_AGENT_DIR", d):
                 self.assertIsNone(sd._default_model())
 
+    # ---- _join_model_ref：契约拼接（不按值形状猜，2026-09-10） ----
+
+    def test_join_model_ref_matrix(self):
+        """三态矩阵：纯 id / 含斜杠 id（聚合 provider 命名空间）/ 已带前缀。
+
+        含斜杠 id 是真实形态（commandcode-goat 的 model id 即
+        'deepseek/deepseek-v4-flash'）——旧实现按 "是否含 '/'" 猜完整
+        ref，把 provider 丢掉 → 静默解析到同名的另一个 provider。
+        """
+        import start_discussion as sd
+        cases = [
+            # (provider, model_id, 期望)
+            ("opencode-go", "deepseek-v4-flash",
+             "opencode-go/deepseek-v4-flash"),          # 纯 id → 补前缀
+            ("commandcode-goat", "deepseek/deepseek-v4-flash",
+             "commandcode-goat/deepseek/deepseek-v4-flash"),  # 含斜杠 id
+            ("commandcode-goat", "commandcode-goat/deepseek/x",
+             "commandcode-goat/deepseek/x"),             # 已带前缀 → 幂等
+            ("", "deepseek-v4-flash", "deepseek-v4-flash"),   # 无 provider
+            ("p", "", ""),                                     # 无 id
+        ]
+        for provider, model_id, want in cases:
+            with self.subTest(provider=provider, model_id=model_id):
+                self.assertEqual(sd._join_model_ref(provider, model_id), want)
+
+    def test_default_model_slash_id(self):
+        # settings 的 defaultModel 本身含 '/'（命名空间 id）→ 仍按契约补 provider
+        import start_discussion as sd
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as d:
+            with open(os.path.join(d, "settings.json"), "w") as f:
+                json.dump({"defaultProvider": "commandcode-goat",
+                           "defaultModel": "deepseek/deepseek-v4-flash"}, f)
+            with mock.patch.object(sd, "PI_AGENT_DIR", d):
+                self.assertEqual(
+                    sd._default_model(),
+                    "commandcode-goat/deepseek/deepseek-v4-flash")
+
+    def test_detect_env_slash_model_id(self):
+        # env 分支：PI_MODEL 是含 '/' 的 id → provider 不被丢弃
+        import start_discussion as sd
+        env = {"PI_MODEL": "deepseek/deepseek-v4-flash",
+               "PI_PROVIDER": "commandcode-goat",
+               "PI_REASONING_LEVEL": "max"}
+        with mock.patch.dict(os.environ, env):
+            self.assertEqual(
+                sd._detect_pi_model_thinking(),
+                ("commandcode-goat/deepseek/deepseek-v4-flash", "max"))
+
+    def test_detect_session_file_joins_provider(self):
+        # session 兜底分支：model_change 是 provider + modelId 两字段 → 拼接
+        import start_discussion as sd
+        with tempfile.TemporaryDirectory() as d:
+            sf = os.path.join(d, "s.jsonl")
+            with open(sf, "w") as f:
+                f.write(json.dumps({"type": "model_change",
+                                    "provider": "commandcode-goat",
+                                    "modelId": "deepseek/deepseek-v4-flash"}) + "\n")
+                f.write(json.dumps({"type": "thinking_level_change",
+                                    "thinkingLevel": "low"}) + "\n")
+            env = {k: v for k, v in os.environ.items()
+                   if k not in ("PI_PROVIDER", "PI_MODEL", "PI_REASONING_LEVEL")}
+            env["PI_SESSION_FILE"] = sf
+            with mock.patch.dict(os.environ, env, clear=True):
+                self.assertEqual(
+                    sd._detect_pi_model_thinking(),
+                    ("commandcode-goat/deepseek/deepseek-v4-flash", "low"))
+
 
 class TestResolveSpec(unittest.TestCase):
     """_resolve_spec：互斥校验 / spec 目录 / participants 推断 / question.md 必填（审核#5）。"""

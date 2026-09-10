@@ -96,3 +96,16 @@ concurrency 等测试装置 finally 用 `sys.exc_info()[0] is not None` 检测
 return（会吞正在传播的异常 → 假通过）。实测不可靠方案：`_outcome`
 `.result.errors`（finally 时未填充，时序在测试方法之后）、addCleanup
 检测（共享 result 下跨测试累积误判）——不要再用。
+
+### 10. 外部契约按字段拼接，不按值形状猜（2026-09-10）
+
+消费外部接口（env 变量/配置文件/session 事件）时，按其**定义字段**
+取值拼接，不得按值的形状（含不含某字符）猜语义。反例：pi 契约是
+`PI_PROVIDER`=provider + `PI_MODEL`=模型 id（id 本身可含 `/`，聚合类
+provider 的命名空间 id 如 `deepseek/deepseek-v4-flash`）；旧代码用
+"含 `/` 就视为完整 ref"的形状启发式 → provider 被丢掉 → pi 按
+`provider/id` 解析到**同名的另一个 provider**——不报错、行为相似，
+静默失真（2026-09-10 用户质询 model 是否跟随主 pi 时实测暴露；
+不在场的单测从未覆盖含斜杠 id 形态）。制度：①拼接函数统一且幂等
+（已带前缀不重复拼）；②契约字段的形态矩阵（纯 id / 含斜杠 id /
+已带前缀 / 字段缺失）必须进单测——形状假设即未经测试的假设。
