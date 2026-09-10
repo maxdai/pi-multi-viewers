@@ -79,3 +79,4 @@ human_viewer/sayer human 插话通道
 设计文档：`docs/design.md`（fork 源模式与规模口径、决策记录）。
 开发铁律与测试方法论：`AGENTS.md` + `docs/test-methodology.md`。
 首次实验存档：`docs/examples/first-experiment/`。
+自我审阅存档：`docs/reviews/`（本机制审阅自身实现的报告原文）。

@@ -28,6 +28,7 @@ package.json         npm 包 pi-multi-viewers（pi.prompts 注册；发版待办
 templates/           AGENTS.md.tpl / agent.md.tpl / gitignore.tpl / spec-readme.md.tpl
 viewers/             示范稳定视角（性能/可读性——对立视角，措辞经实验验证）
 docs/examples/first-experiment/  首次实验存档（机制验证 + 模板原型 + 真实消息）
+docs/reviews/        自我审阅存档（多视角自审 result.md 原文 + 索引/口径说明）
 tests/               测试（unittest discover tests）
 ```
 
@@ -107,6 +108,8 @@ loop、状态从 git 共享事实推导、单一事实源 = protocol.json、无�
   指纹 / 消费侧规模 / 校准比）、决策记录（含被否决方案与重估触发条件）
 - `docs/examples/first-experiment/`：首次实验存档（2026-09-09，历史）——机制验证结论、
   协议/视角模板原型（措辞经实验验证）、三条真实消息（可作 loop 测试 fixture）
+- `docs/reviews/`：**自我审阅存档**——本项目用多视角机制审阅自身实现的 result.md
+  原文（每份带来源说明与修复 commit；索引与口径见该目录 README）
 - 上游设计文档：`../pi-agents-helper/docs/pi-helper-design.md`（共享协议
   核心的行为定义——信息层/流程层分离、配额语义、状态机推演对本项目
   同样有效）
