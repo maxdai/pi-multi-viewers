@@ -414,26 +414,12 @@ def make_responder(pure, fork_source=None, fork_cwd=None):
 
 
 def _preserve_result_md(workdir):
-    """收尾时把 result.md 从 bare 复制到父级（<base名>-result.md）。"""
-    import subprocess as sp
-    base = os.path.dirname(workdir)
-    bare = os.path.join(base, "repo.git")
-    if not os.path.isdir(bare):
-        return
-    r = sp.run(["git", "-C", bare, "show", "HEAD:result.md"],
-               capture_output=True, text=True)
-    if r.returncode != 0 or not r.stdout.strip():
-        return
-    base_name = os.path.basename(base.rstrip("/")) or "discussion"
-    dest = os.path.join(os.path.dirname(base.rstrip("/")) or ".",
-                        f"{base_name}-result.md")
-    with open(dest, "w") as f:
-        f.write(r.stdout)
-    # 修复 2026-09-01（测试报告问题 1）：函数无 agent 上下文——
-    # 原引用未定义变量 agent → NameError（写文件成功后 log 行崩溃，
-    # 进程异常退出）。log 需要 agent 名参数，此处直接用模块 log 的
-    # 全局格式打印（不带 agent 前缀）。
-    print(f"[{time.strftime('%H:%M:%S')}] 已保存 result.md → {dest}", flush=True)
+    """收尾时保存 result.md（薄包装 → meeting_fs.preserve_result_md，
+    T2 合并：与 cleanup 路径共享同一实现）。"""
+    dest = meeting_fs.preserve_result_md(os.path.dirname(workdir))
+    if dest:
+        print(f"[{time.strftime('%H:%M:%S')}] 已保存 result.md → {dest}",
+              flush=True)
 
 
 if __name__ == "__main__":

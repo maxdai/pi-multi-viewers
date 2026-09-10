@@ -159,7 +159,7 @@ class TestMisc(unittest.TestCase):
 
     def test_check_status_not_exists(self):
         with tempfile.TemporaryDirectory() as tmp:
-            status, _ = check_status(os.path.join(tmp, "nope"))
+            status = check_status(os.path.join(tmp, "nope"))
             self.assertEqual(status, "not-exists")
 
     def test_check_status_stopped(self):
@@ -171,7 +171,7 @@ class TestMisc(unittest.TestCase):
             os.makedirs(base)
             subprocess.run(["git", "init", "--bare", bare], check=True,
                            capture_output=True)
-            status, _ = check_status(base)
+            status = check_status(base)
             self.assertEqual(status, "stopped")
         finally:
             shutil.rmtree(tmp, ignore_errors=True)

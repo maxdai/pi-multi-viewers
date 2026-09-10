@@ -486,3 +486,27 @@ def build_bootstrap(out_path, cwd, session_id=None):
         return None, f"引导 session 写入失败: {e}"
     _registry_log(sid, out_path, cwd)
     return out_path, None
+
+def preserve_result_md(base):
+    """保存 result.md：从 bare git 历史复制到父级目录（T2 合并，e2e7 评审）。
+
+    两个触发点共享本实现（此前 start_discussion/meeting_loop 各一份，
+    日志格式/import 方式/边界处理三处漂移）：
+      - resultWriter loop 退出（收尾完成时保存）
+      - cleanup（清理前兜底保存）
+    命名 <base目录名>-result.md（与讨论目录同级）。
+    result.md 权威位置 = bare git 历史；无 result.md → 跳过（不报错）。
+    返回保存路径或 None。
+    """
+    bare = os.path.join(base, "repo.git")
+    if not os.path.isdir(bare):
+        return None
+    r = run_git(bare, "show", "HEAD:result.md", check=False)
+    if r.returncode != 0 or not r.stdout.strip():
+        return None
+    base_name = os.path.basename(base.rstrip("/")) or "discussion"
+    dest = os.path.join(os.path.dirname(base.rstrip("/")) or ".",
+                        f"{base_name}-result.md")
+    with open(dest, "w") as f:
+        f.write(r.stdout)
+    return dest

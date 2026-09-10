@@ -18,6 +18,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from meeting_fs import (
     build_active_fork_source,
     build_bootstrap,
+    preserve_result_md,
     run_git, git_head, git_pull, git_commit, git_push,
     git_ls_files, git_show, _frontmatter_end, parse_frontmatter,
     extract_body, read_message, _fm_to_lines, write_message,
@@ -513,3 +514,44 @@ class TestChineseAgentPaths(unittest.TestCase):
             self.assertFalse(_is_committed(work, "性能/0002.md"))
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
+
+class TestPreserveResultMd(unittest.TestCase):
+    """T2 合并（e2e7 评审）：两个触发点共享的保存实现。"""
+
+    def _mk(self, tmp, with_result=True):
+        base = os.path.join(tmp, "discuss-x")
+        bare = os.path.join(base, "repo.git")
+        os.makedirs(base)
+        subprocess.run(["git", "init", "--bare", bare], check=True,
+                       capture_output=True)
+        if with_result:
+            work = os.path.join(tmp, "w")
+            subprocess.run(["git", "clone", bare, work], check=True,
+                           capture_output=True)
+            subprocess.run(["git", "config", "user.name", "t"], cwd=work)
+            subprocess.run(["git", "config", "user.email", "t@t"], cwd=work)
+            with open(os.path.join(work, "result.md"), "w") as f:
+                f.write("# 结论\n")
+            subprocess.run(["git", "add", "-A"], cwd=work, check=True)
+            subprocess.run(["git", "commit", "-qm", "discuss: result.md"],
+                           cwd=work, check=True)
+            subprocess.run(["git", "push", bare, "master"], cwd=work,
+                           check=True, capture_output=True)
+        return base
+
+    def test_saves_to_parent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = self._mk(tmp)
+            dest = preserve_result_md(base)
+            self.assertIsNotNone(dest)
+            self.assertTrue(dest.endswith("discuss-x-result.md"))
+            self.assertIn("# 结论", open(dest).read())
+
+    def test_no_result_returns_none(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = self._mk(tmp, with_result=False)
+            self.assertIsNone(preserve_result_md(base))
+
+    def test_no_bare_returns_none(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertIsNone(preserve_result_md(os.path.join(tmp, "nope")))

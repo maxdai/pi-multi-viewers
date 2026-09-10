@@ -245,7 +245,7 @@ class TestFlowComposition(unittest.TestCase):
 
         # S17：check_status = done
         from start_discussion import check_status
-        status, _ = check_status(self.base)
+        status = check_status(self.base)
         self.assertEqual(status, "done")
 
     # ---- 链 7：human 通道（H2 → E10 → V4/V5 展示）----
@@ -288,7 +288,7 @@ class TestFlowComposition(unittest.TestCase):
         write_protocol_signal(self.wa, "a", "pass", "round-robin", "b")
         finalize_discussion(self.wb, "b", resp, head)
         from start_discussion import check_status
-        status, _ = check_status(self.base)
+        status = check_status(self.base)
         self.assertEqual(status, "done")
 
         # cleanup：保存 + 删除

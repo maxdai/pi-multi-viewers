@@ -20,6 +20,53 @@ from unittest import mock
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
+class TestStatusStalled(unittest.TestCase):
+    """T3/#7（e2e7 评审）：状态全集 + 收尾中断（stalled）可区分。
+
+    原实现"有 result.md 无 concluded"恒 running 且不看存活 → --wait
+    无限轮询；现 stalled = 无 loop 存活 → --wait 有界退出。
+    """
+
+    def _bare_with_result_md(self, tmp):
+        """构造：bare + result.md 提交（无 concluded）→ 无 loop 存活。"""
+        base = os.path.join(tmp, "d")
+        bare = os.path.join(base, "repo.git")
+        os.makedirs(base)
+        import subprocess
+        subprocess.run(["git", "init", "--bare", bare], check=True,
+                       capture_output=True)
+        work = os.path.join(tmp, "w")
+        subprocess.run(["git", "clone", bare, work], check=True,
+                       capture_output=True)
+        subprocess.run(["git", "config", "user.name", "t"], cwd=work)
+        subprocess.run(["git", "config", "user.email", "t@t"], cwd=work)
+        with open(os.path.join(work, "result.md"), "w") as f:
+            f.write("# 结论\n")
+        subprocess.run(["git", "add", "-A"], cwd=work, check=True)
+        subprocess.run(["git", "commit", "-qm", "discuss: result.md"],
+                       cwd=work, check=True)
+        subprocess.run(["git", "push", bare, "master"], cwd=work,
+                       check=True, capture_output=True)
+        return base
+
+    def test_stalled_when_no_loop(self):
+        from start_discussion import check_status
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            base = self._bare_with_result_md(tmp)
+            # 无 loop 存活 + row 有 result.md 无 concluded → stalled
+            self.assertEqual(check_status(base), "stalled")
+
+    def test_single_return_value(self):
+        """#7：返回值不再有恒 None 的装饰性第二项。"""
+        from start_discussion import check_status
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            v = check_status(os.path.join(tmp, "nope"))
+            self.assertIsInstance(v, str)
+            self.assertEqual(v, "not-exists")
+
+
 class TestCliExitCodes(unittest.TestCase):
     """CLI 错误退出码语义（W4 修复，e2e7 评审）：错误分支必须 exit≠0
     ——此前裸 return 使 wrapper `if ! python3 …` 判据失效（静默失败：
@@ -169,7 +216,7 @@ class TestStartDiscussionMain(unittest.TestCase):
         with mock.patch("sys.argv", ["start_discussion.py", "--dir", "/x",
                                      "--status"]):
             with mock.patch("start_discussion.check_status",
-                            return_value=("stopped", None)) as cs:
+                            return_value="stopped") as cs:
                 with mock.patch("builtins.print"):
                     sd.main()
                     cs.assert_called_once_with("/x")

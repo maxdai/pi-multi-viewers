@@ -18,6 +18,7 @@
 import argparse
 import json
 import os
+import meeting_fs
 import re
 import shutil
 import subprocess
@@ -398,10 +399,41 @@ def _resolve_path(p):
         return os.path.abspath(os.path.expanduser(p))
     return os.path.join(os.getcwd(), p)
 
+MAX_AGENT_NAME_LEN = 32
+
+
+def check_agent_name(name):
+    """单个 agent/视角名合法性（T4 收归，e2e7 评审）：唯一实现。
+
+    规则（viewers 文件名即 agent 名 → 同一套规则两处来源）：
+    非空 / 无路径分隔符与空白 / ≤32 字符 / 非 human 保留名。
+    返回错误信息或 None。
+    """
+    if not name:
+        return "空名"
+    if re.search(r"[/\\\s]", name):
+        return "含路径分隔符或空白"
+    if len(name) > MAX_AGENT_NAME_LEN:
+        return f"超过 {MAX_AGENT_NAME_LEN} 字符"
+    if name == "human":
+        return "'human' 是保留名（human 插话通道），不可作为参与者"
+    return None
+
+
+def validate_participants(participants):
+    """整组名字校验（唯一文案）。返回错误或 None。"""
+    for p in participants:
+        err = check_agent_name(p)
+        if err:
+            return f"错误: 非法 agent 名（{err}）：{p}"
+    return None
+
+
 def _check_reserved(participants):
-    """human 保留名校验（helper 设计 §2.1）：插话通道不是参与者。"""
-    if "human" in participants:
-        return "错误: 'human' 是保留名（human 插话通道），不可作为参与者"
+    """human 保留名校验（薄包装，调用点兼容）。"""
+    for p in participants:
+        if p == "human":
+            return f"错误: {check_agent_name('human')}"
     return None
 
 
@@ -469,11 +501,9 @@ def _snapshot_viewers(spec_dir, viewers_dir):
         return None, ("错误: 未找到 viewers/ 目录——多视角分析的视角资产"
                       "必须先建好（项目 cwd 下 viewers/<视角名>.md，至少 2 个）")
     for n in names:
-        if not n or re.search(r"[/\\\s]", n) or len(n) > 32:
-            return None, f"错误: 非法视角名（禁止空白/路径分隔符，≤32 字符）：{n}"
-        if n == "human":
-            return None, ("错误: human 是保留名（插话通道），"
-                          "不能作为视角文件名")
+        err = check_agent_name(n)
+        if err:
+            return None, f"错误: 非法 agent 名（{err}）：{n}（viewers/{n}.md）"
     if len(names) < 2:
         return None, (f"错误: viewers/ 下仅发现 {len(names)} 个视角"
                       f"——多视角分析至少需要 2 个")
@@ -556,8 +586,9 @@ def _resolve_spec(spec, agents, topic, background, stances, questions, models,
             return None, None, None, (
                 "错误: spec 缺少 agents/ 且未找到 viewers/ 目录"
                 "（项目 cwd 下建 viewers/<视角名>.md，或 --spec-gen --agents 生成）")
-        if "human" in participants:
-            return None, None, None, _check_reserved(participants)
+        err_names = validate_participants(participants)
+        if err_names:
+            return None, None, None, err_names
         # meeting 至少两个 LLM agents（用户 2026-09-09）：1 个视角无对话可言
         if len(participants) < 2:
             return None, None, None, (
@@ -739,23 +770,11 @@ def setup_environment(args, participants, base, spec_dir=None,
 
 
 def _preserve_result_md(base):
-    """清理前保存 result.md：从 bare git 历史复制到父级目录。
-
-    命名 <base目录名>-result.md（如 discussion-code-review-result.md）。
-    result.md 权威位置 = bare git 历史（已提交），工作区可能未同步。
-    无 result.md（未完成讨论）→ 跳过。
-    """
-    bare = os.path.join(base, "repo.git")
-    if not os.path.isdir(bare):
-        return
-    r = run(["git", "show", "HEAD:result.md"], cwd=bare, check=False)
-    if r.returncode != 0 or not r.stdout.strip():
-        return
-    base_name = os.path.basename(base.rstrip("/")) or "discussion"
-    dest = os.path.join(os.path.dirname(base.rstrip("/")), f"{base_name}-result.md")
-    with open(dest, "w") as f:
-        f.write(r.stdout)
-    print(f"[cleanup] 已保存 result.md → {dest}")
+    """清理前保存 result.md（薄包装 → meeting_fs.preserve_result_md，
+    T2 合并：与 loop 退出路径共享同一实现）。"""
+    dest = meeting_fs.preserve_result_md(base)
+    if dest:
+        print(f"[cleanup] 已保存 result.md → {dest}")
 
 
 def cleanup_discussion(base):
@@ -778,32 +797,45 @@ def cleanup_discussion(base):
 
 
 
+def _loops_alive(base):
+    """讨论的 loop 进程是否存活（目录边界匹配，防 discussion-1 匹配 -1x）。"""
+    r = run(["pgrep", "-f",
+             f"meeting_loop.py.*{re.escape(base)}( |$|/)"], check=False)
+    return bool(r.stdout.strip())
+
+
 def check_status(base):
-    """讨论状态：result.md 是否已在 git 历史（权威位置）。"""
+    """讨论状态（单值；状态全集显式于此，T3/#7 修复 e2e7 评审）：
+
+      not-exists   无 bare（目录不存在/未创建）
+      done         result.md + concluded（权威收尾完成）
+      running      有 loop 存活（讨论中 / 收尾中——收尾中细分见下）
+      stalled      有 result.md 无 concluded 且 **loop 均不存活**
+                   （收尾中断：rw 崩溃在 result.md 之后、concluded 之前）
+      stopped      无 result.md 且 loop 不存活（未启动/中断）
+
+    修复动因（e2e7 评审 T3）：原实现"有 result.md 无 concluded"恒返回
+    running 且不看存活 → "收尾进行中"与"收尾间隙崩溃"不可区分，--wait
+    无限轮询（无终止上界）。现 stalled 使 --wait 有界退出。
+    移除恒 None 第二返回值（#7 装饰性契约）——信息由状态本身表达。
+    """
     bare = os.path.join(base, "repo.git")
     if not os.path.isdir(bare):
-        return "not-exists", None
+        return "not-exists"
     r = run(["git", "log", "--all", "--format=%H", "--", "result.md"],
             cwd=bare, check=False)
     if r.stdout.strip():
-        # review5 A5：done 需 concluded 存在——rw 写 result.md 后、concluded
-        # 前崩溃 → 只保存了报告但讨论未收尾，--wait 会误报完成。
-        # 结构化检查（review5 A1 同族，用户 9161）：不用 git grep 全文
-        # （正文出现 "type: concluded" 会误匹配）——从 HEAD 树读消息文件
-        # frontmatter 的 type 字段（只读文件头，不全文 grep）。
+        # done 需 concluded 存在（review5 A5）——rw 写 result.md 后、
+        # concluded 前崩溃 → 只保存报告但未收尾，误报完成会丢流程语义。
+        # 结构化检查：读 HEAD 树消息文件 frontmatter 的 type（不用
+        # git grep 全文——正文出现 "type: concluded" 会误匹配）。
         r2 = run(["git", "grep", "-l", "^type: concluded$", "HEAD", "--",
                   "*/*.md"], cwd=bare, check=False)
         if r2.stdout.strip():
-            return "done", None
-        # 有 result.md 但无 concluded → 收尾进行中（等 concluded 落盘）
-        return "running", None
-    # loop 进程是否存活（目录边界——审核#23：防止 discussion-1 匹配
-    # discussion-1x）
-    r = run(["pgrep", "-f",
-             f"meeting_loop.py.*{re.escape(base)}( |$|/)"], check=False)
-    if r.stdout.strip():
-        return "running", None
-    return "stopped", None
+            return "done"
+        # 有 result.md 无 concluded：看 loop 存活区分收尾中/收尾中断
+        return "running" if _loops_alive(base) else "stalled"
+    return "running" if _loops_alive(base) else "stopped"
 
 
 def _parse_agents(agents_arg):
@@ -911,15 +943,20 @@ def main():
         cleanup_discussion(base)
         return
     if args.status:
-        state, _ = check_status(base)
-        print(f"[status] {state}")
+        print(f"[status] {check_status(base)}")
         return
     if args.wait:
         sys.stdout.reconfigure(line_buffering=True)
         print(f"[wait] 等待讨论完成: {base}")
         seen = set()
         while True:
-            state, _ = check_status(base)
+            state = check_status(base)
+            if state == "stalled":
+                # 收尾中断（T3 修复）：result.md 已提交但 concluded 未落盘
+                # 且无 loop 存活——等待不会有进展，有界退出（此前无限轮询）
+                print("[wait] 收尾中断（result.md 已提交、concluded 缺失、"
+                      "无 loop 存活）——停止等待；可读 result.md 或 --cleanup")
+                return 1
             if state == "done":
                 print("[wait] 讨论完成 ✅")
                 # resultWriter 从 git 读（单一事实源——protocol.json 在 work 里，
@@ -1026,13 +1063,9 @@ def main():
         if not participants:
             print("错误: 参与者为空（--agents 或 spec/agents/ 无有效 agent）")
             sys.exit(1)
-        bad = [p for p in participants
-               if not p or re.search(r"[/\\\s]", p) or len(p) > 32]
-        if bad:
-            print(f"错误: 非法 agent 名（禁止空名/路径分隔符/空白，≤32 字符）：{bad}")
-            sys.exit(1)
-        # human 保留名（helper 设计 §2.1）：human 是插话通道，不是参与者
-        err = _check_reserved(participants)
+        # 名字合法性（T4 收归：唯一实现 check_agent_name/validate_participants，
+        # 含 human 保留名）
+        err = validate_participants(participants)
         if err:
             print(err)
             sys.exit(1)
