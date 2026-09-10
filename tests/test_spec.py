@@ -40,7 +40,7 @@ class Args:
         self.pure = pure
 
 
-def make_spec(base, question="# question.md——说明行\n\n# 讨论主题：spec 测试",
+def make_spec(base, question="# question.md——说明行\n\n# 分析主题：spec 测试",
               background="# background.md——说明行\n\n共享背景内容",
               agents={"a": "# a.md——说明行\n\na 的分工"}):
     """构造 spec 目录（可覆盖各文件内容）。"""
@@ -392,6 +392,41 @@ class TestResolveSpec(unittest.TestCase):
 
 
 class TestSpecSetup(unittest.TestCase):
+    def test_topic_fixed_from_spec(self):
+        """topic 固化（e2e7 评审 W）：spec 模式从 question.md 提取主题
+        行固化进 protocol.json.topic（此前恒空串）。"""
+        tmp = tempfile.mkdtemp()
+        try:
+            spec = make_spec(tmp + "/spec")
+            base = tmp + "/env"
+            args = Args(result_writer="c")
+            setup_environment(args, ["a", "b", "c"], base, spec)
+            proto = json.load(open(os.path.join(base, "work-a/protocol.json")))
+            self.assertNotEqual(proto.get("topic", ""), "")
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_topic_missing_fails_fast(self):
+        """spec 无主题行 → fail-fast（ValueError，不静默空串）。"""
+        tmp = tempfile.mkdtemp()
+        try:
+            spec = tmp + "/spec"
+            os.makedirs(spec)
+            with open(os.path.join(spec, "question.md"), "w") as f:
+                f.write("# question.md——说明行\n\n无主题行内容\n")
+            with open(os.path.join(spec, "background.md"), "w") as f:
+                f.write("# bg——说明行\n\n\n")
+            os.makedirs(os.path.join(spec, "agents"))
+            for p in "ab":
+                with open(os.path.join(spec, "agents", f"{p}.md"), "w") as f:
+                    f.write("# 说明\n\n分工\n")
+            base = tmp + "/env"
+            args = Args()
+            with self.assertRaises(ValueError):
+                setup_environment(args, ["a", "b"], base, spec)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
     def test_full_spec_setup(self):
         tmp = tempfile.mkdtemp()
         try:
@@ -401,7 +436,7 @@ class TestSpecSetup(unittest.TestCase):
             setup_environment(args, ["a", "b", "c"], base, spec)
             # question.md：跳过首行，spec 内容注入
             q = open(os.path.join(base, "work-a/question.md")).read()
-            self.assertIn("# 讨论主题：spec 测试", q)
+            self.assertIn("# 分析主题：spec 测试", q)
             self.assertNotIn("# question.md——说明行", q)
             # AGENTS.md 背景：spec 内容注入
             md = open(os.path.join(base, "work-b/AGENTS.md")).read()

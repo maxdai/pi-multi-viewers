@@ -639,6 +639,25 @@ def setup_environment(args, participants, base, spec_dir=None,
     if spec_question is not None:
         # 未填的可选节（占位符）去掉，避免注入混入模板内容（打磨项 2026-09-01）
         spec_question = _strip_empty_sections(spec_question)
+        # topic 固化（e2e7 评审 W——此前 spec 主路径 protocol.json.topic
+        # 恒空串：gen_protocol(args.topic=None) 碰巧工作因 AGENTS.md 不
+        # 消费 topic，但 protocol 是单一事实源，空串是撒谎）。提取
+        # question.md 的 "# 分析主题：" 行；无可辨识主题行 → fail-fast
+        # （与 _snapshot_viewers 的"不合规零产物"同哲学）
+    spec_topic = None
+    if spec_question is not None:
+        for line in spec_question.splitlines():
+            # 兼容两种措辞（make_spec fixture 用旧版"讨论主题"）
+            for prefix in ("# 分析主题：", "# 讨论主题："):
+                if line.startswith(prefix):
+                    spec_topic = line.replace(prefix, "").strip()
+                    break
+            if spec_topic:
+                break
+    if spec_dir and not spec_topic:
+        raise ValueError(
+            f"错误: spec 的 question.md 缺少 '# 分析主题：' 行（无法固化 "
+            f"protocol.topic）——补主题行后重试")
     spec_background = _spec_read(spec_dir, "background.md") if spec_dir else None
     spec_agents = {}
     if spec_dir:
@@ -687,7 +706,7 @@ def setup_environment(args, participants, base, spec_dir=None,
 
     # 共享配置（work-a 提交，setup commit 进 bare）
     with open(os.path.join(wa, "protocol.json"), "w") as f:
-        json.dump(gen_protocol(args.topic, participants, args.max_meeting,
+        json.dump(gen_protocol(spec_topic or args.topic, participants, args.max_meeting,
                                args.max_rr, args.pure, args.result_writer,
                                args.stall_timeout,
                                fork_source=getattr(args, "fork_source", None),
@@ -817,8 +836,10 @@ def check_status(base):
         # concluded 前崩溃 → 只保存报告但未收尾，误报完成会丢流程语义。
         # 结构化检查：读 HEAD 树消息文件 frontmatter 的 type（不用
         # git grep 全文——正文出现 "type: concluded" 会误匹配）。
+        # 排除 work-human（human 插话若带 type: concluded 会误判 done——
+        # human 视而不见原则，e2e7 评审指出 grep */*.md 扫全树含 human/）
         r2 = run_cmd(["git", "grep", "-l", "^type: concluded$", "HEAD", "--",
-                  "*/*.md"], cwd=bare, check=False)
+                  ":(exclude)human/*"], cwd=bare, check=False)
         if r2.stdout.strip():
             return "done"
         # 有 result.md 无 concluded：看 loop 存活区分收尾中/收尾中断
