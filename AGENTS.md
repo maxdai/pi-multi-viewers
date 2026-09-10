@@ -26,7 +26,7 @@ prompts/multi-viewers.md  /multi-viewers 入口（视角设计三原则 + 审核
 docs/design.md       设计文档（fork 源模式与规模口径 + 决策记录）
 package.json         npm 包 pi-multi-viewers（pi.prompts 注册；发版待办）
 templates/           AGENTS.md.tpl / agent.md.tpl / gitignore.tpl / spec-readme.md.tpl
-viewers/             示范稳定视角（性能/可读性——对立视角，措辞经实验验证）
+viewers/             示例视角（性能/简单/铁律——仅是形态示例，视角内容由用户按需自定）
 docs/examples/first-experiment/  首次实验存档（机制验证 + 模板原型 + 真实消息）
 docs/reviews/        自我审阅存档（多视角自审 result.md 原文 + 索引/口径说明）
 tests/               测试（unittest discover tests）
