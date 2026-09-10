@@ -92,11 +92,13 @@ except Exception:
 done
 
 # --- 2. 讨论/pi 进程 ---
-for p in $(pgrep -f "[m]eeting_loop.py" 2>/dev/null); do
+# 方括号技巧对 pgrep -f 无效（bash -c 命令行本身含 [m]eeting 字符串）——
+# 用 ps + grep + 过滤自身 shell PID（$$ 及其父链）
+for p in $(ps -eo pid,cmd | grep "[m]eeting_loop.py" | grep -v "grep\|bash -c" | awk '{print $1}'); do
     echo "[残留-2] meeting_loop 进程 PID=$p: $(ps -p $p -o cmd= 2>/dev/null)"
     RESIDUE=1
 done
-for p in $(pgrep -f "[p]i --mode json" 2>/dev/null); do
+for p in $(ps -eo pid,cmd | grep "[p]i --mode json" | grep -v "grep\|bash -c" | awk '{print $1}'); do
     echo "[残留-2] pi 进程 PID=$p"
     RESIDUE=1
 done
