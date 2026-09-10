@@ -605,10 +605,9 @@ def _resolve_spec(spec, agents, topic, background, stances, questions, models,
 
 
 def _clone_work(base, p):
-    """clone work-<p> + 配置 git 身份 + 建本地目录（首建/重建共用，P12）。
+    """clone work-<p> + 配置 git 身份 + 建本地目录（T6 后唯一 clone 入口）。
 
-    重建段先保存 local_files 再调用本 helper（rmtree 后 clone 丢失
-    git 身份 config，需重配）。
+    git 身份在此统一配置（调用方不再重复 config——e2e7 评审 T6）。
     """
     workdir = os.path.join(base, f"work-{p}")
     run(["git", "clone", os.path.join(base, "repo.git"), workdir])
@@ -670,14 +669,17 @@ def setup_environment(args, participants, base, spec_dir=None,
     os.makedirs(base, exist_ok=True)
     run(["git", "init", "--bare", os.path.join(base, "repo.git")])
 
-    for p in participants:
-        workdir = os.path.join(base, f"work-{p}")
-        if os.path.exists(workdir):
-            shutil.rmtree(workdir)
-        _clone_work(base, p)   # P12：clone + git 身份 + 建目录
-
-    # 共享配置（写 work-a，之后 setup commit 进 bare）
+    # T6 重构（e2e7 评审）：原流程 = 全部 clone → 写共享 → commit → 再
+    # rmtree+clone 重建 others + 回写本地文件（2N-1 次 clone，~40% 冗余；
+    # "保存→删→克隆→回写"是为绕开未跟踪文件冲突的补丁）。新流程：
+    # 先 clone work-a 提交共享配置，再 clone others（一次拿到 setup
+    # commit）——clone 恰 N 次，无重建、无回写、无重复 git config。
     wa = os.path.join(base, f"work-{participants[0]}")
+    if os.path.exists(wa):
+        shutil.rmtree(wa)
+    _clone_work(base, participants[0])   # clone + git 身份 + 建目录
+
+    # 共享配置（work-a 提交，setup commit 进 bare）
     with open(os.path.join(wa, "protocol.json"), "w") as f:
         json.dump(gen_protocol(args.topic, participants, args.max_meeting,
                                args.max_rr, args.pure, args.result_writer,
@@ -692,13 +694,31 @@ def setup_environment(args, participants, base, spec_dir=None,
         else:
             f.write(gen_question(args.topic, args.stances, args.background,
                                  args.questions))
+    with open(os.path.join(TPL_DIR, "gitignore.tpl")) as gtf:
+        gitignore = gtf.read()
+    with open(os.path.join(wa, ".gitignore"), "w") as f:
+        f.write(gitignore)
+    run(["git", "add", "-A"], cwd=wa)
+    run(["git", "-c", f"user.name={GIT_USER}", "-c", f"user.email={GIT_EMAIL}",
+         "commit", "-m", "discuss: setup"], cwd=wa)
+    # push 当前分支（不用硬编码 master——用户可能配置了
+    # init.defaultBranch=main，硬编码会导致 bare 双分支、clone 检出空
+    # 分支 → 环境损坏。审核 C2。）
+    branch = run(["git", "branch", "--show-current"], cwd=wa,
+                 check=False).stdout.strip()
+    run(["git", "push", os.path.join(base, "repo.git"),
+         branch or "master"], cwd=wa)
 
-    # 本地配置（每个 work 各自）
+    # others clone（直接拿到 setup commit；work-a 已在上方创建）
+    for p in participants[1:]:
+        workdir = os.path.join(base, f"work-{p}")
+        if os.path.exists(workdir):
+            shutil.rmtree(workdir)
+        _clone_work(base, p)   # clone + git 身份 + 建目录
+
+    # 本地配置（每个 work 各自；.gitignore 已随 setup commit 分发）
     for p in participants:
         workdir = os.path.join(base, f"work-{p}")
-        # git 身份（仓库级——后续 commit 需要，RR 时代踩过坑）
-        run(["git", "config", "user.name", GIT_USER], cwd=workdir)
-        run(["git", "config", "user.email", GIT_EMAIL], cwd=workdir)
         with open(os.path.join(workdir, "AGENTS.md"), "w") as f:
             f.write(gen_agents_md(args, p, participants, spec_background,
                                  main_pi_cwd=os.getcwd()))
@@ -712,42 +732,6 @@ def setup_environment(args, participants, base, spec_dir=None,
                 "thinking": mv[1] if mv[1] else "max",
                 "prompt_file": f".pi/agent/{p}.md",
             }, f, indent=2, ensure_ascii=False)
-        # （.pi/settings.json 屏蔽已移除——用户 2026-09-09 判定：fork-only
-        # 后 agent cwd=主项目，work 内项目级 settings 不会被任何 pi 进程
-        # 读取，是死产物；多视角语义下上下文工具激活是特性。.pi 目录
-        # 保留 .pi/agent/<p>.md——视角任务书，prompt_file 注入源）
-        with open(os.path.join(TPL_DIR, "gitignore.tpl")) as gtf:
-            gitignore = gtf.read()
-        with open(os.path.join(workdir, ".gitignore"), "w") as f:
-            f.write(gitignore)
-
-    # setup commit（work-a 提交共享配置）
-    run(["git", "add", "-A"], cwd=wa)
-    run(["git", "-c", f"user.name={GIT_USER}", "-c", f"user.email={GIT_EMAIL}",
-         "commit", "-m", "discuss: setup"], cwd=wa)
-    # push 当前分支（不用硬编码 master——用户可能配置了
-    # init.defaultBranch=main，硬编码会导致 bare 双分支、clone 检出空
-    # 分支 → 环境损坏。审核 C2。）
-    branch = run(["git", "branch", "--show-current"], cwd=wa,
-                 check=False).stdout.strip()
-    run(["git", "push", os.path.join(base, "repo.git"),
-         branch or "master"], cwd=wa)
-
-    # 重建其他 work（避免本地未跟踪文件与 pull 冲突的踩坑）
-    for p in participants[1:]:
-        workdir = os.path.join(base, f"work-{p}")
-        local_files = {}
-        for rel in ["AGENTS.md", ".gitignore", f".pi/agent/{p}.md",
-                    "pi-agent.json"]:
-            fp = os.path.join(workdir, rel)
-            if os.path.exists(fp):
-                with open(fp) as fh:
-                    local_files[rel] = fh.read()
-        shutil.rmtree(workdir)
-        _clone_work(base, p)   # P12：clone + git 身份 + 建目录（重建段）
-        for rel, content in local_files.items():
-            with open(os.path.join(workdir, rel), "w") as f:
-                f.write(content)
 
     # work-human：human 插话的提交通道（helper 设计 §5.4）——
     # 固定存在、不占参与者名额、无 agent 定义/pi-agent.json/AGENTS.md
