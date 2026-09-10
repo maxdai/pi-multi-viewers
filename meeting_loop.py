@@ -216,21 +216,110 @@ def recover_git_lock(workdir, agent):
         log(agent, "检测到 .git 残留锁（上次中断）——已恢复")
 
 
+def _build_wake_cmd(workdir, agent, sid, cfg, fork_source, fork_cwd,
+                    session_dir, first_wake, pure, prompt):
+    """组装唤醒命令（#3 拆分，e2e7 评审）：返回 (cmd, spawn_cwd)。
+
+    首唤（first_wake 且 sid 已由调用方预生成）：活跃视图 fork 源
+    （build_active_fork_source）→ --session 直接打开；续接：
+    --session-id。cwd = fork_cwd（主项目）优先。协议/视角注入在此
+    追加（--append-system-prompt，文件存在才加）。
+    """
+    base = os.path.dirname(workdir)
+    if first_wake:
+        base_name = os.path.basename(base.rstrip("/")) or "discussion"
+        display_name = f"{base_name}-{agent}"
+        # 活跃视图 fork 源（方案 b，用户 2026-09-09 定）：裁剪版 session
+        # 文件 + --session 直接打开——不再用 pi --fork 全量复制（全量
+        # 历史的行为先例让 agent 继续扮演主 pi）。活跃视图 = 最后
+        # compaction + firstKept 起条目（pi rebuild 上下文同款算法）。
+        active_src = os.path.join(session_dir, f"fork-src-{sid}.jsonl")
+        n, err = meeting_fs.build_active_fork_source(
+            fork_source, active_src, sid, fork_cwd or workdir)
+        if err:
+            log(agent, f"[fatal] 活跃视图 fork 源生成失败: {err}")
+            raise RuntimeError(err)
+        log(agent, f"fork 源（活跃视图 {n} 条）: {os.path.basename(active_src)}")
+        cmd = ["pi", "--mode", "json", "--session", active_src,
+               "--name", display_name, "--session-dir", session_dir]
+    else:
+        cmd = ["pi", "--mode", "json", "--session-id", sid,
+               "--session-dir", session_dir]
+    if pure:
+        # Pi 的 pure 近似：关闭外部扩展/技能/prompt-template/主题加载，
+        # 保留内置工具（read/bash/edit/write）与项目内 AGENTS.md。
+        cmd += ["--no-extensions", "--no-skills", "--no-prompt-templates",
+                "--no-themes"]
+    model = cfg.get("model") or ""
+    if model:
+        cmd += ["--model", model]
+    thinking = cfg.get("thinking") or ""
+    if thinking:
+        cmd += ["--thinking", thinking]
+    prompt_file = cfg.get("prompt_file") or ""
+    if prompt_file and os.path.isfile(os.path.join(workdir, prompt_file)):
+        cmd += ["--append-system-prompt", os.path.join(workdir, prompt_file)]
+    # 协议 AGENTS.md 注入（fork-only 缺口修复）：work 不在主项目 cwd
+    # 祖先链上，pi 不会自动发现——无条件注入（文件存在才加）
+    protocol_md = os.path.join(workdir, "AGENTS.md")
+    if os.path.isfile(protocol_md):
+        cmd += ["--append-system-prompt", protocol_md]
+    # 非交互模式 + JSON 事件流；自动信任项目本地文件（AGENTS.md 等）
+    cmd += ["--approve", "--print", prompt]
+    return cmd, (fork_cwd or workdir)
+
+
+def _run_wake_proc(cmd, spawn_cwd, workdir, agent):
+    """spawn + 分片等待（#3 拆分）：返回 CompletedProcess。
+
+    三路径语义（2026-09-01 定，不得改变）：
+      ① pi 正常结束 → 返回 CompletedProcess
+      ② 讨论目录被清理（cleanup）→ _kill_proc + SystemExit(0)（干净退出）
+      ③ 总超时 → _kill_proc + 抛 TimeoutExpired（上层可恢复重试）
+    """
+    global _current_proc
+    base = os.path.dirname(workdir)
+    # stdout 全量缓冲（A，e2e7 评审）：唯一消费者是调用方的 parse_session
+    # ——只取 session 头的兜底路径（sid 已预生成，续接不依赖 parse
+    # 成功）。性能实测 ≈150-200 KB/唤醒、峰值亚 MB（不构成风险）；
+    # 若改为流式读取，必须让"谁读 session 头"同样显式可见（可读性保留票）。
+    proc = subprocess.Popen(cmd, cwd=spawn_cwd, stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, text=True)
+    _current_proc = proc
+    try:
+        # 分片等待：每片检查讨论目录是否被清理（cleanup 删目录）——
+        # 唤醒阻塞不再屏蔽自退出（cleanup 是唯一清理操作，不靠手动 kill）
+        out = err = None
+        normal = False
+        deadline = time.time() + MAX_WAKE_SEC
+        while time.time() < deadline:
+            try:
+                out, err = proc.communicate(timeout=15)
+                normal = True
+                break  # 正常结束
+            except subprocess.TimeoutExpired:
+                if not os.path.isdir(os.path.join(base, "repo.git")):
+                    log(agent, "讨论目录已清理——终止唤醒中的 pi")
+                    _kill_proc(proc)
+                    raise SystemExit(0)  # 干净退出（不被 except 捕获）
+        if not normal:
+            # 总超时：保持原语义（超时 = kill 强杀 + 抛 TimeoutExpired
+            # → 上层可恢复重试）
+            _kill_proc(proc)
+            raise subprocess.TimeoutExpired(cmd, MAX_WAKE_SEC)
+    finally:
+        _current_proc = None
+    return subprocess.CompletedProcess(cmd, proc.returncode, out or "",
+                                       err or "")
+
+
 def wake_llm(workdir, agent, prompt, pure=False, fork_source=None, fork_cwd=None):
-    """唤醒 pi（fork-only：首唤 --fork，后续 --session-id 续接）。返回 sessionID。
+    """唤醒 pi（fork-only：首唤 --session 活跃视图，后续 --session-id
+    续接）。返回 (sessionID, returncode)。
 
     每次唤醒记录完整命令行 + prompt 到 wake-logs/（排错第一手段）。
-
-    fork 模式（唯一模式）：首次唤醒（无已存 sid）以 --fork 挂载主
-    session 全量上下文 + --name 可读显示名（id 由 pi 生成 UUID——id 归
-    机制、名字归人）；agent 进程 cwd = fork_cwd（主项目，可直接读项目
-    文件）。后续唤醒 sid 已存 → --session-id 续接。
-    实测 2026-09-09（docs/examples/first-experiment + e2e）：fork 上下文
-    携带、--name 落盘（session_info label）、续接模式全部通过。
-
-    协议注入：workdir/AGENTS.md（讨论协议）不在主项目 cwd 的祖先链上，
-    pi 不会自动发现——无条件 --append-system-prompt 注入（文件存在才加）。
-    e2e 曾暴露缺口：无注入时靠模型能力偶尔能跑通，非设计保证。
+    命令组装与进程等待拆为 _build_wake_cmd / _run_wake_proc（#3 拆分，
+    e2e7 评审——可读性：单函数曾 125 行/嵌套 5 层）。
     """
     if not fork_source:
         raise RuntimeError(
@@ -246,47 +335,9 @@ def wake_llm(workdir, agent, prompt, pure=False, fork_source=None, fork_cwd=None
         # 也有确定 sid（续接不依赖 parse 成功）
         import uuid
         sid = str(uuid.uuid4())
-        base_name = os.path.basename(base.rstrip("/")) or "discussion"
-        display_name = f"{base_name}-{agent}"
-        # 活跃视图 fork 源（方案 b，用户 2026-09-09 定）：裁剪版 session
-        # 文件 + --session 直接打开——不再用 pi --fork 全量复制。动机：
-        # e2e 四轮实测，全量历史的行为先例让 agent 继续扮演主 pi（wake
-        # 身份锚定也压不住）；活跃视图 = 最后 compaction + firstKept 起
-        # 条目（pi rebuild 上下文同款算法），保留摘要语义、去行为先例。
-        # --session 打开后新消息 append 回本文件（agent session 独立演化）
-        active_src = os.path.join(session_dir, f"fork-src-{sid}.jsonl")
-        n, err = meeting_fs.build_active_fork_source(
-            fork_source, active_src, sid, fork_cwd or workdir)
-        if err:
-            log(agent, f"[fatal] 活跃视图 fork 源生成失败: {err}")
-            raise RuntimeError(err)
-        log(agent, f"fork 源（活跃视图 {n} 条）: {os.path.basename(active_src)}")
-        cmd = ["pi", "--mode", "json", "--session", active_src,
-               "--name", display_name, "--session-dir", session_dir]
-        spawn_cwd = fork_cwd or workdir
-    else:
-        cmd = ["pi", "--mode", "json", "--session-id", sid,
-               "--session-dir", session_dir]
-        spawn_cwd = fork_cwd or workdir
-    if pure:
-        # Pi 的 pure 近似：关闭外部扩展/技能/prompt-template/主题加载，
-        # 保留内置工具（read/bash/edit/write）与项目内 AGENTS.md。
-        cmd += ["--no-extensions", "--no-skills", "--no-prompt-templates", "--no-themes"]
-    model = cfg.get("model") or ""
-    if model:
-        cmd += ["--model", model]
-    thinking = cfg.get("thinking") or ""
-    if thinking:
-        cmd += ["--thinking", thinking]
-    prompt_file = cfg.get("prompt_file") or ""
-    if prompt_file and os.path.isfile(os.path.join(workdir, prompt_file)):
-        cmd += ["--append-system-prompt", os.path.join(workdir, prompt_file)]
-    # 协议 AGENTS.md 注入（fork-only 缺口修复，见 docstring）：
-    protocol_md = os.path.join(workdir, "AGENTS.md")
-    if os.path.isfile(protocol_md):
-        cmd += ["--append-system-prompt", protocol_md]
-    # 非交互模式 + JSON 事件流；自动信任项目本地文件（AGENTS.md 等）
-    cmd += ["--approve", "--print", prompt]
+    cmd, spawn_cwd = _build_wake_cmd(workdir, agent, sid, cfg, fork_source,
+                                     fork_cwd, session_dir, first_wake,
+                                     pure, prompt)
 
     log_dir = os.path.join(base, "wake-logs")
     os.makedirs(log_dir, exist_ok=True)
@@ -295,41 +346,8 @@ def wake_llm(workdir, agent, prompt, pure=False, fork_source=None, fork_cwd=None
         f.write("CMD: " + " ".join(cmd) + "\n\nPROMPT:\n" + prompt + "\n")
     log(agent, f"唤醒 pi (session={sid})")
     _lock_git(workdir)
-    global _current_proc
     try:
-        # stdout 全量缓冲（A，e2e7 评审）：唯一消费者是下方 parse_session
-        # ——只取 session 头的兜底路径（sid 已预生成，续接不依赖 parse
-        # 成功）。性能实测 ≈150-200 KB/唤醒、峰值亚 MB（不构成风险），
-        # 铁律 2 的实现复杂度论证记录于此；若将来改为流式读取，必须
-        # 让"谁读 session 头"同样显式可见（可读性保留票）。
-        proc = subprocess.Popen(cmd, cwd=spawn_cwd, stdout=subprocess.PIPE,
-                                stderr=subprocess.PIPE, text=True)
-        _current_proc = proc
-        try:
-            # 分片等待：每片检查讨论目录是否被清理（cleanup 删目录）——
-            # 唤醒阻塞不再屏蔽自退出（完善流程：cleanup 是唯一清理操作，
-            # 无需手动 kill；用户 2026-09-01 原则：不固定为错误操作+补丁）。
-            out = err = None
-            normal = False
-            deadline = time.time() + MAX_WAKE_SEC
-            while time.time() < deadline:
-                try:
-                    out, err = proc.communicate(timeout=15)
-                    normal = True
-                    break  # 正常结束
-                except subprocess.TimeoutExpired:
-                    if not os.path.isdir(os.path.join(base, "repo.git")):
-                        log(agent, "讨论目录已清理——终止唤醒中的 pi")
-                        _kill_proc(proc)
-                        raise SystemExit(0)  # 干净退出（SystemExit 不被 except 捕获）
-            if not normal:
-                # 总超时：保持原语义（run(timeout) 超时 = kill 强杀 + 抛
-                # TimeoutExpired → 上层可恢复重试）
-                _kill_proc(proc)
-                raise subprocess.TimeoutExpired(cmd, MAX_WAKE_SEC)
-        finally:
-            _current_proc = None
-        r = subprocess.CompletedProcess(cmd, proc.returncode, out or "", err or "")
+        r = _run_wake_proc(cmd, spawn_cwd, workdir, agent)
     finally:
         _unlock_git(workdir)
 
@@ -337,9 +355,9 @@ def wake_llm(workdir, agent, prompt, pure=False, fork_source=None, fork_cwd=None
     if new_sid:
         save_session_id(workdir, agent, new_sid)
     if r.returncode != 0:
-        # 常见可重试失败：session 文件损坏/不存在？pi 对 --session-id 通常
-        # 自动创建；保留 stderr 日志便于诊断。若明确 "No session found" 则
-        # 清空 status 后下轮新建。
+        # 常见可重试失败：session 文件损坏/不存在。pi 对 --session-id
+        # 通常自动创建；保留 stderr 日志便于诊断。明确 "No session
+        # found" 则清空 status 后下轮新建。
         if "No session found" in (r.stderr or "") or "Session not found" in (r.stderr or ""):
             log(agent, "唤醒失败（session 无效）——清空重试")
             sp = os.path.join(base, f"status-{agent}.json")
