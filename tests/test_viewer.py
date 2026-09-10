@@ -15,7 +15,8 @@ from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from human_viewer import (_protocol, participants_from_bare, result_path,
+import meeting_fs
+from human_viewer import (participants_from_bare, result_path,
                           new_messages, format_message, incremental, main)
 
 
@@ -49,7 +50,7 @@ class TestProtocol(unittest.TestCase):
     def test_protocol_ok(self):
         tmp, base, bare = make_discussion()
         try:
-            self.assertEqual(_protocol(bare)["participants"], ["a", "b"])
+            self.assertEqual(meeting_fs.read_protocol(bare)["participants"], ["a", "b"])
             self.assertEqual(participants_from_bare(bare), ["a", "b"])
             self.assertTrue(result_path(base, bare).endswith("work-b/result.md"))
         finally:
@@ -66,7 +67,7 @@ class TestProtocol(unittest.TestCase):
                            capture_output=True)
             subprocess.run(["git", "push", "origin", "HEAD"], cwd=w,
                            check=True, capture_output=True)
-            self.assertEqual(_protocol(bare), {})
+            self.assertEqual(meeting_fs.read_protocol(bare), {})
             self.assertIsNone(participants_from_bare(bare))
             self.assertEqual(result_path(base, bare), "")
         finally:
@@ -82,7 +83,7 @@ class TestProtocol(unittest.TestCase):
                            capture_output=True)
             subprocess.run(["git", "push", "origin", "HEAD"], cwd=w,
                            check=True, capture_output=True)
-            self.assertEqual(_protocol(bare), {})
+            self.assertEqual(meeting_fs.read_protocol(bare), {})
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 

@@ -40,6 +40,29 @@ def run_git(workdir, *args, check=True, timeout=30):
     return r
 
 
+def read_protocol(bare):
+    """读取共享协议（`HEAD:protocol.json`）——**协议读取的唯一实现**。
+
+    为什么是单一来源、且必须走 bare：protocol.json 是**共享事实**
+    （loop/engine/viewer/wrapper 都依据它），只有 setup 写过一次并
+    commit+push 进 bare；work-<agent> 下的本地副本是工作副本，LLM 有
+    bash 工具可以改动它——若判定读本地，LLM 就能影响流程判定。
+    走 bare HEAD = 判定只认已提交事实（与"状态从 git 共享事实推导"一致）。
+
+    任何失败（bare 不存在 / 无 HEAD / 文件缺失 / JSON 坏）→ 返回 {}：
+    调用方各自决定失败语义（loop 门 `[fatal]`、engine 响亮抛错、
+    viewer 显示"未初始化"）——原语本身不做政策。
+    """
+    r = run_git(bare, "show", "HEAD:protocol.json", check=False)
+    if r.returncode != 0:
+        return {}
+    try:
+        data = json.loads(r.stdout)
+    except ValueError:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
 def git_head(workdir):
     """当前 HEAD。"""
     return run_git(workdir, "rev-parse", "HEAD").stdout.strip()
@@ -160,6 +183,77 @@ def extract_body(content):
         return None
     lines = content.splitlines()
     return "\n".join(lines[end + 1:]).strip()
+
+
+def remove_message(workdir, path):
+    """删除工作区文件（原语；调用方决定政策——engine 删除无效消息文件）。
+
+    fs 只做"删一个文件"的机械动作；为什么删、删了之后等谁重写，
+    都是 engine 的判定职责（L16 边界：IO 归 fs）。
+    """
+    os.remove(os.path.join(workdir, path))
+
+
+def write_text(workdir, path, text):
+    """写文本文件（原语；原子性不做——调用方随后 commit 才是权威化点）。"""
+    with open(os.path.join(workdir, path), "w") as f:
+        f.write(text)
+
+
+def file_size(workdir, path):
+    """文件字节数；不存在/不可读 → -1（调用方按"无效"处理）。
+
+    合并"存在性 + 大小"两次系统调用为一个判定接口：调用方（result.md
+    有效性校验）原本是 exists() + getsize() 两步，两步之间文件可能变化。
+    """
+    try:
+        return os.path.getsize(os.path.join(workdir, path))
+    except OSError:
+        return -1
+
+
+def cat_batch(bare, paths):
+    """`git cat-file --batch` 批量读（一次进程读多个 rev:path）——批量读取原语。
+
+    **必须二进制模式读**（用户 9343 现场修复）：cat-file 的 size 是**字节数**，
+    text 模式 read(size) 读**字符数**——中文 UTF-8 3 字节/字符 → 错位 →
+    后续 header 全乱 → readline 阻塞等数据 → 挂起死锁（真实 LLM 讨论中文，
+    FakeAgent 测试 ASCII 单字节所以本地测试没抓到——R1 根因复发）。
+    异常安全：try/finally 保证 stdin.close() + wait()（异常不泄漏进程，
+    否则 cat-file 常驻等 stdin EOF——top 3 个常驻进程即死锁现场）。
+
+    返回 {path: content}。为什么保留批量形态：调用方每轮循环顶都要读全部
+    消息（O(n) 次 git_show = 16.8× 回归，实测 733ms vs 43.6ms@498 条）。
+    """
+    if not paths:
+        return {}
+    proc = subprocess.Popen(
+        ["git", "-C", bare, "cat-file", "--batch"],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    result = {}
+    try:
+        for p in paths:
+            proc.stdin.write(f"HEAD:{p}\n".encode())
+            proc.stdin.flush()
+            header = proc.stdout.readline()   # 二进制：按字节读行
+            if not header:
+                break
+            header = header.decode("utf-8", "replace").strip()
+            parts = header.split()
+            # header 格式："<sha> <type> <size>" 或 "<rev> missing"
+            if len(parts) != 3 or parts[1] == "missing":
+                continue
+            try:
+                size = int(parts[2])
+            except ValueError:
+                continue
+            content = proc.stdout.read(size)   # 二进制：按字节读 content
+            proc.stdout.readline()             # 消费块尾换行
+            result[p] = content.decode("utf-8", "replace")
+    finally:
+        proc.stdin.close()
+        proc.wait()
+    return result
 
 
 def read_message(workdir, path):

@@ -103,7 +103,8 @@ class TestWakeLlm(unittest.TestCase):
         try:
             if max_wake_sec is not None:
                 meeting_loop.MAX_WAKE_SEC = max_wake_sec
-            subprocess.Popen = mock.Mock(return_value=proc)
+            self.popen_mock = mock.Mock(return_value=proc)
+            subprocess.Popen = self.popen_mock
 
             def fake_isdir(p):
                 if isinstance(p, str) and p.endswith("repo.git"):
@@ -125,6 +126,42 @@ class TestWakeLlm(unittest.TestCase):
         self._run(proc)  # 不抛异常即通过
         self.assertEqual(proc.calls, 1)
         self.assertFalse(proc.terminated)
+
+    def test_wake_injects_git_ceiling(self):
+        """A1：spawn 注入 GIT_CEILING_DIRECTORIES=讨论目录（且合并 os.environ
+        ——Popen 的 env 是整体替换，漏合并会丢 PATH）。"""
+        proc = FakeProc("ok")
+        self._run(proc)
+        env = self.popen_mock.call_args[1]["env"]
+        self.assertEqual(env["GIT_CEILING_DIRECTORIES"],
+                         os.path.dirname(self.workdir))
+        self.assertIn("PATH", env)          # 合并而非替换
+
+    def test_git_ceiling_semantics(self):
+        """A1 修复的前提语义（真实 git 行为，非 mock）：.git 被改名后，
+        git 从 workdir 发起会**上溯**到父仓库（问题存在性）；注入
+        GIT_CEILING_DIRECTORIES 后 fail-closed（修法有效）。"""
+        import shutil as _sh
+        tmp = tempfile.mkdtemp(prefix="ceiling-")
+        try:
+            proj = os.path.join(tmp, "proj")
+            os.makedirs(proj)
+            subprocess.run(["git", "init", "-q", proj], check=True)
+            work = os.path.join(proj, "work-a")
+            os.makedirs(work)
+            # 锁态：work 下无 .git（改名/不存在）
+            r_no_ceiling = subprocess.run(
+                ["git", "rev-parse", "--git-dir"], cwd=work,
+                capture_output=True, text=True)
+            self.assertEqual(r_no_ceiling.returncode, 0)   # 上溯成功（问题）
+            env = {**os.environ, "GIT_CEILING_DIRECTORIES": proj}
+            r_ceiling = subprocess.run(
+                ["git", "rev-parse", "--git-dir"], cwd=work, env=env,
+                capture_output=True, text=True)
+            self.assertNotEqual(r_ceiling.returncode, 0)   # fail-closed
+            self.assertIn("not a git repository", r_ceiling.stderr)
+        finally:
+            _sh.rmtree(tmp, ignore_errors=True)
 
     def test_dir_removed_during_wake(self):
         """目录被清理：SystemExit(0) + pi 被 terminate。"""

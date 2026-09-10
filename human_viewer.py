@@ -28,30 +28,20 @@ import os
 import sys
 import time
 
+import meeting_fs
 from meeting_fs import (run_git, git_show, git_head, is_message_file,
                         parse_log_nameonly, extract_body, parse_frontmatter)
 from meeting_engine import aggregate_mode, POLL_INTERVAL
 
 
-def _protocol(bare):
-    """HEAD:protocol.json → dict（读不到 → {}）。"""
-    r = run_git(bare, "show", "HEAD:protocol.json", check=False)
-    if r.returncode != 0:
-        return {}
-    try:
-        return json.loads(r.stdout)
-    except ValueError:
-        return {}
-
-
 def participants_from_bare(bare):
     """参与者列表（单一事实源 = bare HEAD 的 protocol.json）。"""
-    return _protocol(bare).get("participants") or None
+    return meeting_fs.read_protocol(bare).get("participants") or None
 
 
 def result_path(base, bare):
     """result.md 实际位置（work-<resultWriter>/result.md，与 --wait 一致）。"""
-    rw = _protocol(bare).get("resultWriter", "")
+    rw = meeting_fs.read_protocol(bare).get("resultWriter", "")
     return os.path.join(base, f"work-{rw}", "result.md") if rw else ""
 
 

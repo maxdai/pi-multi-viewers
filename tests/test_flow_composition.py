@@ -26,7 +26,7 @@ from meeting_core import (aggregate_mode as core_aggregate_mode,
                           can_start_rr, has_new_messages_for_me,
                           should_write_af, validate_and_fix)
 from meeting_engine import (participants, result_writer, _each_agent_messages,
-                            _each_agent_last, human_msg_count,
+                            each_agent_last, human_msg_count,
                             _meeting_speak_count, rr_next_speaker,
                             rr_active_count, write_protocol_signal,
                             commit_new_files, finalize_discussion)
@@ -114,7 +114,7 @@ class TestFlowComposition(unittest.TestCase):
         # E3/E5：bare 组装（setup commit 后无消息文件）
         messages = _each_agent_messages(self.bare, ps)
         self.assertEqual(messages, {"a": [], "b": []})
-        lasts = _each_agent_last(self.bare, ps)
+        lasts = each_agent_last(self.bare, ps)
         self.assertEqual(lasts, {"a": None, "b": None})
 
         # C9：全 None → meeting
@@ -154,13 +154,13 @@ class TestFlowComposition(unittest.TestCase):
         commit_new_files(self.wb, "b", head, "meeting")
 
         messages = _each_agent_messages(self.bare, ["a", "b"])
-        lasts = _each_agent_last(self.bare, ["a", "b"])
+        lasts = each_agent_last(self.bare, ["a", "b"])
         self.assertEqual(core_aggregate_mode(lasts), "meeting")
 
         # 全员 freezing → all-freezing
         write_protocol_signal(self.wa, "a", "freezing", "meeting")
         write_protocol_signal(self.wb, "b", "freezing", "meeting")
-        lasts2 = _each_agent_last(self.bare, ["a", "b"])
+        lasts2 = each_agent_last(self.bare, ["a", "b"])
         self.assertEqual(core_aggregate_mode(lasts2), "all-freezing")
 
     # ---- 链 4：配额（E9 + E10 → 冻结判定）----
@@ -194,17 +194,17 @@ class TestFlowComposition(unittest.TestCase):
         write_protocol_signal(self.wa, "a", "freezing", "meeting")
         write_protocol_signal(self.wb, "b", "freezing", "meeting")
         # 全员 af（C7 宽松判定 → E12 写 af）
-        lasts = _each_agent_last(self.bare, ["a", "b"])
+        lasts = each_agent_last(self.bare, ["a", "b"])
         self.assertTrue(should_write_af({a: lasts[a]["type"] for a in lasts}))
         from meeting_engine import write_af_if_no_rr
         write_af_if_no_rr(self.bare, self.wa, "a", ["a", "b"])
         write_af_if_no_rr(self.bare, self.wb, "b", ["a", "b"])
-        lasts = _each_agent_last(self.bare, ["a", "b"])
+        lasts = each_agent_last(self.bare, ["a", "b"])
         self.assertTrue(can_start_rr({a: lasts[a]["type"] for a in lasts}))
 
         # starter pass 带 next → RR 模式
         write_protocol_signal(self.wa, "a", "pass", "round-robin", "b")
-        lasts = _each_agent_last(self.bare, ["a", "b"])
+        lasts = each_agent_last(self.bare, ["a", "b"])
         self.assertEqual(core_aggregate_mode(lasts), "round-robin")
 
         # E7：next 轮转

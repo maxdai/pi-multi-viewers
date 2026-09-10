@@ -18,7 +18,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from meeting_engine import (
     participants, result_writer, _each_agent_messages, _cat_batch,
-    _each_agent_last, aggregate_mode, rr_next_speaker, rr_active_count,
+    each_agent_last, aggregate_mode, rr_next_speaker, rr_active_count,
     _meeting_speak_count, human_msg_count, _produced, write_af_if_no_rr,
     write_protocol_signal, respond_with_fallback, commit_new_files,
     _is_committed, _stall_elapsed, _result_md_valid, finalize_discussion,
@@ -149,15 +149,15 @@ class TestBareRead(unittest.TestCase):
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
-    def test_each_agent_last(self):
+    def testeach_agent_last(self):
         tmp, base, bare, works = make_env()
         try:
             # 无消息 → None
-            self.assertEqual(_each_agent_last(bare, ["a", "b"]),
+            self.assertEqual(each_agent_last(bare, ["a", "b"]),
                              {"a": None, "b": None})
             write_and_commit(works["a"], "a", 1,
                              fm_extra={"next": "b", "seen_at": "h1"})
-            lasts = _each_agent_last(bare, ["a", "b"])
+            lasts = each_agent_last(bare, ["a", "b"])
             self.assertEqual(lasts["a"], {"type": "message", "mode": "meeting",
                                           "next": "b"})
             self.assertEqual(lasts["b"], None)
@@ -368,7 +368,7 @@ class TestProtocolSignal(unittest.TestCase):
             self.assertEqual(fm["mode"], "round-robin")
             self.assertEqual(fm["next"], "b")
             # bare 可见（push 成功）
-            self.assertEqual(_each_agent_last(bare, ["a", "b"])["a"]["type"],
+            self.assertEqual(each_agent_last(bare, ["a", "b"])["a"]["type"],
                              "pass")
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
@@ -596,14 +596,14 @@ class TestStall(unittest.TestCase):
     def test_result_md_valid(self):
         tmp = tempfile.mkdtemp(prefix="resmd-")
         try:
-            p = os.path.join(tmp, "result.md")
-            self.assertFalse(_result_md_valid(p))  # 不存在
-            with open(p, "w") as f:
+            work = tmp                     # 签名 = workdir（内部走 fs.file_size）
+            self.assertFalse(_result_md_valid(work))         # 不存在
+            with open(os.path.join(work, "result.md"), "w") as f:
                 f.write("短")
-            self.assertFalse(_result_md_valid(p))  # < 50 字符
-            with open(p, "w") as f:
+            self.assertFalse(_result_md_valid(work))         # < 50 字节
+            with open(os.path.join(work, "result.md"), "w") as f:
                 f.write("x" * 60)
-            self.assertTrue(_result_md_valid(p))
+            self.assertTrue(_result_md_valid(work))
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 

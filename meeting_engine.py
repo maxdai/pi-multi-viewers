@@ -33,6 +33,7 @@ from meeting_fs import (
     read_point, read_message, write_message, commit_message, setup_commit,
     run_git, parse_frontmatter, serialize_message,
     git_show, is_message_file, parse_log_nameonly,
+    read_protocol, cat_batch, remove_message, write_text, file_size,
 )
 from meeting_core import (
     should_write_af, can_start_rr, validate_and_fix, is_all_last_in,
@@ -53,15 +54,30 @@ def log(agent, msg):
 # ---------------------------------------------------------------
 
 def participants(workdir):
-    """参与者列表（order）。"""
-    proto = json.load(open(os.path.join(workdir, "protocol.json")))
-    return list(proto.get("participants", []))
+    """参与者列表（order）——单一来源 = bare HEAD 的 protocol.json。
+
+    保留 workdir 签名（调用点零改动）：函数体内自推 `bare =
+    dirname(workdir)/repo.git`。读**bare**而非本地副本的理由见
+    meeting_fs.read_protocol docstring（LLM 有 bash，可改本地副本）。
+    """
+    bare = os.path.join(os.path.dirname(workdir), "repo.git")
+    return list(read_protocol(bare).get("participants", []))
 
 
 def result_writer(workdir):
-    """resultWriter（收尾写者）。"""
-    proto = json.load(open(os.path.join(workdir, "protocol.json")))
-    return proto.get("resultWriter", participants(workdir)[-1])
+    """resultWriter（收尾写者）；未配置 → 参与者末位。
+
+    注意默认值必须**惰性求值**：`dict.get(k, participants(workdir)[-1])`
+    的第二参数总会被求值——既多读一次协议，又会在 participants 为空时
+    抛 IndexError（即使 resultWriter 已配置）。
+    """
+    bare = os.path.join(os.path.dirname(workdir), "repo.git")
+    proto = read_protocol(bare)
+    rw = proto.get("resultWriter")
+    if rw:
+        return rw
+    parts = list(proto.get("participants", []))
+    return parts[-1] if parts else ""
 
 
 def _each_agent_messages(bare, agents):
@@ -100,52 +116,15 @@ def _each_agent_messages(bare, agents):
 
 
 def _cat_batch(bare, paths):
-    """git cat-file --batch 批量读文件内容（review5 M3）。
+    """批量读消息内容（薄包装 → meeting_fs.cat_batch；IO 归 fs）。
 
-    用 subprocess 管道：输入 rev:path 列表，输出为 "<sha> <type> <size>\n<content>\n"
-    块序列。HEAD 消息文件用 HEAD:path 语法（--batch 支持 rev:path）。
-    返回 {path: content}。
-
-    **必须二进制模式读**（用户 9343 现场修复）：cat-file 的 size 是**字节数**，
-    text 模式 read(size) 读**字符数**——中文 UTF-8 3 字节/字符 → 错位 →
-    后续 header 全乱 → readline 阻塞等数据 → 挂起死锁（真实 LLM 讨论中文，
-    FakeAgent 测试 ASCII 单字节所以本地测试没抓到——R1 根因复发）。
-    异常安全：try/finally 保证 stdin.close() + wait()（异常不泄漏进程，
-    否则 cat-file 常驻等 stdin EOF——top 3 个常驻进程即死锁现场）。
+    docstring 与二进制读的完整说明见 fs 原语；性能理由（批量 vs 逐条
+    O(n) subprocess）随函数迁移至此：调用方每轮循环顶都读全部消息。
     """
-    if not paths:
-        return {}
-    import subprocess as sp
-    proc = sp.Popen(
-        ["git", "-C", bare, "cat-file", "--batch"],
-        stdin=sp.PIPE, stdout=sp.PIPE, stderr=sp.DEVNULL)
-    result = {}
-    try:
-        for p in paths:
-            proc.stdin.write(f"HEAD:{p}\n".encode())
-            proc.stdin.flush()
-            header = proc.stdout.readline()   # 二进制：按字节读行
-            if not header:
-                break
-            header = header.decode("utf-8", "replace").strip()
-            parts = header.split()
-            # header 格式："<sha> <type> <size>" 或 "<rev> missing"
-            if len(parts) != 3 or parts[1] == "missing":
-                continue
-            try:
-                size = int(parts[2])
-            except ValueError:
-                continue
-            content = proc.stdout.read(size)   # 二进制：按字节读 content
-            proc.stdout.readline()             # 消费块尾换行
-            result[p] = content.decode("utf-8", "replace")
-    finally:
-        proc.stdin.close()
-        proc.wait()
-    return result
+    return cat_batch(bare, paths)
 
 
-def _each_agent_last(bare, agents):
+def each_agent_last(bare, agents):
     """bare 树中每个 agent 最后一条消息的 {type, mode, next}。
 
     由 _each_agent_messages（唯一 bare 读取）派生：取每 agent 列表末尾。
@@ -173,7 +152,7 @@ def aggregate_mode(bare, agents):
     仅 stall 分支用（pull 后需要新鲜数据重检，L-M2）；循环内模式判定
     用循环顶组装的 messages 派生。
     """
-    return core_aggregate_mode(_each_agent_last(bare, agents))
+    return core_aggregate_mode(each_agent_last(bare, agents))
 
 
 def rr_next_speaker(bare, agents):
@@ -298,7 +277,7 @@ def write_af_if_no_rr(bare, workdir, agent, agents):
     # pull 后重取 head（pull 可能带回新 commit，seen_at 必须是最新共享事实）
     head = git_head(workdir)
     # 重检：bare 是否有 RR 已启动（任一 agent 最后一条 mode==round-robin）
-    lasts = _each_agent_last(bare, agents)
+    lasts = each_agent_last(bare, agents)
     if any(v is not None and v.get("mode") == "round-robin" for v in lasts.values()):
         log(agent, "bare 已有 RR 启动——放弃补写 af")
         return
@@ -418,7 +397,7 @@ def commit_new_files(workdir, agent, head, mode):
             continue
         if not fm:
             log(agent, f"[fix] {f} 无 frontmatter 或块不完整（parse 返回 None，A1），删除等待重写")
-            os.remove(path)
+            remove_message(workdir, f"{agent}/{f}")
             continue
         fixed, errors = validate_and_fix(fm, agent, mode, head)
         if errors:
@@ -426,7 +405,7 @@ def commit_new_files(workdir, agent, head, mode):
             # 设计 11.4）+ 删除滞留文件（审核#14：否则孤儿未跟踪文件每轮
             # 重扫白耗重试；删除后序号复用，responder 重写自然接续）
             log(agent, f"[fix] {f} 校验失败: {errors}——删除，等待重写")
-            os.remove(path)
+            remove_message(workdir, f"{agent}/{f}")
             continue
         # RR 阶段（round-robin）的消息必须带 next（轮转链）——
         # next 是轮转顺序（协议状态），LLM 不知道，loop 确定性补写。
@@ -441,8 +420,7 @@ def commit_new_files(workdir, agent, head, mode):
             fixed["next"] = order[(order.index(agent) + 1) % len(order)]
         new_content = serialize_message(fixed, content)
         if new_content and new_content != content:
-            with open(path, "w") as fh:
-                fh.write(new_content)
+            write_text(workdir, f"{agent}/{f}", new_content)
         git_commit(workdir, [f"{agent}/{f}"],
                    commit_message(agent, f.split(".")[0]))
     git_push(workdir)
@@ -487,18 +465,13 @@ def _stall_elapsed(bare, agents, last_head, last_head_time, head):
     return 0.0, head, time.time()
 
 
-def _result_md_valid(result_path):
-    """result.md 有效性校验：存在 + 非空 + 有实质内容（>50 字符）。
+def _result_md_valid(workdir):
+    """result.md 有效性校验：存在 + 非空 + 有实质内容（>50 字节）。
 
     LLM 可能写空文件/仅 frontmatter——存在性检查退化为空提交（审核 A2）。
+    存在性与大小经由 fs.file_size 一次判定（-1 = 不存在/不可读）。
     """
-    try:
-        if not os.path.exists(result_path):
-            return False
-        size = os.path.getsize(result_path)
-        return size > 50
-    except OSError:
-        return False
+    return file_size(workdir, "result.md") > 50
 
 
 def finalize_discussion(workdir, agent, responder, head, reason="consensus"):
@@ -515,20 +488,20 @@ def finalize_discussion(workdir, agent, responder, head, reason="consensus"):
     # ② 校验 result.md 有效（存在 + 非空）；无则重试（无静默铁律的扩展）
     result_path = os.path.join(workdir, "result.md")
     for _ in range(MAX_RETRY):
-        if _result_md_valid(result_path):
+        if _result_md_valid(workdir):
             break
         log(agent, "result.md 未生成或无效——重试")
         responder(workdir, agent, head, [], False, False, True,
                   finalizing=True, finalize_reason=reason)
     # ③ 有效则 commit（产物非消息）；重试耗尽仍无效 → loop 兜底代写
     #    （保证收尾必有产物，不静默缺失——审核 A2）
-    if _result_md_valid(result_path):
+    if _result_md_valid(workdir):
         _commit_result_md(workdir, agent, "discuss: result.md")
     else:
         log(agent, "result.md 重试后仍无效——loop 兜底代写")
-        with open(result_path, "w") as fh:
-            fh.write("# 讨论结论\n\n（resultWriter 未能生成有效 result.md，"
-                     f"由本地循环兜底代写。收尾原因：{reason}）\n")
+        write_text(workdir, "result.md",
+                   "# 讨论结论\n\n（resultWriter 未能生成有效 result.md，"
+                   f"由本地循环兜底代写。收尾原因：{reason}）\n")
         _commit_result_md(workdir, agent, "discuss: result.md (loop fallback)")
     write_protocol_signal(workdir, agent, "concluded", "concluded")
     return True
@@ -581,7 +554,10 @@ def agent_loop(workdir, agent, responder, max_meeting=10, max_rr=7,
             head = git_head(workdir)
             bare = os.path.join(os.path.dirname(workdir), "repo.git")
             # 循环顶一次全量 bare 读取（L-M2：消除每轮 3-4 次重复 subprocess
-            # 重读——同一轮内无写入、数据稳定），其余判定全部派生：
+            # 重读——同一轮内无写入、数据稳定）。**消息列表类**判定由此派生
+            # （lasts/mode/冻结集合等）；**计数与时序类**判定（human_msg_count /
+            # _stall_elapsed / RR 分支的 rr_next_speaker）各自单独读 bare——
+            # 它们无状态、按需调用，不为省 ~3ms/轮 而跨函数传快照。
             messages = _each_agent_messages(bare, agents)
             lasts = {a: (messages[a][-1] if messages[a] else None)
                      for a in agents}
@@ -723,8 +699,9 @@ def agent_loop(workdir, agent, responder, max_meeting=10, max_rr=7,
                 continue
 
             # ⑤.2 配额耗尽 → 确定性 freezing（review5 M2：提前为独立分支，
-            # 在触发判断之前——全员配额尽 + 无新消息时，配额检查在触发之后
-            # 永不执行（无人发言→无触发→永不收敛，只靠脆弱 stall）。
+            # 在触发判断之前。**为什么必须提前**：若把配额检查放在触发之后，
+            # "全员配额尽 + 无新消息"场景下触发恒为假 → 配额检查不可达 →
+            # 只能等 stall 超时兜底（脆弱且慢）。
             # 配额 = 从 bare 重算（_meeting_speak_count：数 mode==meeting 且
             # type==message 的消息），不存 RAM（审核#1）。
             # 已冻结守卫：配额尽者写第一条 freezing 后不再重复写（否则每轮

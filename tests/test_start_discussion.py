@@ -1,10 +1,12 @@
 # -*- coding: utf-8 -*-
 """start_discussion.py 生成函数单测（审计#4：环境生成层质量防线）。"""
+import json
 import os
 import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -107,6 +109,14 @@ class TestGenAgentDef(unittest.TestCase):
 
 
 class TestGenAgensMd(unittest.TestCase):
+    def test_declares_project_rules_precedence(self):
+        """A4：协议含"项目规则 vs 本协议"的优先级声明——主项目 AGENTS.md
+        会被 fork 模式自动发现（cwd 祖先链），其流程性条款（改动先 commit /
+        阶段性 push）与讨论协议"不要执行 git 操作"冲突，必须显式消解。"""
+        md = gen_agents_md(Args(), "a", ["a", "b"])
+        self.assertIn("上下文中的项目规则", md)
+        self.assertIn("优先于", md)
+
     def test_background_default(self):
         md = gen_agents_md(Args(), "a", ["a", "b"])
         self.assertIn("## 背景", md)
@@ -175,6 +185,124 @@ class TestMisc(unittest.TestCase):
             self.assertEqual(status, "stopped")
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
+
+
+
+class TestCheckStatusConcluded(unittest.TestCase):
+    """B2：check_status 的 concluded 判定 = 状态机同一定义（aggregate_mode），
+    不是 `git grep` 全文匹配——后者会被 result.md/消息正文里的
+    `type: concluded` 行误触发（误报 done → --wait 落无上界轮询）。"""
+
+    def _env(self, tmp, with_result_md, msg_type, result_body_extra=""):
+        base = os.path.join(tmp, "disc")
+        bare = os.path.join(base, "repo.git")
+        os.makedirs(base)
+        subprocess.run(["git", "init", "--bare", bare], check=True,
+                       capture_output=True)
+        w = os.path.join(base, "work-a")
+        subprocess.run(["git", "clone", bare, w], check=True, capture_output=True)
+        for k, v in (("user.name", "t"), ("user.email", "t@t")):
+            subprocess.run(["git", "config", k, v], cwd=w, check=True)
+        with open(os.path.join(w, "protocol.json"), "w") as f:
+            json.dump({"participants": ["a"], "resultWriter": "a"}, f)
+        os.makedirs(os.path.join(w, "a"))
+        with open(os.path.join(w, "a/0001.md"), "w") as f:
+            f.write(f"---\nfrom: a\ntype: {msg_type}\n---\n\n正文\n")
+        if with_result_md:
+            # 正文里**含** `type: concluded` 行（代码块/协议片段引用）——
+            # 全文 grep 会命中，聚合判定不会
+            with open(os.path.join(w, "result.md"), "w") as f:
+                f.write("# 结论\n\n```\ntype: concluded\n```\n"
+                        + result_body_extra)
+        subprocess.run(["git", "add", "-A"], cwd=w, check=True, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "setup"], cwd=w, check=True,
+                       capture_output=True)
+        subprocess.run(["git", "push", "origin", "HEAD"], cwd=w, check=True,
+                       capture_output=True)
+        return base
+
+    def test_result_md_text_with_concluded_not_done(self):
+        """result.md 正文含 `type: concluded` 行、但消息未 concluded →
+        不得报 done（旧实现 git grep 全文会命中 → 误报）。"""
+        import start_discussion as sd
+        with tempfile.TemporaryDirectory() as tmp:
+            base = self._env(tmp, with_result_md=True, msg_type="message")
+            self.assertEqual(sd.check_status(base), "stalled")   # 无 loop
+
+    def test_message_concluded_gives_done(self):
+        """消息 type=concluded（协议信号）→ done。"""
+        import start_discussion as sd
+        with tempfile.TemporaryDirectory() as tmp:
+            base = self._env(tmp, with_result_md=True, msg_type="concluded")
+            self.assertEqual(sd.check_status(base), "done")
+
+    def test_no_result_md_not_done(self):
+        """无 result.md → 非 done（stopped/stalled 分支）。"""
+        import start_discussion as sd
+        with tempfile.TemporaryDirectory() as tmp:
+            base = self._env(tmp, with_result_md=False, msg_type="message")
+            self.assertIn(sd.check_status(base), ("stopped", "stalled"))
+
+
+class TestLoopPids(unittest.TestCase):
+    """A2：loop 存活判据 = argv 精确匹配（/proc 扫描），不是命令行文本正则。
+
+    生产形态的 loop 是 `python3 <base>/meeting_loop.py <workdir> <agent>`
+    ——argv 里恰有等于 `<base>/meeting_loop.py` 的元素。
+    """
+
+    def _fake_loop(self, base, arg_extra=("w", "a")):
+        """起一个假 loop（内容仅 sleep），argv 与生产形态同构。"""
+        os.makedirs(base, exist_ok=True)
+        loop_py = os.path.join(base, "meeting_loop.py")
+        with open(loop_py, "w", encoding="utf-8") as f:
+            f.write("import time\ntime.sleep(30)\n")
+        p = subprocess.Popen([sys.executable, loop_py, *arg_extra],
+                             stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL)
+        time.sleep(0.3)      # 等 /proc 就绪
+        return p
+
+    def test_detects_real_loop_argv(self):
+        """生产形态的 loop 被检出（存活性判据有效）。"""
+        import start_discussion as sd
+        with tempfile.TemporaryDirectory() as base:
+            p = self._fake_loop(base)
+            try:
+                self.assertIn(str(p.pid), sd._loop_pids(base))
+                self.assertTrue(sd._loops_alive(base))
+            finally:
+                p.terminate()
+                p.wait(timeout=5)
+
+    def test_text_mention_not_detected(self):
+        """命令行**提到**该路径但不是独立 argv（bash -c 包装、探针命令）
+        → 不检出——根治自匹配（文本正则会把调用者自身算进来）。"""
+        import start_discussion as sd
+        with tempfile.TemporaryDirectory() as base:
+            loop_py = os.path.join(base, "meeting_loop.py")
+            # 该进程的 argv = [bash, -c, "sleep 3  # <loop_py>"]——文本含
+            # loop_py，但没有等于它的独立 argv 元素
+            p = subprocess.Popen(["bash", "-c", f"sleep 3  # {loop_py}"],
+                                 stdout=subprocess.DEVNULL,
+                                 stderr=subprocess.DEVNULL)
+            try:
+                time.sleep(0.3)
+                self.assertEqual(sd._loop_pids(base), [])
+                self.assertFalse(sd._loops_alive(base))
+            finally:
+                p.terminate()
+                p.wait(timeout=5)
+
+    def test_dead_loop_not_detected(self):
+        """已退出进程不残留判定（僵尸/回收后不再计入）。"""
+        import start_discussion as sd
+        with tempfile.TemporaryDirectory() as base:
+            p = self._fake_loop(base)
+            p.terminate()
+            p.wait(timeout=5)
+            time.sleep(0.2)
+            self.assertEqual(sd._loop_pids(base), [])
 
 
 if __name__ == "__main__":

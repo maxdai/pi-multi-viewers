@@ -20,6 +20,7 @@ import glob
 import json
 import os
 import meeting_fs
+import meeting_engine
 import re
 import shutil
 import subprocess
@@ -35,6 +36,12 @@ GIT_EMAIL = "meeting-bot@local"
 
 
 def run_cmd(cmd, cwd=None, check=True):
+    """执行一次性环境命令（git init/clone/config/push 等）。
+
+    **读路径不走这里**：读取仓库内容的 git 命令一律用 `meeting_fs.run_git`
+    （带 core.quotepath=false 加固——中文视角名下 quotepath 转义会让路径
+    解析失效；两个入口并存时加固只覆盖一半，是同类问题的潜在根因）。
+    """
     r = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
     if check and r.returncode != 0:
         raise RuntimeError(f"cmd {cmd} 失败: {r.stderr.strip()}")
@@ -850,11 +857,37 @@ def cleanup_discussion(base):
     print(f"[cleanup] 已删除目录 {base}（含 pi-sessions）")
 
 
+def _loop_pids(base):
+    """本讨论存活的 loop PID 列表。
+
+    **判据 = argv 精确相等，不是命令行文本正则**（2026-09-10 评审 A2）：
+    `pgrep -f <正则>` 会匹配到**任何**命令行里含该文本的进程——从 shell
+    包装调用时（`bash -c "...pgrep -f 'meeting_loop.py.*<base>'..."`）会命中
+    调用者自身，误判"有 loop 存活"。项目已固化该教训（docs/test-methodology.md
+    方法 2：方括号技巧或精确 PID），此处用 /proc 的 argv 逐项比较根治：
+    只看 argv 里是否有**恰好等于** `os.path.join(base, "meeting_loop.py")`
+    的元素——与启动方（Popen cmd 的第一个参数）同一构造。
+    附带：/proc 扫描 ≈1.1ms vs pgrep ≈5.9ms（不构成选型理由，理由是判据精度）。
+
+    读不到 /proc（非 Linux/权限）→ 返回空列表（fail-open：与"无 loop"同义，
+    只影响状态显示，不影响流程——loop 自身不依赖此函数）。
+    """
+    target = os.path.join(base, "meeting_loop.py")
+    pids = []
+    for entry in glob.glob("/proc/[0-9]*/cmdline"):
+        try:
+            with open(entry, "rb") as f:
+                argv = f.read().decode("utf-8", "replace").split("\0")
+        except OSError:
+            continue
+        if target in argv:
+            pids.append(entry.split("/")[2])
+    return pids
+
+
 def _loops_alive(base):
-    """讨论的 loop 进程是否存活（目录边界匹配，防 discussion-1 匹配 -1x）。"""
-    r = run_cmd(["pgrep", "-f",
-             f"meeting_loop.py.*{re.escape(base)}( |$|/)"], check=False)
-    return bool(r.stdout.strip())
+    """讨论的 loop 进程是否存活（argv 精确匹配，见 _loop_pids）。"""
+    return bool(_loop_pids(base))
 
 
 def check_status(base):
@@ -875,18 +908,24 @@ def check_status(base):
     bare = os.path.join(base, "repo.git")
     if not os.path.isdir(bare):
         return "not-exists"
-    r = run_cmd(["git", "log", "--all", "--format=%H", "--", "result.md"],
-            cwd=bare, check=False)
+    # 读路径统一走 fs.run_git（quotepath 加固单点；run_cmd 只做一次性
+    # 环境命令——init/clone/config/push）
+    r = meeting_fs.run_git(bare, "log", "--all", "--format=%H", "--",
+                           "result.md", check=False)
     if r.stdout.strip():
         # done 需 concluded 存在（review5 A5）——rw 写 result.md 后、
         # concluded 前崩溃 → 只保存报告但未收尾，误报完成会丢流程语义。
-        # 结构化检查：读 HEAD 树消息文件 frontmatter 的 type（不用
-        # git grep 全文——正文出现 "type: concluded" 会误匹配）。
-        # 排除 work-human（human 插话若带 type: concluded 会误判 done——
-        # human 视而不见原则，e2e7 评审指出 grep */*.md 扫全树含 human/）
-        r2 = run_cmd(["git", "grep", "-l", "^type: concluded$", "HEAD", "--",
-                  ":(exclude)human/*"], cwd=bare, check=False)
-        if r2.stdout.strip():
+        #
+        # concluded 判定复用**状态机同一定义**（engine.aggregate_mode →
+        # core：任一 agent 末条 type==concluded）。**不用 git grep 全文**：
+        # 那是行文本匹配、扫 HEAD 全树——result.md 正文或消息正文里出现的
+        # `type: concluded` 会误报 done（实测），随后 --wait 落回
+        # incremental 轮询（无上界）。grep 的"任一消息含 concluded"宽语义
+        # 也没有消费方（唯一写者是协议信号，写后 agent 随即退出 →
+        # "信号存在"与"末条==concluded"在可达状态下等价，宽语义只有假阳性）。
+        # human 消息天然排除（aggregate_mode 只按 participants 取末条）。
+        agents = meeting_fs.read_protocol(bare).get("participants", [])
+        if meeting_engine.aggregate_mode(bare, agents) == "concluded":
             return "done"
         # 有 result.md 无 concluded：看 loop 存活区分收尾中/收尾中断
         return "running" if _loops_alive(base) else "stalled"
@@ -1047,14 +1086,7 @@ def main():
                     print(line)
                     print()
                 print("[wait] 讨论完成 ✅")
-                rw = ""
-                r = run_cmd(["git", "show", "HEAD:protocol.json"], cwd=bare,
-                        check=False)
-                if r.returncode == 0:
-                    try:
-                        rw = json.loads(r.stdout).get("resultWriter", "")
-                    except ValueError:
-                        rw = ""
+                rw = meeting_fs.read_protocol(bare).get("resultWriter", "")
                 rp = os.path.join(base, f"work-{rw}", "result.md") if rw else ""
                 print(f"[wait] result.md: {rp}")
                 return 0
@@ -1072,12 +1104,11 @@ def main():
             print(f"错误: 环境不存在 {base}")
             sys.exit(1)
         print(f"[start] 跳过环境生成——只启动已有环境")
-        # 参与者从已有环境的 protocol.json 读（单一事实源，不依赖 CLI）
-        try:
-            r = run_cmd(["git", "show", "HEAD:protocol.json"],
-                    cwd=os.path.join(base, "repo.git"), check=False)
-            participants = json.loads(r.stdout).get("participants", [])
-        except (ValueError, OSError):
+        # 参与者从已有环境的 protocol.json 读（单一事实源 = bare HEAD，
+        # 不依赖 CLI；读不到 → 明确报错，不静默）
+        participants = meeting_fs.read_protocol(
+            os.path.join(base, "repo.git")).get("participants", [])
+        if not participants:
             print("[error] 无法读取已有环境 protocol.json")
             sys.exit(1)
     else:

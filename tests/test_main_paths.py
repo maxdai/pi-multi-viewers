@@ -186,6 +186,14 @@ class TestMeetingLoopMain(unittest.TestCase):
             proto["forkMode"] = "curated"       # rename 前的历史值
             with open(proto_path, "w") as f:
                 json.dump(proto, f)
+            # 协议权威在 bare HEAD（LLM 可改本地副本 → 判定不读本地）——
+            # 提交后才生效
+            subprocess.run(["git", "add", "-A"], cwd=w, check=True,
+                           capture_output=True)
+            subprocess.run(["git", "commit", "-m", "bad forkMode"], cwd=w,
+                           check=True, capture_output=True)
+            subprocess.run(["git", "push", "origin", "HEAD"], cwd=w,
+                           check=True, capture_output=True)
             r = subprocess.run(
                 [sys.executable, "meeting_loop.py", w, "b"],
                 cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -199,6 +207,26 @@ class TestMeetingLoopMain(unittest.TestCase):
             self.assertFalse(os.path.isdir(sessions_dir) and
                              [f for f in os.listdir(sessions_dir)
                               if f.startswith("fork-src-")])
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_local_protocol_edit_ignored(self):
+        """协议权威在 bare：本地副本改动（未提交）不影响 —— 防止 LLM 用
+        写权限改 protocol.json 影响流程判定（engine/loop/check_status 均
+        走 fs.read_protocol(bare)）。"""
+        tmp, base, w = self._make_done_env()
+        try:
+            proto_path = os.path.join(w, "protocol.json")
+            with open(proto_path) as f:
+                proto = json.load(f)
+            proto["resultWriter"] = "a"          # 本地改成另一个收尾者
+            proto["maxMeetingRounds"] = 999      # 本地放大配额
+            with open(proto_path, "w") as f:
+                json.dump(proto, f)
+            # 不提交——loop 读到的必须仍是 bare 的（resultWriter=b）
+            import meeting_engine as me
+            self.assertEqual(me.result_writer(w), "b")
+            self.assertEqual(me.participants(w), ["a", "b"])
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 

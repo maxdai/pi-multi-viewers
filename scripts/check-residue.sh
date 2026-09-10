@@ -95,15 +95,38 @@ except Exception:
 done
 
 # --- 2. 讨论/pi 进程 ---
-# 方括号技巧对 pgrep -f 无效（bash -c 命令行本身含 [m]eeting 字符串）——
-# 用 ps + grep + 过滤自身 shell PID（$$ 及其父链）
-for p in $(ps -eo pid,cmd | grep "[m]eeting_loop.py" | grep -v "grep\|bash -c" | awk '{print $1}'); do
-    echo "[残留-2] meeting_loop 进程 PID=$p: $(ps -p $p -o cmd= 2>/dev/null)"
-    RESIDUE=1
-done
-for p in $(ps -eo pid,cmd | grep "[p]i --mode json" | grep -v "grep\|bash -c" | awk '{print $1}'); do
-    echo "[残留-2] pi 进程 PID=$p"
-    RESIDUE=1
+# 判据 = **argv 逐项精确匹配**（读 /proc/<pid>/cmdline，NUL 分隔的原始 argv），
+# 不是命令行文本匹配：文本匹配会把"命令行里恰好提到 meeting_loop.py"的
+# 调用者自身也算进来（bash -c / grep 都在此列），过度依赖 grep -v 白名单
+# 过滤又会漏检（任何命令行含 "bash -c" 的真实进程）。
+# argv 精确匹配无此二难：`python3 .../meeting_loop.py <work> <agent>` 的
+# argv[1] 恰等于脚本路径；调用者的 -c 脚本只是**一个** argv 元素，不等。
+# 与 start_discussion._loop_pids 同一判据（python 侧用于存活检测）。
+_proc_argv_has() {   # $1=pid 目录，$2=精确参数
+    local d="$1" arg
+    while IFS= read -r -d '' arg; do
+        [ "$arg" = "$2" ] && return 0
+    done < "$d/cmdline" 2>/dev/null
+    return 1
+}
+for d in /proc/[0-9]*; do
+    [ -r "$d/cmdline" ] || continue
+    pid="${d#/proc/}"
+    # meeting_loop：argv 里出现以 meeting_loop.py 结尾的**独立参数**
+    while IFS= read -r -d '' arg; do
+        case "$arg" in
+            */meeting_loop.py)
+                echo "[残留-2] meeting_loop 进程 PID=$pid: $(ps -p "$pid" -o cmd= 2>/dev/null)"
+                RESIDUE=1
+                break
+                ;;
+        esac
+    done < "$d/cmdline" 2>/dev/null
+    # pi 进程：argv 里同时有 --mode 与 json 两个独立参数（fork 模式唤醒形态）
+    if _proc_argv_has "$d" "--mode" && _proc_argv_has "$d" "json"; then
+        echo "[残留-2] pi 进程 PID=$pid"
+        RESIDUE=1
+    fi
 done
 
 # --- 3. 讨论环境目录残留 ---

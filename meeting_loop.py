@@ -191,7 +191,15 @@ def _lock_git(workdir):
 
     LLM 有 bash 工具，理论上可执行 git commit/push 破坏 loop 的流程管理
     （绕过 commit_new_files 补全）。改名方案：LLM 对话期间 .git 不存在 →
-    任何 git 操作失败（"not a git repository"），loop 完成后改回。
+    **从该 workdir 发起**的 git 操作失败（git 不再上溯到主项目——由
+    `_run_wake_proc` 注入的 GIT_CEILING_DIRECTORIES 提供）；loop 完成后改回。
+
+    **守卫范围（重要，勿读成全称）**：只约束"从讨论 workdir 发起的 git
+    操作"。主项目仓库不在守卫范围——agent 的 cwd 就是主项目，它可以
+    直接在其中执行 git；那部分约束归指令层（工作协议"不要执行 git
+    操作"）+ 主项目 .gitignore（discuss-*/ 使讨论内容不会被杂散
+    `git add -A` 提交进主仓库）。要真正拦住主仓库需换机制类（沙箱/钩子），
+    经评估收益不支撑扩面（评审 A1 裁决记录）。
 
     归属说明（L4，e2e7 评审）：**刻意不搬到 meeting_fs**——_lock_git 与
     finally 里的 _unlock_git 同函数内配对出现（"加锁必有解锁"可就地验证，
@@ -204,24 +212,34 @@ def _lock_git(workdir):
         os.rename(git_dir, locked)
 
 
-def _unlock_git(workdir):
-    """LLM 对话完成后恢复本地 git：.git.locked 改回 .git。
+def restore_git_lock(workdir):
+    """把 .git.locked 改回 .git（锁恢复的唯一实现）。返回是否确实恢复。
 
-    finally 中调用——任何异常/超时路径都恢复（崩溃残留由
-    recover_git_lock 在下次启动时处理）。
+    纯函数 + 返回值：**只在确实恢复时**需要打日志（启动路径打、finally
+    路径不打——正常每轮都恢复不是事件，日志会变噪音）；调用方各自决定。
+    两个调用点：`_unlock_git`（finally，正常路径）与启动时的
+    `recover_git_lock`（崩溃残留路径）。
     """
     git_dir = os.path.join(workdir, ".git")
     locked = git_dir + ".locked"
     if os.path.isdir(locked) and not os.path.exists(git_dir):
         os.rename(locked, git_dir)
+        return True
+    return False
+
+
+def _unlock_git(workdir):
+    """LLM 对话完成后恢复本地 git：.git.locked 改回 .git。
+
+    finally 中调用——任何异常/超时路径都恢复（崩溃残留由下次启动时的
+    recover_git_lock 兜底）。正常恢复不打日志（每轮都发生）。
+    """
+    restore_git_lock(workdir)
 
 
 def recover_git_lock(workdir, agent):
-    """启动时恢复崩溃残留的 git 锁：.git.locked → .git。"""
-    git_dir = os.path.join(workdir, ".git")
-    locked = git_dir + ".locked"
-    if os.path.isdir(locked) and not os.path.exists(git_dir):
-        os.rename(locked, git_dir)
+    """启动时恢复崩溃残留的 git 锁：.git.locked → .git（确实恢复才记日志）。"""
+    if restore_git_lock(workdir):
         log(agent, "检测到 .git 残留锁（上次中断）——已恢复")
 
 
@@ -337,8 +355,18 @@ def _run_wake_proc(cmd, spawn_cwd, workdir, agent):
     # ——只取 session 头的兜底路径（sid 已预生成，续接不依赖 parse
     # 成功）。性能实测 ≈150-200 KB/唤醒、峰值亚 MB（不构成风险）；
     # 若改为流式读取，必须让"谁读 session 头"同样显式可见（可读性保留票）。
+    #
+    # GIT_CEILING_DIRECTORIES=<讨论目录>：**git 上溯防护**（实现 A1）。
+    # 本进程的 argv 就是 agent 会话里 bash 工具所继承的环境来源——
+    # 注入后，从 work-<agent> 发起的 git 不会上溯到主项目仓库。
+    # 为什么需要：_lock_git 把 work-<agent>/.git 改名后，git 的默认行为是
+    # **向上继续找仓库**——fork 模式下 cwd=主项目，实测锁态下
+    # `git rev-parse --git-dir` 从 workdir 发起会命中主项目 .git（rc=0），
+    # 守卫形同虚设（见 _lock_git docstring 的范围说明）。
+    # 注：Popen 的 env 是**整体替换**，必须合并 os.environ（否则丢 PATH）。
     proc = subprocess.Popen(cmd, cwd=spawn_cwd, stdout=subprocess.PIPE,
-                            stderr=subprocess.PIPE, text=True)
+                            stderr=subprocess.PIPE, text=True,
+                            env={**os.environ, "GIT_CEILING_DIRECTORIES": base})
     _current_proc = proc
     try:
         # 分片等待：每片检查讨论目录是否被清理（cleanup 删目录）——
@@ -516,10 +544,13 @@ if __name__ == "__main__":
     recover_git_lock(workdir, agent)
     pure = "--pure" in sys.argv
     mm, mr, st = 10, 7, 600
-    try:
-        proto = json.load(open(os.path.join(workdir, "protocol.json")))
-    except (OSError, ValueError) as e:
-        print(f"[fatal] protocol.json 读取失败: {e}", flush=True)
+    # 协议从 **bare HEAD** 读（单一来源 = 共享事实；本地副本 LLM 可改）——
+    # 与 engine participants()/check_status 同一原语
+    bare = os.path.join(os.path.dirname(workdir), "repo.git")
+    proto = meeting_fs.read_protocol(bare)
+    if not proto:
+        print(f"[fatal] protocol.json 读取失败（bare HEAD 无有效内容）: {bare}",
+              flush=True)
         sys.exit(1)
     if proto.get("pure"):
         pure = True

@@ -61,9 +61,11 @@ compaction 的 `firstKeptEntryId` 起 + 其后的条目"——窗口内含 compa
      值"）：`est ≤ max(预算, est(末条)) + Σ est(回扩条目) + est(preface)`；
      工程余量 ~53 万 tokens（消息预算 664k 量级），无需为此加保护。
    - `forkSourceDropped`：**双口径合计** = 预算裁剪丢弃数 + 结构规范化移除数
-     （移除窗口内 compaction 条目——见 §一 与不变量 I5）；日志与验收用
-     （丢弃数为 0 而规模远超预算 = 异常信号）。产物须闭合：
-     源保留区条目数 = 产物非 preface 条目数 + `forkSourceDropped`。
+     （移除窗口内 compaction 条目——见 §一 与不变量 I5）；**仅 `budget`
+     模式写该字段**（compaction/full 不做预算裁剪，header 无此键——读者
+     勿以为三模式皆有）。日志与验收用（丢弃数为 0 而规模远超预算 = 异常
+     信号）。产物须闭合：源保留区条目数 = 产物非 preface 条目数 +
+     `forkSourceDropped`。
 2. **消费侧规模（验收/成本基准）**：**唤醒 1 的第一次请求** `input +
    cacheRead`（含系统提示与工具定义）。引用必须带唤醒序号，否则数字不可比。
 3. **校准比（est → 真实）**：唤醒 1 ≈ **1.66×**（e2e10 三点独立样本：
@@ -73,6 +75,20 @@ compaction 的 `firstKeptEntryId` 起 + 其后的条目"——窗口内含 compa
    累积增长**（实测 w1 132k → w5 192–207k；满程外推 290–350k，标注为外推）。
    容量估算不得用 "est × agent 数 × 轮数"。
 5. **预计值不得用作验收口径**：日志中的派生数字只是可读性便利。
+
+### 数字的归宿（一个数字只留一个"家"）
+
+| 类型 | 例 | 去处 |
+|---|---|---|
+| **结构性质**（不随数据漂移） | "批量读一次进程 / 逐条读 O(n) 子进程" | **docstring**（随函数迁移，不得丢失） |
+| **修复依据的实测值** | 733ms/43.6ms、16.8×、1054.6ms→1.0ms | **commit message**（带口径 + 来源） |
+| **长期可复用的口径数字** | 构建 181ms/55MB、pi 会话 RSS ~1GB、校准比 1.66× | **本节**（design.md 口径） |
+
+判据：**会在下一次评审中被引用吗？** 会 → 本节；只解释本次为何这样改 → commit。
+commit 是溯源记录、本节是长期引用点——不并存两份权威值（长期引用点漂移时
+就地更新带新口径）。
+**术语注意**：上表第一类**不称"不变量"**——本仓"不变量"已专指 fork 源产物
+结构的 I1–I5（docstring / 设计文档 / 测试名三处对齐），一词两义会造成歧义。
 
 ### 数字的四个类别（每个数字必须能回答"它是什么"）
 
@@ -111,6 +127,25 @@ compaction 的 `firstKeptEntryId` 起 + 其后的条目"——窗口内含 compa
    形状猜（形状启发式会把 provider 丢掉，静默解析到同名模型）。
 6. **viewers/ 稳定视角资产**：`--prepare` 快照进 `spec/agents/`（可按场改），
    文件名即 agent 名（中文合法），排序定 starter/RR/resultWriter，≥2 视角。
+   **视角文件只写视角内容**——身份（"你是 X"）、参与者名单、消息格式、
+   独立纪律都由脚本从 agent 名生成（agent 名 = 文件名，单一来源；手写
+   身份必然与文件名漂移）；**空视角任务书拒绝启动**（无 lenses 的 agent
+   会让多视角退化成同名随机视角）。
+7. **协议单一来源 = `bare HEAD:protocol.json`**（`meeting_fs.read_protocol`
+   唯一实现）：engine/loop/viewer/status 全部经它读取，**不读 workdir 本地
+   副本**——本地副本是 LLM 可写的工作副本，判定读本地等于把流程判定暴露给
+   被审查者。附带修掉 `result_writer` 的默认值求值缺陷（原实现
+   `proto.get("resultWriter", participants(workdir)[-1])` 的第二参数无条件
+   求值：每次读两遍协议，且 participants 为空时抛 IndexError——即使
+   resultWriter 已配置）。
+8. **状态判定复用状态机定义**：`check_status` 的 concluded 判定调
+   `meeting_engine.aggregate_mode`（core 单一判定），**不用 `git grep` 全文
+   匹配**——行文本匹配会被 result.md / 消息正文里的 `type: concluded`
+   误触发（实测误报 done → `--wait` 落无上界轮询）。
+9. **git 守卫范围 = 从讨论 workdir 发起的操作**（`GIT_CEILING_DIRECTORIES`
+   注入于 spawn）；主项目仓库不在守卫范围（agent 的 cwd 就是主项目，其
+   约束归指令层 + 主项目 `.gitignore`）。要拦主仓库需换机制类（沙箱/钩子），
+   经评估收益不支撑扩面。
 
 ### 被否决方案（含重估触发条件）
 
@@ -118,7 +153,7 @@ compaction 的 `firstKeptEntryId` 起 + 其后的条目"——窗口内含 compa
 |---|---|---|---|
 | **省一次重读**（首唤时把 tail id 从 `build_fork_source` 传给 `append_handoff_turns`） | ①收益仅 0.011s（budget 产物；full 产物 134ms + 37MB 峰值）；②方案自败（保留重读兜底则被指瑕疵的推导代码一行未减）；③新增静默失败面（tail id 可能过期 → 接错节点）；④把 session 格式知识泄漏到 loop 层。同层替代已评估未采纳：`append_handoff_turns` 只保留尾行（不跨层传状态、不新增失效面）——量级 0.4s vs ~130s/唤醒（0.3%） | 源 ≥100MB 或 N≫3（内存 ≈2.5×文件大小×N） | `meeting_fs.append_handoff_turns` / `meeting_loop` 首唤路径 |
 | **共享 budget 基座**（三 agent 共用缓存） | 引入持久状态 + 失效规则 + 跨进程原子写/清理义务，与"单一事实源/确定性归 loop/无静默"冲突；收益 ≈181ms×3（本机、15.3MB 源实测；旧记录写 ≈0.28s×3——口径不可考，两者差 55%，按修订记录并列不静默替换），相对 ~130s/唤醒可忽略 | N≫3 且会话至 100MB 量级 | `meeting_loop` 首唤路径 |
-| **裁剪改流式 / 环形缓冲** | 唯一收益是内存峰值 +37MB；会扩大"先折叠再裁"不变量的证明面 | 源规模使峰值内存成为实际瓶颈时 | `meeting_fs._budget_entries` |
+| **裁剪改流式 / 环形缓冲** | 收益 = 内存峰值 +37MB **与解析时间**（实测 `json.loads` 占构建耗时 **49%**、约 90% 解析条目最终被预算弃用）——两者都随源规模线性增长；会扩大"先折叠再裁"不变量的证明面 | 源规模使峰值内存或解析耗时成为实际瓶颈时（观测点：首唤日志的构建耗时/峰值 RSS） | `meeting_fs._budget_entries` |
 | **两阶段裁剪**（先廉价估算定窗，再只折叠保留区） | 收益 ≈7ms，为可忽略收益引入复杂度 | 折叠成本成为可测瓶颈（当前 0.01s/2788 条） | `meeting_fs._budget_entries` |
 | **预算提前配置化**（进 protocol/spec） | 灵敏度低：每 10k est ≈ 2.5% 消息预算；80k→53k 仅省 6.6%，代价是保留窗口缩短；配置面成本（每个读者须知其存在/语义/边界） | 出现明确的"按讨论调预算"需求 | `meeting_fs` 常量块 |
 | **改写锚点**（把被裁掉/被移除的 compaction 的 `firstKeptEntryId` 批量改写为窗口内条目） | 语义上伪造历史字段（锚点是 pi 写的记录，不是我们的）；且中间锚仍会悬空——**已撤回**（其测量 0.07ms/0.27ms、est 恒等**不并入成稿**） | 出现必须让所有历史锚都可解析的消费者时 | `meeting_fs` compaction/budget 边界 |
@@ -147,6 +182,7 @@ compaction 的 `firstKeptEntryId` 起 + 其后的条目"——窗口内含 compa
 |---|---|---|
 | 三处冗余 pass（`_entry_text` 双算 / dropped 全量重算 / `_shrink_value` 先拷贝再比较） | 合计 ~11ms = 构建的 **6%**（本机、15.3MB 源） | 首唤日志已含**构建耗时与峰值 RSS**（`fork 源（… 构建 181ms/55MB）`）→ 构建 >1s 时复测占比（占比是插桩型判据，非监控） |
 | O(源) 内存（全量 `entries` + `folded` 驻留） | 15.3MB 源 → RSS 峰值 **55MB**（≈3.6×）；3 loop 并发 ≈165MB | 同一日志的 RSS 字段 >~500MB，或源 >~100MB |
+| **pi 会话常驻内存（fork 场景主导项）** | 实测 **~1GB/个**（935 / 1157 / 954MB，`ps -o rss`；本机 16GB、当时会话长度含扩展）——比 loop 侧高一个量级，容量规划须以它为准 | N≥8 或内存紧张时复核（`ps -o rss` 逐 pi 进程） |
 | 每 agent 各自构建一次 fork 源（不共享） | ≈181ms×3；三 loop 是独立进程，共享需跨进程协调/失效/原子写义务（与「共享 budget 基座」否决同因） | N≫3 且会话至 100MB 量级 |
 | `_est_tokens` 对空文本返 1 | 量级 <0.01%；由 I4（集合身份）消解——est 是集合近似指纹而非数值承诺 | 若将来把 est 用作容量硬判据 |
 
