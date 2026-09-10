@@ -199,6 +199,20 @@ class TestCheckAftBash(unittest.TestCase):
         r = self._run('{"bash": true}')
         self.assertIn("[aft] 警告", r.stderr)
 
+    def test_schema_url_not_treated_as_comment(self):
+        """含 URL 的合法 JSON（$schema 里的 https://）不得误报 unparseable
+        ——朴素 `//` 去注释会吃掉 URL 后半段（实测 2026-09-10）。"""
+        r = self._run('{\n  "$schema": "https://example.com/aft.schema.json",\n'
+                      '  "bash": false\n}')
+        self.assertNotIn("[aft] 警告", r.stderr)
+
+    def test_jsonc_comments_still_supported(self):
+        """jsonc 注释（行/块）仍能解析，且注释里的 // 不误伤字符串。"""
+        r = self._run('{\n  // 行注释 with // inside\n'
+                      '  "$schema": "https://x/y.json", /* 块注释 */\n'
+                      '  "bash": false\n}')
+        self.assertNotIn("[aft] 警告", r.stderr)
+
     def test_legacy_aft_json_path(self):
         r = self._run('{"bash": false}', use_new_path=False)
         self.assertNotIn("[aft] 警告", r.stderr)

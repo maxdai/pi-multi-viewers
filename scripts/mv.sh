@@ -48,10 +48,6 @@ fail() {
     exit 1
 }
 
-# 检查 aft 是否关闭 bash 接管（用户 2026-08-31：0.2.0 依赖 PI_SESSION_ID 等
-# 注入——aft 接管 bash 后这些变量不再注入，插话扩展找不到分析目录）
-# 仅 --prepare/--start 需要（模型继承 + 目录含 sid）；不阻断（手动跑分析
-# 仍可用），只给醒目警告。
 check_aft_bash() {
     # 预检：aft 是否关闭 bash 接管（只警告不阻断——手动跑讨论仍可用）。
     # W3 收归（e2e7 评审）：三段近重复文案合并；JSONC 解析改用 python
@@ -70,14 +66,55 @@ check_aft_bash() {
         return
     fi
     # python 解析（jsonc：去注释后 json.loads；bash 字段 false 才算关闭）
+    # 注释剥离必须**字符串感知**——朴素正则会把 `"$schema": "https://…"`
+    # 里的 // 当注释吃掉 → 解析失败误报 unparseable（实测 2026-09-10）。
     local verdict
     verdict="$(python3 - "$cfg" <<'PYEOF'
-import json, re, sys
+import json, sys
+
+
+def strip_jsonc(txt):
+    """去 // 与 /* */ 注释（字符串感知：URL 里的 // 不能被吃）。"""
+    out, i, n = [], 0, len(txt)
+    in_str = esc = False
+    while i < n:
+        c = txt[i]
+        if in_str:
+            out.append(c)
+            if esc:
+                esc = False
+            elif c == "\\":
+                esc = True
+            elif c == '"':
+                in_str = False
+            i += 1
+            continue
+        if c == '"':
+            in_str = True
+            out.append(c)
+            i += 1
+            continue
+        if c == "/" and i + 1 < n and txt[i + 1] == "/":
+            while i < n and txt[i] != "\n":
+                i += 1
+            continue
+        if c == "/" and i + 1 < n and txt[i + 1] == "*":
+            i += 2
+            while i + 1 < n and not (txt[i] == "*" and txt[i + 1] == "/"):
+                i += 1
+            i += 2
+            continue
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
 try:
-    txt = open(sys.argv[1], encoding="utf-8").read()
-    txt = re.sub(r"//[^\n]*", "", txt)
-    txt = re.sub(r"/\*.*?\*/", "", txt, flags=re.S)
-    cfg = json.loads(txt)
+    raw = open(sys.argv[1], encoding="utf-8").read()
+    try:
+        cfg = json.loads(raw)          # 合法 JSON（最常见）直接解析
+    except ValueError:
+        cfg = json.loads(strip_jsonc(raw))
 except Exception:
     print("unparseable")
     sys.exit(0)
@@ -88,6 +125,7 @@ PYEOF
         _aft_warn "$cfg 中未设置 \"bash\": false（解析结果: $verdict）"
     fi
 }
+
 
 require_dir() {
     local dir="$1"
