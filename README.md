@@ -35,6 +35,35 @@ provider 直接 400 拒绝（`pi --fork` 原生命令同样超窗）。budget �
 ~80k est，首唤（唤醒 1 首请求）≈132k tokens，可正常进行（e2e 实测：
 三视角 15–19 分钟完整收敛）。权威口径与测点见 docs/design.md §二。
 
+## 安装
+
+**官方方式（npm 发版后）**：
+
+```bash
+pi install npm:pi-multi-viewers
+```
+
+**开发机（当前可用方式）**——两步都要做，缺一不可：
+
+```bash
+pi install /root/pi-multi-viewers        # ① 注册包（写 ~/.pi/agent/settings.json 的 packages）
+cd ~/.pi/agent/npm && npm install file:/root/pi-multi-viewers --legacy-peer-deps   # ② 建 node_modules 符号链接
+```
+
+- ① 让 pi 发现包内资源（prompt 由 `package.json` 的 `pi.prompts` 声明加载）
+- ② 让 prompt 里引用的固定路径 `~/.pi/agent/npm/node_modules/pi-multi-viewers/scripts/mv.sh` 可达；
+  用 `npm install file:` 而非手建 `ln -s`——手建是 extraneous 条目，后续任何
+  `npm install` 都会清掉它（上游两次实测教训）
+- **只支持用户级安装**（项目级 `.pi/npm/` 下 prompt 引用的固定路径不可达）
+- 改动 prompt 后 **reload** 生效（pi 从包实时读取；开发机 symlink 下改仓库即生效）
+
+核验（不要用命令行长度判断）：
+
+```bash
+readlink -f ~/.pi/agent/npm/node_modules/pi-multi-viewers   # 应指向 /root/pi-multi-viewers
+ls ~/.pi/agent/npm/node_modules/pi-multi-viewers/scripts/mv.sh
+```
+
 ## 用法
 
 ```

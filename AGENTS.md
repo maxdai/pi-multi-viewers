@@ -164,12 +164,22 @@ loop、状态从 git 共享事实推导、单一事实源 = protocol.json、无�
 5. **行为/语义修改同步文档**：对协议行为、产品形态的任何修改，必须同步
    README 与相关模板。
 
-## 安装/发版状态（2026-09-09）
+## 安装/发版状态（2026-09-10）
 
-- **当前形态**：prompt × 1（multi-viewers，未安装进 pi 环境）+ wrapper。
-  extension（如 /multi-viewers-say）与 npm 发版 0.1.0 均为待办。
-- **发版时参照** pi-agents-helper 的成熟路径：`pi install npm:pi-multi-viewers`
-  用户级安装（package.json pi.prompts 声明）；开发机在 `~/.pi/agent/npm/`
-  用 `npm install file:/root/pi-multi-viewers --legacy-peer-deps`（file: 依赖
-  声明防 npm prune 清掉 symlink——上游两次实测教训）；prompt 路径用固定
-  安装路径（只支持用户级）；改动 prompt 后 reload 生效。
+- **当前形态**：prompt × 1（multi-viewers，开发机已注册可用）+ wrapper。
+  extension（如 `/multi-viewers-say`）与 npm 发版 0.1.0 均为待办。
+- **开发机安装（两步，缺一不可；2026-09-10 实测）**：
+  ① `pi install /root/pi-multi-viewers`——**注册包**（写
+  `~/.pi/agent/settings.json` 的 `packages` 数组）；pi 不是"扫 node_modules
+  就加载"，漏这步则命令完全不出现（实测踩过）；
+  ② `cd ~/.pi/agent/npm && npm install file:/root/pi-multi-viewers
+  --legacy-peer-deps`——建 `node_modules/pi-multi-viewers` symlink（prompt
+  里引用的固定路径要靠它可达）+ 把 `file:` 依赖写进 package.json（防后续
+  `npm install` prune——手建 symlink 是 extraneous 条目，上游两次实测被清）。
+  `pi list` 可查看已注册包。
+- **发版时**参照 pi-agents-helper 成熟路径：`pi install npm:pi-multi-viewers`
+  用户级安装（package.json `pi.prompts` 声明）；prompt 路径用固定安装路径
+  （只支持用户级，项目级 `.pi/npm/` 下不可达）；改动 prompt 后 reload 生效。
+- **核验法**（照上游约定，不用命令行长度判断）：
+  `readlink -f ~/.pi/agent/npm/node_modules/pi-multi-viewers` 指向仓库根，
+  且该路径下 `scripts/mv.sh` 存在。
