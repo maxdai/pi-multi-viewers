@@ -53,27 +53,39 @@ fail() {
 # 仅 --prepare/--start 需要（模型继承 + 目录含 sid）；不阻断（手动跑分析
 # 仍可用），只给醒目警告。
 check_aft_bash() {
+    # 预检：aft 是否关闭 bash 接管（只警告不阻断——手动跑讨论仍可用）。
+    # W3 收归（e2e7 评审）：三段近重复文案合并；JSONC 解析改用 python
+    # json 库（原 sed 剔注释 + grep 粗解析对字段位置/嵌套/多行值均不可靠）。
+    _aft_warn() {
+        echo "[aft] 警告: $1" >&2
+        echo "[aft]   本工具需要 \"bash\": false（关闭 aft 对 bash 的接管），" >&2
+        echo "[aft]   否则插话扩展找不到分析目录、models.md 退化为兜底值。" >&2
+        echo "[aft]   修复: 在 $HOME/.config/cortexkit/aft.jsonc 中添加 " >&2
+        echo "[aft]   \"bash\": false 并重启 pi。" >&2
+    }
     local cfg="$HOME/.config/cortexkit/aft.jsonc"
-    local json=""
-    if [ -f "$cfg" ]; then
-        json="$(cat "$cfg")"
-    else
-        # 兼容旧路径 aft.json
-        [ -f "$HOME/.config/cortexkit/aft.json" ] && json="$(cat "$HOME/.config/cortexkit/aft.json")"
-    fi
-    if [ -z "$json" ]; then
-        echo "[aft] 警告: 未找到 $HOME/.config/cortexkit/aft.jsonc" >&2
-        echo "[aft]   本工具需要 \"bash\": false（关闭 aft 对 bash 的接管），否则" >&2
-        echo "[aft]   插话扩展找不到分析目录、models.md 退化为兜底值。" >&2
-        echo "[aft]   修复: 在 $HOME/.config/cortexkit/aft.jsonc 中添加 \"bash\": false 并重启 pi。" >&2
+    [ -f "$cfg" ] || cfg="$HOME/.config/cortexkit/aft.json"
+    if [ ! -f "$cfg" ]; then
+        _aft_warn "未找到 $HOME/.config/cortexkit/aft.jsonc"
         return
     fi
-    # 粗解析：bash 顶层字段（jsonc 允许注释，逐行剔除）
-    if ! echo "$json" | sed 's|//.*||' | grep -q '"bash"[[:space:]]*:[[:space:]]*false'; then
-        echo "[aft] 警告: $HOME/.config/cortexkit/aft.jsonc 中未设置 \"bash\": false" >&2
-        echo "[aft]   当前 aft 会接管 bash 工具，PI_SESSION_ID 等环境变量不注入——" >&2
-        echo "[aft]   插话扩展找不到分析目录、models.md 退化为兜底值。" >&2
-        echo "[aft]   修复: 添加 \"bash\": false 并重启 pi。" >&2
+    # python 解析（jsonc：去注释后 json.loads；bash 字段 false 才算关闭）
+    local verdict
+    verdict="$(python3 - "$cfg" <<'PYEOF'
+import json, re, sys
+try:
+    txt = open(sys.argv[1], encoding="utf-8").read()
+    txt = re.sub(r"//[^\n]*", "", txt)
+    txt = re.sub(r"/\*.*?\*/", "", txt, flags=re.S)
+    cfg = json.loads(txt)
+except Exception:
+    print("unparseable")
+    sys.exit(0)
+print("off" if cfg.get("bash") is False else "on")
+PYEOF
+)"
+    if [ "$verdict" != "off" ]; then
+        _aft_warn "$cfg 中未设置 \"bash\": false（解析结果: $verdict）"
     fi
 }
 

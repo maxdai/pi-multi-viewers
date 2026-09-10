@@ -182,6 +182,11 @@ def _lock_git(workdir):
     LLM 有 bash 工具，理论上可执行 git commit/push 破坏 loop 的流程管理
     （绕过 commit_new_files 补全）。改名方案：LLM 对话期间 .git 不存在 →
     任何 git 操作失败（"not a git repository"），loop 完成后改回。
+
+    归属说明（L4，e2e7 评审）：**刻意不搬到 meeting_fs**——_lock_git 与
+    finally 里的 _unlock_git 同函数内配对出现（"加锁必有解锁"可就地验证，
+    异常路径一目了然）；搬去 fs 层会使该验证跨文件，收益为负（os.rename
+    零成本、无 I/O 封装价值）。
     """
     git_dir = os.path.join(workdir, ".git")
     locked = git_dir + ".locked"
@@ -291,6 +296,11 @@ def wake_llm(workdir, agent, prompt, pure=False, fork_source=None, fork_cwd=None
     _lock_git(workdir)
     global _current_proc
     try:
+        # stdout 全量缓冲（A，e2e7 评审）：唯一消费者是下方 parse_session
+        # ——只取 session 头的兜底路径（sid 已预生成，续接不依赖 parse
+        # 成功）。性能实测 ≈150-200 KB/唤醒、峰值亚 MB（不构成风险），
+        # 铁律 2 的实现复杂度论证记录于此；若将来改为流式读取，必须
+        # 让"谁读 session 头"同样显式可见（可读性保留票）。
         proc = subprocess.Popen(cmd, cwd=spawn_cwd, stdout=subprocess.PIPE,
                                 stderr=subprocess.PIPE, text=True)
         _current_proc = proc

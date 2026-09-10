@@ -99,8 +99,7 @@ def _detect_pi_model_thinking():
     try:
         sf = os.environ.get("PI_SESSION_FILE") or ""
         if not (sf and os.path.isfile(sf)):
-            enc = "--" + os.getcwd().strip("/").replace("/", "-") + "--"
-            sd = os.path.join(PI_AGENT_DIR, "sessions", enc)
+            sd = pi_sessions_dir(os.getcwd())
             cands = sorted(
                 f for f in os.listdir(sd) if f.endswith(".jsonl")
             ) if os.path.isdir(sd) else []
@@ -402,6 +401,18 @@ def _resolve_path(p):
 MAX_AGENT_NAME_LEN = 32
 
 
+def pi_sessions_dir(cwd):
+    """主 pi session 目录（编码约定单点，T7 收归 e2e7 评审）。
+
+    pi 的 session 目录编码 = "--" + 去首尾斜杠 + 内斜杠换 "-" + "--"
+    （/root/x → --root-x--；/tmp → --tmp--）。此前该约定在
+    _detect_pi_model_thinking 与 resolve_fork_source 两处字面量重复，
+    AGENTS.md 明言"编码错一根横线 = 静默解析不到"——风险点不应复制。
+    """
+    enc = "--" + cwd.strip("/").replace("/", "-") + "--"
+    return os.path.join(PI_AGENT_DIR, "sessions", enc)
+
+
 def check_agent_name(name):
     """单个 agent/视角名合法性（T4 收归，e2e7 评审）：唯一实现。
 
@@ -471,8 +482,8 @@ def resolve_fork_source():
     if not sid:
         return None, ("错误: PI_SESSION_ID 未注入——多视角分析必须在主 pi "
                       "session 内经 wrapper 启动（见 README 环境要求）")
-    enc = "--" + os.getcwd().strip("/").replace("/", "-") + "--"
-    sdir = os.path.join(PI_AGENT_DIR, "sessions", enc)
+    sdir = pi_sessions_dir(os.getcwd())
+    enc = os.path.basename(sdir)
     try:
         cands = sorted(f for f in os.listdir(sdir) if f.endswith(".jsonl"))
     except OSError:
@@ -930,23 +941,34 @@ def main():
         print(f"[status] {check_status(base)}")
         return
     if args.wait:
+        # T1 收归（e2e7 评审）：进展展示复用 human_viewer.incremental
+        # （原内联 65 行自行 git log 全量 + 手工解析 frontmatter——与
+        # viewer 两套输出格式、非增量、概念丢失）。incremental 走
+        # since..HEAD 增量 + 统一 format_message。
+        import human_viewer
         sys.stdout.reconfigure(line_buffering=True)
         print(f"[wait] 等待讨论完成: {base}")
-        seen = set()
+        bare = os.path.join(base, "repo.git")
+        agents = human_viewer.participants_from_bare(bare) or []
+        since = ""   # 首次全量（--wait 一次性观察，无游标持久需求）
+        first = True
         while True:
             state = check_status(base)
             if state == "stalled":
-                # 收尾中断（T3 修复）：result.md 已提交但 concluded 未落盘
-                # 且无 loop 存活——等待不会有进展，有界退出（此前无限轮询）
                 print("[wait] 收尾中断（result.md 已提交、concluded 缺失、"
                       "无 loop 存活）——停止等待；可读 result.md 或 --cleanup")
                 return 1
-            if state == "done":
+            if state == "not-exists":
+                print(f"[wait] 讨论不存在: {base}")
+                return 1
+            _mode, lines, head, done = human_viewer.incremental(
+                bare, agents, since)
+            if done:
+                for line in lines:
+                    print(line)
+                    print()
                 print("[wait] 讨论完成 ✅")
-                # resultWriter 从 git 读（单一事实源——protocol.json 在 work 里，
-                # --wait 不依赖具体 work）
                 rw = ""
-                bare = os.path.join(base, "repo.git")
                 r = run(["git", "show", "HEAD:protocol.json"], cwd=bare,
                         check=False)
                 if r.returncode == 0:
@@ -957,51 +979,14 @@ def main():
                 rp = os.path.join(base, f"work-{rw}", "result.md") if rw else ""
                 print(f"[wait] result.md: {rp}")
                 return 0
-            if state == "not-exists":
-                print(f"[wait] 讨论不存在: {base}")
-                return 1
-            # 进展显示（git log 新 commit + summary——对齐 RR，meeting 版重写时丢了）
-            bare = os.path.join(base, "repo.git")
-            r = run(["git", "log", "--format=%H %s"], cwd=bare, check=False)
-            for line in r.stdout.splitlines():
-                if line in seen:
-                    continue
-                seen.add(line)
-                if "discuss: setup" in line:
-                    continue
-                # subject 格式 "discuss: <作者>/<序号>" 或 "discuss: result.md"
-                s = line.split(" ", 1)[1] if " " in line else line
-                fname = s[len("discuss: "):].strip() if s.startswith("discuss: ") else s
-                shown = False
-                if "/" in fname and not fname.endswith(".md"):
-                    h = line.split(" ", 1)[0]
-                    r2 = run(["git", "-C", bare, "show", f"{h}:{fname}.md"],
-                             check=False)
-                    if r2.returncode == 0 and r2.stdout.startswith("---"):
-                        # 读 type + summary（control message 状态由 type 决定，
-                        # 不靠 summary——LLM 写的 freezing summary 不统一，
-                        # 用户 9434：pass 就显示 [pass]）
-                        mtype = ""
-                        summ = ""
-                        for fl in r2.stdout.splitlines():
-                            if fl.startswith("type:"):
-                                mtype = fl[len("type:"):].strip()
-                            elif fl.startswith("summary:"):
-                                summ = fl[len("summary:"):].strip()
-                        if mtype and mtype != "message":
-                            # control message：显示状态标记，不显示 summary
-                            print(f"[wait] {time.strftime('%H:%M:%S')} 新进展: {s}"
-                                  f"\n[wait]    └ [{mtype}]")
-                            shown = True
-                        elif summ:
-                            print(f"[wait] {time.strftime('%H:%M:%S')} 新进展: {s}"
-                                  f"\n[wait]    └ {summ}")
-                            shown = True
-                if not shown:
-                    print(f"[wait] {time.strftime('%H:%M:%S')} 新进展: {s}")
+            for line in lines:
+                print(f"[wait] {time.strftime('%H:%M:%S')} 新进展:")
+                print(line)
+                print()
+            since = head or since
+            if first:
+                first = False
             time.sleep(10)
-        return 0
-
     # 创建（--start 总是 setup；--skip-setup = 跳过创建，只启动已有环境）
     if args.skip_setup:
         if not os.path.exists(base):
