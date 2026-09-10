@@ -1,5 +1,6 @@
 # 多视角分析协议（meeting 引擎，{N} 视角）
 
+**你是 {AGENT_NAME}**（视角任务书见 system prompt）。
 参与者：{PARTICIPANTS_DISPLAY}。分析主题见 `question.md`。
 
 ## 背景

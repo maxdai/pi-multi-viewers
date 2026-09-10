@@ -342,9 +342,10 @@ def gen_agent_def(agent, participants, models=None, stances=None, extra=None):
     Pi 没有 opencode agent 定义机制；每个 agent 的身份/分工通过
     --append-system-prompt 注入。模型与 thinking 写进 pi-agent.json，
     由 meeting_loop 启动时以 --model/--thinking 传入。
-    分层（2026-08-09）：身份/特有内容在此；共享协议/背景在 AGENTS.md；
-    话题/立场/问题在 question.md。
-    extra: spec/agents/X.md 内容（跳过首行）追加到正文尾部。
+    分层：**身份由本函数生成**（agent 名 = 文件名，单一来源）；视角内容
+    （lenses/边界/交锋义务）来自 spec/agents/X.md 或 viewers/X.md。
+    共享协议/背景在 AGENTS.md；话题/立场/问题在 question.md。
+    extra: 视角任务书正文——追加在"你的视角任务书"标题之后。
     （thinking/variant 由 pi-agent.json 承载，不在本函数定义中）
     """
     model_body = ""
@@ -361,7 +362,9 @@ def gen_agent_def(agent, participants, models=None, stances=None, extra=None):
               .replace("{MODEL_BODY}", model_body)
               .replace("{STANCE_REF}", stance_ref))
     if extra:
-        result += "\n\n" + extra + "\n"
+        # 视角正文接在"## 你的视角任务书"标题下（本函数只管拼接，
+        # 身份与任务书的分界由模板定义）
+        result = result.rstrip() + "\n\n" + extra.strip() + "\n"
     return result
 
 

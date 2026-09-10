@@ -4,3 +4,6 @@
 参与者：{PARTICIPANTS_DISPLAY}。分析主题见 question.md。
 {STANCE_REF}按 AGENTS.md 的协议规则行事。
 {MODEL_BODY}
+
+## 你的视角任务书
+
