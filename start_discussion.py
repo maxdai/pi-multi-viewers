@@ -401,8 +401,9 @@ def gen_protocol(topic, participants, max_meeting, max_rr, pure=False,
         proto["pure"] = True
     if fork_source:
         # fork 模式（多视角）：首唤挂载主 session + cwd=主项目
-        # forkMode: active（默认，压缩态）/ full（全量，用户 2026-09-10
-        # 参数化——验证/保留上下文两种策略均一等公民）
+        # forkMode: active（默认，压缩态）/ curated（预算裁剪 + 折叠，
+        # 恢复 pi 压缩不变量——长会话 fork 的可行模式）/ full（全量，
+        # 用户 2026-09-10 参数化：验证/保留上下文两种策略均一等公民）
         proto["forkSource"] = fork_source
         proto["forkCwd"] = fork_cwd or os.getcwd()
         proto["forkMode"] = fork_mode
@@ -911,9 +912,10 @@ def main():
                         help="生成 spec 骨架到 DIR（如 --spec-gen myspec/；不需 --dir）")
     parser.add_argument("--spec", default=None,
                         help="讨论规格目录（内容源：question/background/agents，优先于 CLI 内容参数）")
-    parser.add_argument("--fork-mode", default="active", choices=["active", "full"],
-                        help="fork 裁剪策略：active=压缩态（默认，省 token）；"
-                             "full=全量（保留完整上下文）")
+    parser.add_argument("--fork-mode", default="active",
+                        choices=["active", "full", "curated"],
+                        help="fork 裁剪策略：active=压缩态（默认，条目级）；"
+                             "full=全量；curated=预算裁剪+折叠（长会话可行）")
     parser.add_argument("--fork-source", default=None,
                         help="主 session 文件绝对路径（fork-only）：写入 "
                              "protocol.json，各 agent 首唤用活跃视图挂载主 "

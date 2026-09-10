@@ -415,19 +415,108 @@ class TestActiveForkSource(unittest.TestCase):
             self.assertEqual(lines[1]["id"], "m1")
             self.assertEqual(lines[0]["forkSourceMode"], "full")  # 全量兜底标记
 
-    def test_force_full(self):
-        """force_full=True：有 compaction 的源也全量（forkMode 参数化，
+    def test_full_mode(self):
+        """mode="full"：有 compaction 的源也全量（forkMode 参数化，
         用户 2026-09-10——验证全量历史+切换叙事场景）。"""
         with tempfile.TemporaryDirectory() as tmp:
             src = self._make_src(tmp)  # 含 compaction + keep1
             out = os.path.join(tmp, "full.jsonl")
             n, err = build_active_fork_source(src, out, "u", "/p",
-                                              force_full=True)
+                                              mode="full")
             self.assertIsNone(err)
             lines = [json.loads(x) for x in open(out)]
             self.assertEqual(len(lines), 4)  # header + m1 + c1 + k1（全量）
             self.assertEqual(lines[0]["forkSourceMode"], "full")
             self.assertEqual(lines[1]["id"], "m1")  # 旧历史保留
+
+    def test_curated_budget_trim(self):
+        """curated：预算裁剪——只保留最近窗口，旧条目丢弃并生成上下文说明。
+
+        对齐 pi 自身 compaction 的不变量（摘要 + 最近窗口）——长会话 fork
+        唯一可行形态（原始条目会超模型窗口，实测 2026-09-10）。
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            src = os.path.join(tmp, "big.jsonl")
+            with open(src, "w", encoding="utf-8") as f:
+                f.write('{"type":"session","id":"s","version":3}\n')
+                big = "字" * 9000     # 每条 ~3k tokens
+                for i in range(10):
+                    f.write(json.dumps({
+                        "type": "message", "id": f"m{i}", "parentId": None,
+                        "timestamp": "2026-09-10T00:00:00.000Z",
+                        "message": {"role": "user", "content": [
+                            {"type": "text", "text": f"#{i} " + big}]}},
+                        ensure_ascii=False) + "\n")
+                f.write(json.dumps({
+                    "type": "compaction", "id": "c1", "parentId": "m9",
+                    "timestamp": "2026-09-10T00:01:00.000Z",
+                    "summary": "早期摘要", "firstKeptEntryId": "m0"},
+                    ensure_ascii=False) + "\n")
+            out = os.path.join(tmp, "curated.jsonl")
+            n, err = build_active_fork_source(src, out, "u", "/p",
+                                              mode="curated", keep_tokens=10000)
+            self.assertIsNone(err)
+            lines = [json.loads(x) for x in open(out)]
+            self.assertEqual(lines[0]["forkSourceMode"], "curated")
+            self.assertLessEqual(lines[0]["forkSourceTokens"], 10000)
+            kept = [e for e in lines[1:] if e.get("type") == "message"]
+            self.assertLess(len(kept), 11)              # 确实裁掉了旧条目
+            self.assertIn("m9", kept[-1]["id"])         # 最近一条必留
+            preface = kept[0]["message"]["content"][0]["text"]
+            self.assertIn("已省略", preface)             # 省略说明
+            self.assertIn("早期摘要", preface)           # compaction 摘要带上
+
+    def test_curated_folds_thinking_and_tool_results(self):
+        """curated 折叠：thinking 丢弃、旧工具输出换省略标记、保留当次输出。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            src = os.path.join(tmp, "s.jsonl")
+            with open(src, "w", encoding="utf-8") as f:
+                f.write('{"type":"session","id":"s","version":3}\n')
+                f.write(json.dumps({
+                    "type": "message", "id": "a1", "parentId": None,
+                    "message": {"role": "assistant", "content": [
+                        {"type": "thinking", "thinking": "推理痕迹"},
+                        {"type": "toolCall", "id": "t1", "name": "bash",
+                         "arguments": {"command": "x" * 3000}},
+                        {"type": "text", "text": "结论"}]}},
+                    ensure_ascii=False) + "\n")
+                for i in range(20):   # 超 _TOOL_RESULT_KEEP → 靠前的应被省略
+                    f.write(json.dumps({
+                        "type": "message", "id": f"r{i}", "parentId": "a1",
+                        "message": {"role": "toolResult", "toolName": "bash",
+                                    "content": [{"type": "text",
+                                                 "text": f"输出{i}"}]}},
+                        ensure_ascii=False) + "\n")
+            out = os.path.join(tmp, "c.jsonl")
+            _, err = build_active_fork_source(src, out, "u", "/p",
+                                              mode="curated")
+            self.assertIsNone(err)
+            msgs = [json.loads(x) for x in open(out)][1:]
+            asst = next(e for e in msgs if e["id"] == "a1")
+            blocks = asst["message"]["content"]
+            self.assertFalse(any(b.get("type") == "thinking" for b in blocks))
+            call = next(b for b in blocks if b.get("type") == "toolCall")
+            # 长字符串被截断（结构保留：键名不变、JSON 仍是合法对象）
+            self.assertLess(len(call["arguments"]["command"]), 3000)
+            self.assertIn("截断", call["arguments"]["command"])
+            results = [e for e in msgs if e["id"].startswith("r")]
+            elided = [e for e in results
+                      if "已省略" in e["message"]["content"][0]["text"]]
+            full = [e for e in results
+                    if e["message"]["content"][0]["text"].startswith("输出")]
+            self.assertTrue(elided and full)          # 旧的省略、近的保留
+            self.assertEqual(full[-1]["id"], "r19")   # 最新一条保留
+
+    def test_curated_bootstrap_no_compaction(self):
+        """curated 遇无 compaction 的源（引导 session）：不崩、可用。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            src = self._make_src(tmp, with_compaction=False)
+            out = os.path.join(tmp, "o.jsonl")
+            n, err = build_active_fork_source(src, out, "u", "/p",
+                                              mode="curated")
+            self.assertIsNone(err)
+            lines = [json.loads(x) for x in open(out)]
+            self.assertEqual(lines[0]["forkSourceMode"], "curated")
 
     def test_bad_source(self):
         with tempfile.TemporaryDirectory() as tmp:

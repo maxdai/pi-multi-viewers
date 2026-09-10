@@ -221,7 +221,7 @@ def _build_wake_cmd(workdir, agent, sid, cfg, fork_source, fork_cwd,
     """组装唤醒命令（#3 拆分，e2e7 评审）：返回 (cmd, spawn_cwd)。
 
     首唤（first_wake 且 sid 已由调用方预生成）：fork 源生成
-    （build_active_fork_source，fork_mode=active|full）→ --session
+    （build_active_fork_source，fork_mode=active|full|curated）→ --session
     直接打开；续接：--session-id。cwd = fork_cwd（主项目）优先。
     协议/视角注入在此追加（--append-system-prompt，文件存在才加）。
     """
@@ -230,11 +230,11 @@ def _build_wake_cmd(workdir, agent, sid, cfg, fork_source, fork_cwd,
         base_name = os.path.basename(base.rstrip("/")) or "discussion"
         display_name = f"{base_name}-{agent}"
         # fork 源（用户 2026-09-10 参数化）：裁剪策略从 protocol.json
-        # forkMode 读（active=压缩态省 token / full=全量保留上下文）
+        # forkMode 读（active=压缩态 / full=全量 / curated=预算裁剪+折叠）
         active_src = os.path.join(session_dir, f"fork-src-{sid}.jsonl")
         n, err = meeting_fs.build_active_fork_source(
             fork_source, active_src, sid, fork_cwd or workdir,
-            force_full=(fork_mode == "full"))
+            mode=fork_mode)
         if err:
             log(agent, f"[fatal] 活跃视图 fork 源生成失败: {err}")
             raise RuntimeError(err)
