@@ -67,7 +67,7 @@ ls ~/.pi/agent/npm/node_modules/pi-multi-viewers/scripts/mv.sh
 ## 用法
 
 ```
-/multi-viewers "<主题>" [视角分配]        # prompt 入口（推荐）
+/multi-viewers "<主题>"        # prompt 入口（推荐；视角来自 viewers/）
 ```
 
 或命令行：
@@ -77,11 +77,11 @@ ls ~/.pi/agent/npm/node_modules/pi-multi-viewers/scripts/mv.sh
 # 写什么见下节「视角文件写什么」；本仓库 viewers/ 下是三个示例，形态可照抄
 ls viewers/
 
-# 每次：生成主题骨架（不需要 --agents——启动时自动发现 viewers/*.md）
+# 每次：生成主题骨架（视角自动来自 viewers/*.md）
 scripts/mv.sh --prepare "<主题>"              # spec = question.md(+background.md)
 scripts/mv.sh --start <spec目录>              # 启动（自动挂载主 session；默认 budget 模式）
 #  可选：--fork-mode compaction|budget|full（见上表；一般不调）
-# 显式 --agents 仍可用：一次性自定义 agent（覆盖 viewers 发现）
+#  高级：--agents "a,b" 起一次性视角（不建 viewers/ 时用；prompt 入口不传它）
 
 # 观看：--start 会输出可直接执行的 !! 流式观看命令（复制执行）
 scripts/mv.sh --view <dir>                    # 或一次性增量查看（主 pi 记录 HEAD 作下轮 --since）
@@ -115,6 +115,14 @@ frontmatter 字段、写文件路径、独立参与者纪律。
 **规范**：≥2 个视角、内容非空、名字不含空白与路径分隔符、非 `human`、
 ≤32 字符——不合规在生成 spec 前就报错（零产物）。
 视角之间**互补或对立都可以**，对立产生的分歧正是多视角分析的价值。
+
+### 复用的三种方式（都不需要把视角写进命令行）
+
+| 想做的事 | 做法 |
+|---|---|
+| 长期复用 | 写好 `viewers/X.md`——每次分析自动带上 |
+| 这一次想调 | `--prepare` 之后、`--start` 之前改 **spec 的 `agents/X.md` 快照**（改内容 / 删掉某个视角 / 加一个临时视角——删文件即剔除该参与者），不动资产 |
+| 完全一次性（项目还没建 viewers/） | `mv.sh --prepare "<主题>" --agents "a,b"`（wrapper 高级用法） |
 
 ## 架构
 
