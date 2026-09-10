@@ -19,6 +19,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import meeting_fs
+from meeting_fs import next_msg_id
 from meeting_engine import agent_loop
 
 MIN_MEM_MB = 2000
@@ -403,7 +404,6 @@ def make_responder(pure, fork_source=None, fork_cwd=None):
             state = "round-robin（轮到你：写 pass 确认共识，单向流无异议）"
         else:
             state = "meeting（有未读新消息，可发言或 freezing）"
-        from meeting_fs import next_msg_id
         # fork 模式（cwd=主项目）下 LLM 不在 workdir——msg_path/meta 必须
         # 绝对路径（legacy 模式下绝对路径同样有效，统一一条路径）
         msg_path = os.path.join(workdir, agent,

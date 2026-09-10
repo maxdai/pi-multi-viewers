@@ -238,7 +238,7 @@ class TestFlowComposition(unittest.TestCase):
         # concluded 落盘 + result.md 提交
         messages = _each_agent_messages(self.bare, ["a", "b"])
         self.assertEqual(messages["b"][-1]["type"], "concluded")
-        r = sd.run(["git", "show", "HEAD:result.md"], cwd=self.bare,
+        r = sd.run_cmd(["git", "show", "HEAD:result.md"], cwd=self.bare,
                    check=False)
         self.assertEqual(r.returncode, 0)
         self.assertIn("组合测试", r.stdout)

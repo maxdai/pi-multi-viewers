@@ -11,7 +11,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from start_discussion import (
     gen_protocol, gen_question, gen_agent_def, gen_agents_md,
-    run, _resolve_path, _default_model, check_status,
+    run_cmd, _resolve_path, _default_model, check_status,
 )
 
 
@@ -141,11 +141,11 @@ class TestMisc(unittest.TestCase):
     """S1 run / S11 _resolve_path / S3 _default_model / S17 check_status。"""
 
     def test_run_success_and_failure(self):
-        r = run(["echo", "hi"])
+        r = run_cmd(["echo", "hi"])
         self.assertEqual(r.returncode, 0)
         with self.assertRaises(RuntimeError):
-            run(["false"])
-        r2 = run(["false"], check=False)
+            run_cmd(["false"])
+        r2 = run_cmd(["false"], check=False)
         self.assertNotEqual(r2.returncode, 0)
 
     def test_resolve_path(self):

@@ -33,7 +33,7 @@ GIT_USER = "meeting-bot"
 GIT_EMAIL = "meeting-bot@local"
 
 
-def run(cmd, cwd=None, check=True):
+def run_cmd(cmd, cwd=None, check=True):
     r = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
     if check and r.returncode != 0:
         raise RuntimeError(f"cmd {cmd} 失败: {r.stderr.strip()}")
@@ -76,8 +76,6 @@ def _default_model():
         return model
     except (OSError, ValueError):
         return None
-
-
 
 
 def _detect_pi_model_thinking():
@@ -346,8 +344,6 @@ def gen_agent_def(agent, participants, models=None, stances=None, extra=None):
     return result
 
 
-
-
 def gen_question(topic, stances, background, questions):
     """question.md（讨论起点：话题 + 可选立场 + 待回答问题）。
 
@@ -389,7 +385,6 @@ def gen_protocol(topic, participants, max_meeting, max_rr, pure=False,
         proto["forkSource"] = fork_source
         proto["forkCwd"] = fork_cwd or os.getcwd()
     return proto
-
 
 
 def _resolve_path(p):
@@ -621,9 +616,9 @@ def _clone_work(base, p):
     git 身份在此统一配置（调用方不再重复 config——e2e7 评审 T6）。
     """
     workdir = os.path.join(base, f"work-{p}")
-    run(["git", "clone", os.path.join(base, "repo.git"), workdir])
-    run(["git", "config", "user.name", GIT_USER], cwd=workdir)
-    run(["git", "config", "user.email", GIT_EMAIL], cwd=workdir)
+    run_cmd(["git", "clone", os.path.join(base, "repo.git"), workdir])
+    run_cmd(["git", "config", "user.name", GIT_USER], cwd=workdir)
+    run_cmd(["git", "config", "user.email", GIT_EMAIL], cwd=workdir)
     for sub in [".pi/agent", p]:   # L9：只建自己的目录（读走 bare，写有 makedirs 兜底）
         os.makedirs(os.path.join(workdir, sub), exist_ok=True)
     return workdir
@@ -678,7 +673,7 @@ def setup_environment(args, participants, base, spec_dir=None,
                    else {p: "" for p in participants})
 
     os.makedirs(base, exist_ok=True)
-    run(["git", "init", "--bare", os.path.join(base, "repo.git")])
+    run_cmd(["git", "init", "--bare", os.path.join(base, "repo.git")])
 
     # T6 重构（e2e7 评审）：原流程 = 全部 clone → 写共享 → commit → 再
     # rmtree+clone 重建 others + 回写本地文件（2N-1 次 clone，~40% 冗余；
@@ -709,15 +704,15 @@ def setup_environment(args, participants, base, spec_dir=None,
         gitignore = gtf.read()
     with open(os.path.join(wa, ".gitignore"), "w") as f:
         f.write(gitignore)
-    run(["git", "add", "-A"], cwd=wa)
-    run(["git", "-c", f"user.name={GIT_USER}", "-c", f"user.email={GIT_EMAIL}",
+    run_cmd(["git", "add", "-A"], cwd=wa)
+    run_cmd(["git", "-c", f"user.name={GIT_USER}", "-c", f"user.email={GIT_EMAIL}",
          "commit", "-m", "discuss: setup"], cwd=wa)
     # push 当前分支（不用硬编码 master——用户可能配置了
     # init.defaultBranch=main，硬编码会导致 bare 双分支、clone 检出空
     # 分支 → 环境损坏。审核 C2。）
-    branch = run(["git", "branch", "--show-current"], cwd=wa,
+    branch = run_cmd(["git", "branch", "--show-current"], cwd=wa,
                  check=False).stdout.strip()
-    run(["git", "push", os.path.join(base, "repo.git"),
+    run_cmd(["git", "push", os.path.join(base, "repo.git"),
          branch or "master"], cwd=wa)
 
     # others clone（直接拿到 setup commit；work-a 已在上方创建）
@@ -790,11 +785,9 @@ def cleanup_discussion(base):
     print(f"[cleanup] 已删除目录 {base}（含 pi-sessions）")
 
 
-
-
 def _loops_alive(base):
     """讨论的 loop 进程是否存活（目录边界匹配，防 discussion-1 匹配 -1x）。"""
-    r = run(["pgrep", "-f",
+    r = run_cmd(["pgrep", "-f",
              f"meeting_loop.py.*{re.escape(base)}( |$|/)"], check=False)
     return bool(r.stdout.strip())
 
@@ -817,14 +810,14 @@ def check_status(base):
     bare = os.path.join(base, "repo.git")
     if not os.path.isdir(bare):
         return "not-exists"
-    r = run(["git", "log", "--all", "--format=%H", "--", "result.md"],
+    r = run_cmd(["git", "log", "--all", "--format=%H", "--", "result.md"],
             cwd=bare, check=False)
     if r.stdout.strip():
         # done 需 concluded 存在（review5 A5）——rw 写 result.md 后、
         # concluded 前崩溃 → 只保存报告但未收尾，误报完成会丢流程语义。
         # 结构化检查：读 HEAD 树消息文件 frontmatter 的 type（不用
         # git grep 全文——正文出现 "type: concluded" 会误匹配）。
-        r2 = run(["git", "grep", "-l", "^type: concluded$", "HEAD", "--",
+        r2 = run_cmd(["git", "grep", "-l", "^type: concluded$", "HEAD", "--",
                   "*/*.md"], cwd=bare, check=False)
         if r2.stdout.strip():
             return "done"
@@ -969,7 +962,7 @@ def main():
                     print()
                 print("[wait] 讨论完成 ✅")
                 rw = ""
-                r = run(["git", "show", "HEAD:protocol.json"], cwd=bare,
+                r = run_cmd(["git", "show", "HEAD:protocol.json"], cwd=bare,
                         check=False)
                 if r.returncode == 0:
                     try:
@@ -995,7 +988,7 @@ def main():
         print(f"[start] 跳过环境生成——只启动已有环境")
         # 参与者从已有环境的 protocol.json 读（单一事实源，不依赖 CLI）
         try:
-            r = run(["git", "show", "HEAD:protocol.json"],
+            r = run_cmd(["git", "show", "HEAD:protocol.json"],
                     cwd=os.path.join(base, "repo.git"), check=False)
             participants = json.loads(r.stdout).get("participants", [])
         except (ValueError, OSError):
