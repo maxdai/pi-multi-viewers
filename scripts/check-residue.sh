@@ -10,7 +10,10 @@
 #      近 24h 创建且 cwd 不在白名单（真实项目）的——测试引导 session
 #      散落形态（--tmp-xxx-- 等）
 #   2. 讨论进程：meeting_loop / pi --mode json 子进程
-#   3. 讨论目录：$PWD 下 discuss-* 残留（另有 gitignore 兜底不入库）
+#   3. 讨论环境目录：$PWD 下 discuss-* 残留（另有 gitignore 兜底不入库）
+#      + 结构识别（2026-09-10 补）：含 repo.git/ 与 pi-sessions/ 的目录
+#      ——测试脚手架常用 /tmp/mv-*/disc 等非 discuss-* 命名，纯命名匹配
+#      会漏检（e2e8 残留即此盲区），改为按环境结构识别
 #
 # 白名单：cwd 为真实项目目录的 session 不算残留（mv-main 等长期会话）。
 WHITELIST=(
@@ -103,11 +106,27 @@ for p in $(ps -eo pid,cmd | grep "[p]i --mode json" | grep -v "grep\|bash -c" | 
     RESIDUE=1
 done
 
-# --- 3. 当前目录 discuss-* 残留 ---
+# --- 3. 讨论环境目录残留 ---
+# 3a. 命名形态：$PWD 下 discuss-*（兜底：半创建、尚无 repo.git 的环境）
 for d in discuss-*/; do
     [ -d "$d" ] || continue
     echo "[残留-3] 讨论目录: $PWD/$d"
     RESIDUE=1
+done
+
+# 3b. 结构形态：任何含 repo.git/ + pi-sessions/ 的目录 = 讨论环境
+#（扫描 $PWD 与 /tmp，深度 ≤3；与 3a 去重）
+SEEN_ENVS=""
+for base in "$PWD" "${TMPDIR:-/tmp}"; do
+    [ -d "$base" ] || continue
+    while IFS= read -r g; do
+        d=$(dirname "$g")
+        [ -d "$d/pi-sessions" ] || continue
+        case " $SEEN_ENVS " in *" $d "*) continue ;; esac
+        SEEN_ENVS="$SEEN_ENVS $d"
+        echo "[残留-3] 讨论环境: $d（$(du -sh "$d" 2>/dev/null | cut -f1)）"
+        RESIDUE=1
+    done < <(find "$base" -maxdepth 3 -type d -name repo.git 2>/dev/null)
 done
 
 if [ "$RESIDUE" = "0" ]; then
