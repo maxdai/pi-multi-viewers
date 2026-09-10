@@ -216,59 +216,68 @@ def recover_git_lock(workdir, agent):
         log(agent, "检测到 .git 残留锁（上次中断）——已恢复")
 
 
+def _prepare_fork_session(workdir, agent, sid, fork_source, fork_cwd,
+                          session_dir, fork_mode, topic):
+    """首唤准备（可读性 #2 拆分）：生成 fork 源 + 注入切换叙事；
+    返回 fork 源路径。
+
+    与命令组装分开：这里是"首唤一次性准备"（文件生成/叙事注入/统计
+    日志），后者是纯命令拼装——混在一起曾让单函数 125 行。
+    """
+    fork_src = os.path.join(session_dir, f"fork-src-{sid}.jsonl")
+    n, err = meeting_fs.build_active_fork_source(
+        fork_source, fork_src, sid, fork_cwd or workdir, mode=fork_mode)
+    if err:
+        log(agent, f"[fatal] fork 源生成失败（mode={fork_mode}）: {err}")
+        raise RuntimeError(err)
+    # 统计取自产物自描述 header（P15 单一来源；读失败降级为只打条数）
+    stats = meeting_fs.read_fork_stats(fork_src)
+    if stats.get("est") is not None:
+        log(agent, f"fork 源（{stats.get('mode') or fork_mode}，{n} 条，"
+                   f"丢弃 {stats.get('dropped')} 条，est≈{stats['est'] // 1000}k"
+                   f"（字符/3 估算））: {os.path.basename(fork_src)}")
+    else:
+        log(agent, f"fork 源（{fork_mode}，{n} 条）: {os.path.basename(fork_src)}")
+    # 切换叙事：源尾部注入"停止旧任务 → 新任务说明 → assistant 确认"
+    # 对话——显式切断历史叙事惯性（agent 读到的最后叙事是任务切换
+    # 共识，不再扮演主 pi）。任务说明 = 视角 brief + 主题（来自
+    # protocol.json.topic，P1：单一事实源，不再二次解析 question.md）
+    brief = _read_perspective_brief(workdir, agent) or f"{agent} 视角参与者"
+    topic_txt = topic or "见 question.md"
+    turns = [
+        ("user", "从现在开始，我们停止之前的任务的执行，开始新任务。"),
+        ("assistant", "好的，请说明新任务的具体信息。"),
+        ("user", f"新任务：你是多视角分析中的「{agent}」视角参与者。{brief}"
+                 f"分析主题：{topic_txt}。你的唯一任务是参与这次多视角"
+                 f"分析——按视角产出分析/回应其他参与者，写消息文件的路径"
+                 f"由本地循环在每次唤醒时告知。上下文中的历史（之前的开发、"
+                 f"监控、测试等）都与新任务无关。"),
+        ("assistant", f"好的，我已理解新任务：以「{agent}」视角参与分析"
+                      f"（主题：{topic_txt}），完成每次唤醒指定的消息写入，"
+                      f"不做任务以外的任何事。"),
+    ]
+    tn = meeting_fs.append_handoff_turns(fork_src, turns)
+    log(agent, f"切换叙事已注入（{tn} 条消息/{len(turns) // 2} 对对话）")
+    return fork_src
+
+
 def _build_wake_cmd(workdir, agent, sid, cfg, fork_source, fork_cwd,
-                    session_dir, first_wake, pure, prompt, fork_mode="active"):
+                    session_dir, first_wake, pure, prompt, fork_mode="active",
+                    topic=""):
     """组装唤醒命令（#3 拆分，e2e7 评审）：返回 (cmd, spawn_cwd)。
 
-    首唤（first_wake 且 sid 已由调用方预生成）：fork 源生成
-    （build_active_fork_source，fork_mode=active|full|curated）→ --session
-    直接打开；续接：--session-id。cwd = fork_cwd（主项目）优先。
-    协议/视角注入在此追加（--append-system-prompt，文件存在才加）。
+    首唤：fork 源生成（_prepare_fork_session，fork_mode=active|full|
+    curated）→ `--session` 直接打开；续接：`--session-id`。
+    cwd = fork_cwd（主项目）优先。协议/视角注入在此追加。
     """
     base = os.path.dirname(workdir)
     if first_wake:
         base_name = os.path.basename(base.rstrip("/")) or "discussion"
         display_name = f"{base_name}-{agent}"
-        # fork 源（用户 2026-09-10 参数化）：裁剪策略从 protocol.json
-        # forkMode 读（active=压缩态 / full=全量 / curated=预算裁剪+折叠）
-        active_src = os.path.join(session_dir, f"fork-src-{sid}.jsonl")
-        n, err = meeting_fs.build_active_fork_source(
-            fork_source, active_src, sid, fork_cwd or workdir,
-            mode=fork_mode)
-        if err:
-            log(agent, f"[fatal] 活跃视图 fork 源生成失败: {err}")
-            raise RuntimeError(err)
-        log(agent, f"fork 源（活跃视图 {n} 条）: {os.path.basename(active_src)}")
-        # 切换叙事（用户 2026-09-10 设计）：源尾部注入"停止旧任务 →
-        # 新任务说明 → assistant 确认"对话——显式切断历史叙事惯性
-        # （agent 读到的最后叙事是任务切换共识，不再扮演主 pi）。
-        # 任务说明内容 = 视角 + 主题（question.md），与 wake prompt 呼应
-        brief = _read_perspective_brief(workdir, agent) or f"{agent} 视角参与者"
-        qpath = os.path.join(workdir, "question.md")
-        topic = ""
-        try:
-            with open(qpath, encoding="utf-8") as f:
-                qlines = [l for l in f.read().splitlines()
-                          if l.startswith("# 分析主题")]
-            if qlines:
-                topic = qlines[0].replace("# 分析主题：", "").strip()
-        except OSError:
-            pass
-        turns = [
-            ("user", "从现在开始，我们停止之前的任务的执行，开始新任务。"),
-            ("assistant", "好的，请说明新任务的具体信息。"),
-            ("user", f"新任务：你是多视角分析中的「{agent}」视角参与者。{brief}"
-                     f"分析主题：{topic or '见 question.md'}。你的唯一任务是"
-                     f"参与这次多视角分析——按视角产出分析/回应其他参与者，"
-                     f"写消息文件的路径由本地循环在每次唤醒时告知。上下文中的"
-                     f"历史（之前的开发、监控、测试等）都与新任务无关。"),
-            ("assistant", f"好的，我已理解新任务：以「{agent}」视角参与分析"
-                          f"（主题：{topic or '见 question.md'}），完成每次唤醒"
-                          f"指定的消息写入，不做任务以外的任何事。"),
-        ]
-        tn = meeting_fs.append_handoff_turns(active_src, turns)
-        log(agent, f"切换叙事已注入（{tn} 条消息/2 对对话）")
-        cmd = ["pi", "--mode", "json", "--session", active_src,
+        fork_src = _prepare_fork_session(workdir, agent, sid, fork_source,
+                                         fork_cwd, session_dir, fork_mode,
+                                         topic)
+        cmd = ["pi", "--mode", "json", "--session", fork_src,
                "--name", display_name, "--session-dir", session_dir]
     else:
         cmd = ["pi", "--mode", "json", "--session-id", sid,
@@ -342,7 +351,7 @@ def _run_wake_proc(cmd, spawn_cwd, workdir, agent):
 
 
 def wake_llm(workdir, agent, prompt, pure=False, fork_source=None, fork_cwd=None,
-             fork_mode="active"):
+             fork_mode="active", topic=""):
     """唤醒 pi（fork-only：首唤 --session 活跃视图，后续 --session-id
     续接）。返回 (sessionID, returncode)。
 
@@ -366,7 +375,7 @@ def wake_llm(workdir, agent, prompt, pure=False, fork_source=None, fork_cwd=None
         sid = str(uuid.uuid4())
     cmd, spawn_cwd = _build_wake_cmd(workdir, agent, sid, cfg, fork_source,
                                      fork_cwd, session_dir, first_wake,
-                                     pure, prompt, fork_mode)
+                                     pure, prompt, fork_mode, topic)
 
     log_dir = os.path.join(base, "wake-logs")
     os.makedirs(log_dir, exist_ok=True)
@@ -420,7 +429,8 @@ def _read_perspective_brief(workdir, agent):
     return brief or None
 
 
-def make_responder(pure, fork_source=None, fork_cwd=None, fork_mode="active"):
+def make_responder(pure, fork_source=None, fork_cwd=None, fork_mode="active",
+                   topic=""):
     """构造真实 LLM responder：唤醒 pi，LLM 写内容文件。
 
     LLM 只提供内容（写消息文件），流程（补全字段/commit/push）
@@ -466,7 +476,7 @@ def make_responder(pure, fork_source=None, fork_cwd=None, fork_mode="active"):
             raise RecoverableWakeError("内存不足")
         wake_llm(workdir, agent, prompt, pure,
                  fork_source=fork_source, fork_cwd=fork_cwd,
-                 fork_mode=fork_mode)
+                 fork_mode=fork_mode, topic=topic)
         return True
     return responder
 
@@ -515,7 +525,8 @@ if __name__ == "__main__":
                    make_responder(pure,
                                   fork_source=fork_source,
                                   fork_cwd=proto.get("forkCwd") or "",
-                                  fork_mode=proto.get("forkMode") or "active"),
+                                  fork_mode=proto.get("forkMode") or "active",
+                                  topic=proto.get("topic") or ""),
                    max_meeting=mm, max_rr=mr, stall_timeout=st)
     except KeyboardInterrupt:
         log(agent, "被中断")

@@ -458,13 +458,16 @@ class TestActiveForkSource(unittest.TestCase):
             self.assertIsNone(err)
             lines = [json.loads(x) for x in open(out)]
             self.assertEqual(lines[0]["forkSourceMode"], "curated")
-            self.assertLessEqual(lines[0]["forkSourceTokens"], 10000)
+            self.assertLessEqual(lines[0]["forkSourceTokensEst"], 10000)
             kept = [e for e in lines[1:] if e.get("type") == "message"]
             self.assertLess(len(kept), 11)              # 确实裁掉了旧条目
             self.assertIn("m9", kept[-1]["id"])         # 最近一条必留
             preface = kept[0]["message"]["content"][0]["text"]
             self.assertIn("已省略", preface)             # 省略说明
             self.assertIn("早期摘要", preface)           # compaction 摘要带上
+            self.assertGreater(lines[0]["forkSourceDropped"], 0)   # 丢弃数可核查
+            # P4：保留区首条 parentId 接回 preface（一条链）
+            self.assertEqual(kept[1]["parentId"], kept[0]["id"])
 
     def test_curated_folds_thinking_and_tool_results(self):
         """curated 折叠：thinking 丢弃、旧工具输出换省略标记、保留当次输出。"""
@@ -506,6 +509,55 @@ class TestActiveForkSource(unittest.TestCase):
                     if e["message"]["content"][0]["text"].startswith("输出")]
             self.assertTrue(elided and full)          # 旧的省略、近的保留
             self.assertEqual(full[-1]["id"], "r19")   # 最新一条保留
+
+    def test_curated_cut_avoids_orphan_tool_result(self):
+        """边界对齐：保留区不得以 toolResult 开头（其 toolCall 已裁掉 →
+        provider 报 "role 'tool' must be a response to ..."，e2e 实测）。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            src = os.path.join(tmp, "s.jsonl")
+            with open(src, "w", encoding="utf-8") as f:
+                f.write('{"type":"session","id":"s","version":3}\n')
+                # 大块旧历史 + 一组 toolCall/toolResult（预算只容得下尾部）
+                big = "字" * 3000
+                for i in range(8):
+                    f.write(json.dumps({
+                        "type": "message", "id": f"m{i}", "parentId": None,
+                        "message": {"role": "user", "content": [
+                            {"type": "text", "text": big}]}},
+                        ensure_ascii=False) + "\n")
+                f.write(json.dumps({
+                    "type": "message", "id": "a1", "parentId": "m7",
+                    "message": {"role": "assistant", "content": [
+                        {"type": "toolCall", "id": "t1", "name": "bash",
+                         "arguments": {"command": "echo hi"}}]}},
+                    ensure_ascii=False) + "\n")
+                f.write(json.dumps({
+                    "type": "message", "id": "r1", "parentId": "a1",
+                    "message": {"role": "toolResult", "toolCallId": "t1",
+                                "toolName": "bash", "content": [
+                                    {"type": "text", "text": "hi"}]}},
+                    ensure_ascii=False) + "\n")
+            out = os.path.join(tmp, "o.jsonl")
+            # 预算小到只能容纳尾部（toolCall/toolResult 对）
+            _, err = build_active_fork_source(src, out, "u", "/p",
+                                              mode="curated", keep_tokens=10)
+            self.assertIsNone(err)
+            msgs = [json.loads(x) for x in open(out, encoding="utf-8")][1:]
+            msgs = [e for e in msgs if e.get("type") == "message"]
+            self.assertTrue(msgs, "保留区不应为空")
+            # 首条不得是孤儿 toolResult；每个 toolResult 都应有前置 toolCall
+            self.assertNotEqual(msgs[0].get("message", {}).get("role"),
+                                "toolResult")
+            calls = set()
+            for e in msgs:
+                m = e.get("message") or {}
+                c = m.get("content")
+                if isinstance(c, list):
+                    for b in c:
+                        if isinstance(b, dict) and b.get("type") == "toolCall":
+                            calls.add(b.get("id"))
+                if m.get("role") == "toolResult":
+                    self.assertIn(m.get("toolCallId"), calls)   # 无孤儿
 
     def test_curated_bootstrap_no_compaction(self):
         """curated 遇无 compaction 的源（引导 session）：不崩、可用。"""

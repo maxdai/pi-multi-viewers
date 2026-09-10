@@ -116,6 +116,8 @@ done
 
 # 3b. 结构形态：任何含 repo.git/ + pi-sessions/ 的目录 = 讨论环境
 #（扫描 $PWD 与 /tmp，深度 ≤3；与 3a 去重）
+# 去重用空格包裹的字符串匹配（不用 declare -A：避免 bash 4+ 依赖，
+# 路径不含空格——本仓库路径约定）
 SEEN_ENVS=""
 for base in "$PWD" "${TMPDIR:-/tmp}"; do
     [ -d "$base" ] || continue

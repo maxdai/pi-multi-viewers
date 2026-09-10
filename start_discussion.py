@@ -59,19 +59,19 @@ def _join_model_ref(provider, model_id):
 
     契约（pi 源码 resolveSpawnContext）：PI_PROVIDER=provider、
     PI_MODEL=model id；session 的 model_change 同样分 provider/modelId
-    两字段。**model id 本身可含 '/'**（聚合类 provider 的命名空间 id，
-    如 commandcode-goat 的 "deepseek/deepseek-v4-flash"）——因此不得按
-    "是否含斜杠"猜测（形状启发式会把 provider 丢掉，解析到同名的另一个
-    provider，静默失真；2026-09-10 实测 fix）。
+    两字段；settings 的 defaultModel/defaultProvider 同构。**model id 本身
+    可含 '/'**（聚合类 provider 的命名空间 id，如 commandcode-goat 的
+    "deepseek/deepseek-v4-flash"）——因此拼接是**无条件**的字段拼接，
+    不得按"是否含斜杠"猜形状（形状启发式会把 provider 丢掉，解析到
+    同名的另一个 provider，静默失真；2026-09-10 实测 fix）。
 
-    幂等：id 已带该 provider 前缀时原样返回（兼容 PI_MODEL 已是完整
-    ref 的形态）；provider 缺失时只能原样返回。
+    provider 缺失时只能原样返回（无法拼接）——这是调用方应保证的前置。
     """
     provider = (provider or "").strip()
     model_id = (model_id or "").strip()
     if not model_id:
         return ""
-    if not provider or model_id.lower().startswith(provider.lower() + "/"):
+    if not provider:
         return model_id
     return f"{provider}/{model_id}"
 

@@ -1,10 +1,13 @@
 """meeting 模式文件/git 操作层（I/O 封装）——meeting_core 的配套。
 
-设计原则（RR 教训）：
+职责三类（设计原则 RR 教训）：
 - 纯逻辑在 meeting_core（无 I/O），本模块只做文件/git 操作
 - 每 commit 一条消息（约束 3.1）：commit 顺序 = 消息顺序
 - 读取点从消息链 seen_at 推导（无本地游标状态）
 - 所有 git 操作用 subprocess（与生产 local_loop 一致）
+- **session fork 源生成/裁剪**（build_fork_source 与配套的 _curate/_fold/
+  append_handoff_turns）：读主 session 文件、写 fork 源、注入切换叙事
+  ——session 文件格式知识只留在本模块，调用方（meeting_loop）不内联解析
 """
 
 import json
@@ -13,6 +16,7 @@ import uuid
 import re
 import subprocess
 import time
+from datetime import datetime, timezone
 
 # ---------------------------------------------------------------
 # git 基础操作
@@ -371,20 +375,51 @@ def parse_log_nameonly(output):
         commits.append((cur, files))
     return commits
 
+# ---------------------------------------------------------------
+# fork 源生成与裁剪（session 文件层）
+# ---------------------------------------------------------------
+#
 # curated 模式参数（fork 源裁剪，2026-09-10）
 #
 # 为什么需要 curated：fork 复制的是**原始条目**，而主 pi 实际发送的上下文
-# 是**被压缩过的**（MC/pi 压缩层不在条目里）——长会话的原始条目远超模型
+# 是**被压缩过的**（压缩层不在条目里）——长会话的原始条目远超模型
 # 窗口（实测：本会话 919k/934k tokens + 384k completion 预留 > 1M 窗口）。
 # curated = 恢复 pi 自身的压缩不变量（摘要 + 最近窗口），不依赖任何扩展。
 #
-# 预算取值参考：pi 默认 compaction（keepRecentTokens=20000 / reserveTokens=16384，
-# 见 pi DEFAULT_COMPACTION_SETTINGS）很小；MC 在主会话里保留的未丢弃量约 88k。
-# 讨论 agent 需要足够的近期上下文，取 80k 作为默认。
+# 预算取值（口径见设计文档「规模口径」节）：
+# - 现行重估公式（**事后归纳，非原始设计目标**）：基线 ≤ 约 20%×
+#   （模型窗口 − 输出预留）；当前实例 80k est ≈ 132k 真实 ≈ 664k 的 20%。
+# - 校准比（est → 真实）：唤醒 1 ≈ 1.66×；唤醒中后期至 ~2.7×（不固化为 2.0×）。
+# - 该预算只约束 **fork 源（基线）**；运行规模随该 agent 会话累积增长
+#   （实测 w1 132k → w5 192–207k）。
+# - pi 默认 compaction（keepRecentTokens=20000 / reserveTokens=16384，
+#   见 pi DEFAULT_COMPACTION_SETTINGS）——讨论 agent 需要更宽的近期窗口。
 CURATED_KEEP_TOKENS = 80000
 _TOOL_RESULT_KEEP = 8          # 最近 N 条工具输出保留（其余省略）
 _TOOL_RESULT_MAX_CHARS = 4000  # 保留范围内单条工具输出上限
 _TOOL_CALL_MAX_CHARS = 1200    # 工具调用参数上限
+
+
+def read_fork_stats(path):
+    """读 fork 源 header 的统计字段（P15）。
+
+    日志所需的 mode/条数/估算/丢弃数取自**同一来源**（产物自描述
+    header）——header 格式知识只留本模块，调用方不内联解析。
+    读失败返回 {}（调用方降级为只打模式/条数，不阻塞首唤）。
+    """
+    try:
+        with open(path, encoding="utf-8") as f:
+            hdr = json.loads(f.readline())
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(hdr, dict) or hdr.get("type") != "session":
+        return {}
+    return {
+        "mode": hdr.get("forkSourceMode") or "",
+        "entries": None,
+        "est": hdr.get("forkSourceTokensEst"),
+        "dropped": hdr.get("forkSourceDropped"),
+    }
 
 
 def _est_tokens(text):
@@ -429,7 +464,7 @@ def _shrink_value(v, limit):
     return v
 
 
-def _fold_entry(entry, keep_result_full):
+def _fold_entry(entry, full_result):
     """折叠单条目（curated）：返回新条目（无改动则原样返回）。
 
     - thinking 块整体丢弃——推理痕迹不承担信息职责，但占原始文本约 40%
@@ -466,7 +501,7 @@ def _fold_entry(entry, keep_result_full):
             continue
         if t == "text" and role == "toolResult":
             txt = x.get("text") or ""
-            if not keep_result_full:
+            if not full_result:
                 n = dict(x)
                 n["text"] = f"[工具输出已省略 {len(txt)} 字符]"
                 out.append(n)
@@ -492,11 +527,13 @@ def _fold_entry(entry, keep_result_full):
 
 
 def _curate_entries(entries, keep_tokens, summary=""):
-    """按预算裁剪 + 折叠（curated）。返回 (preface 条目, kept 条目, 丢弃数,
-    估算 tokens)。
+    """按预算裁剪 + 折叠（curated）。返回 **(preface 文本, kept 条目,
+    丢弃条数)**（估算值由调用方对最终产物统一计算——单一测点）。
 
-    预算从尾部向前累计，保留**连续后缀**（时间连续性不可破坏）——
-    至少保留最后 1 条（即使它单独超预算，否则 fork 源会变成空会话）。
+    两步顺序很重要：**先折叠、再按折叠后规模从尾部裁**（按原始规模
+    裁会把预算浪费在随后被折叠掉的内容上，实测 80k 预算只落到 17.5k）。
+    保留**连续后缀**（时间连续性不可破坏）——至少保留最后 1 条
+    （即使它单独超预算，否则 fork 源会变成空会话）。
     """
     # ① 折叠（最近 _TOOL_RESULT_KEEP 条工具输出保留全文）
     seen, folded = 0, []
@@ -518,8 +555,19 @@ def _curate_entries(entries, keep_tokens, summary=""):
         cut = i
         i -= 1
     dropped, kept = folded[:cut], folded[cut:]
+    # 边界对齐（provider 硬约束：tool 消息必须有其 tool_calls 前置）：
+    #  - 保留区以 toolResult 开头 → 向前扩展，把它的 toolCall 一起纳入
+    #  - 扩展到顶仍是孤儿（源本身不完整）→ 丢弃该条
+    # （DeepSeek/OpenAI 直接报 "Messages with role 'tool' must be a
+    #  response to a preceding message with 'tool_calls'"，2026-09-10 实测）
+    while kept and (kept[0].get("message") or {}).get("role") == "toolResult":
+        if cut > 0:
+            cut -= 1
+            kept = folded[cut:]
+        else:
+            dropped.append(kept[0])
+            kept = kept[1:]
     dropped_tokens = sum(_est_tokens(_entry_text(e)) for e in dropped)
-    kept_tokens = acc
     preface = ""
     if dropped or summary:
         lines = [
@@ -532,27 +580,28 @@ def _curate_entries(entries, keep_tokens, summary=""):
         if summary:
             lines.append(f"此前压缩摘要：{summary.strip()}")
         preface = "\n".join(lines)
-    return preface, kept, len(dropped), kept_tokens
+    return preface, kept, len(dropped)
 
 
 def build_active_fork_source(src_session, out_path, new_id, new_cwd,
                              mode="active", keep_tokens=None):
-    """生成 fork 源 session 文件（用户 2026-09-10 参数化）——供 wake_llm
-    首唤 --session 直接打开（不再用 pi --fork 全量复制）。
+    """生成 fork 源 session 文件——供 wake_llm 首唤 `--session` 直接打开
+    （不用 `pi --fork`：那是一份全量拷贝，且我们需在尾部注入切换叙事）。
 
     三种裁剪策略（header 的 forkSourceMode 标记可核查）：
-      active（默认）：最后 compaction + firstKeptEntryId 起的条目——
-        主 session 的**书面**压缩态（条目级）
-      full：全部条目——全量保留（用户 2026-09-10 定：验证"全量历史 +
-        切换叙事"能否正确执行任务）；无 compaction 的源（如引导
-        session）也走此分支
-      curated：预算裁剪 + 折叠——恢复 pi 自身压缩的不变量
-        （摘要 + 最近窗口），不依赖任何扩展。为什么需要：**主 pi 实际
-        发送的上下文比文件条目小得多**（压缩层不在条目里）——实测本
-        会话原始条目 919k/934k tokens，加 384k completion 预留 > 1M
-        窗口；MC 在主会话只发 ~185k。active/full 都是"条目级"
-        裁剪，对长会话不够。
+      active：最后 compaction + firstKeptEntryId 起的条目——主 session 的
+        **条目级**压缩态（无 compaction 的源全量兜底，标记 full）
+      full：全部条目（含无 compaction 的引导 session）
+      curated：预算裁剪 + 折叠——**恢复 pi 自身的压缩不变量**
+        （摘要 + 最近窗口），不依赖任何扩展。为什么需要：主 pi 实际发送
+        的上下文比文件条目小得多（压缩层不在条目里）——实测本会话
+        原始条目 919k/934k tokens，加 384k completion 预留 > 1M 窗口。
+        active/full 都是条目级裁剪，对长会话不够。
+      curated 与 active 在**无 compaction 时**均全量（引导 session 本就
+      干净无先例）；curated 仍会跑折叠与统计。
 
+    产物 header 自描述（P15 单一来源）：forkSourceMode /
+    forkSourceTokensEst（估算基准，**不预测请求规模**）/ forkSourceDropped。
     keep_tokens：curated 的预算（默认 CURATED_KEEP_TOKENS）。
     返回 (entries_written, error)。
     """
@@ -567,12 +616,12 @@ def build_active_fork_source(src_session, out_path, new_id, new_cwd,
     comps = [(i, e) for i, e in enumerate(entries)
              if e.get("type") == "compaction"]
     summary = ""
-    est_tokens = None
+    dropped_n = None
     new_ts = header.get("timestamp")
     body = entries[1:]                     # full / 无 compaction：全量
     if mode != "full" and comps:
         # active / curated 共用压缩态边界（最后 compaction 的 firstKeptEntryId）
-        _i_last, comp = comps[-1]
+        comp_idx, comp = comps[-1]
         summary = comp.get("summary") or ""
         new_ts = comp.get("timestamp") or new_ts
         kept_id = comp.get("firstKeptEntryId")
@@ -582,7 +631,7 @@ def build_active_fork_source(src_session, out_path, new_id, new_cwd,
         if kept_idx is None:
             if mode == "active":
                 return 0, f"firstKeptEntryId {kept_id} 不在源 session 中"
-            kept_idx = _i_last + 1          # curated 容错：边界 ID 失效
+            kept_idx = comp_idx + 1         # curated 容错：边界 ID 失效
         body = entries[kept_idx:]
         if mode == "active":
             body = [comp] + body
@@ -590,10 +639,9 @@ def build_active_fork_source(src_session, out_path, new_id, new_cwd,
         # 无 compaction 的源（如引导 session）：full 分支（既有语义）
         mode = "full"
     if mode == "curated":
-        preface, body, dropped_n, est_tokens = _curate_entries(
+        preface, body, dropped_n = _curate_entries(
             body, keep_tokens or CURATED_KEEP_TOKENS, summary)
         if preface:
-            from datetime import datetime, timezone
             pid = uuid.uuid4().hex[:8]
             body = [{
                 "type": "message", "id": pid, "parentId": None,
@@ -602,6 +650,10 @@ def build_active_fork_source(src_session, out_path, new_id, new_cwd,
                 "message": {"role": "user",
                             "content": [{"type": "text", "text": preface}]},
             }] + body
+            # 保留区首条接回 preface（P4）：不置 None——保持"一条链"
+            # 单一心智模型（curated 不保证原始链完整，docstring 已声明）
+            if len(body) > 1:
+                body[1] = dict(body[1], parentId=pid)
     new_header = {
         "type": "session",
         "version": header.get("version", 3),
@@ -611,9 +663,12 @@ def build_active_fork_source(src_session, out_path, new_id, new_cwd,
         "parentSession": src_session,
         "forkSourceMode": mode,
     }
-    if est_tokens is not None:
-        # 规模自证（probe/验收对比主 pi 实际上下文用）
-        new_header["forkSourceTokens"] = est_tokens
+    if mode == "curated":
+        # 产物侧指纹（口径见设计文档「规模口径」）：对**最终产物**统一
+        # 计算（单一测点；边界对齐后重算，P3）；不预测请求规模
+        new_header["forkSourceTokensEst"] = sum(
+            _est_tokens(_entry_text(e)) for e in body)
+        new_header["forkSourceDropped"] = dropped_n
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     with open(out_path, "w", encoding="utf-8") as f:
         f.write(json.dumps(new_header, ensure_ascii=False) + "\n")
@@ -714,7 +769,6 @@ def append_handoff_turns(session_file, turns):
         if e.get("id"):
             parent = e["id"]
             break
-    from datetime import datetime, timezone
     n = 0
     with open(session_file, "a", encoding="utf-8") as f:
         for role, text in turns:

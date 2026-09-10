@@ -335,6 +335,22 @@ class TestForkWake(unittest.TestCase):
         with open(os.path.join(self.base, "status-a.json")) as f:
             self.assertEqual(json.load(f), {"sessionID": "uuid-1"})
 
+    def test_handoff_uses_topic_from_protocol(self):
+        """P1：切换叙事的主题来自调用方传入（protocol.json.topic）——
+        不再二次解析 question.md（旧实现只认 `# 分析主题` 前缀，CLI 路径
+        生成的 `# 讨论主题：` 会静默退化为“见 question.md”）。"""
+        with open(os.path.join(self.workdir, "question.md"), "w",
+                  encoding="utf-8") as f:
+            f.write("# 讨论主题：CLI 前缀的主题\n")   # 旧实现读不到这个前缀
+        proc = FakeProc("ok", out='{"type": "session", "id": "uuid-1"}')
+        _, pm = self._run(proc, topic="来自 protocol 的主题")
+        cmd = pm.call_args[0][0]
+        src = cmd[cmd.index("--session") + 1]
+        turns = [json.loads(x) for x in open(src)][3:]
+        text = " ".join(t["message"]["content"][0]["text"] for t in turns)
+        self.assertIn("来自 protocol 的主题", text)
+        self.assertNotIn("见 question.md", text)
+
     def test_second_wake_continues_saved_sid(self):
         """续接：sid 已存 → --session-id 续接，无重复 --fork；cwd 仍=主项目。"""
         meeting_loop.save_session_id(self.workdir, "a", "uuid-1")

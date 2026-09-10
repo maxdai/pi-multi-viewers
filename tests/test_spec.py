@@ -289,8 +289,10 @@ class TestSpecModels(unittest.TestCase):
              "opencode-go/deepseek-v4-flash"),          # 纯 id → 补前缀
             ("commandcode-goat", "deepseek/deepseek-v4-flash",
              "commandcode-goat/deepseek/deepseek-v4-flash"),  # 含斜杠 id
+            # id 恰好以 "<provider>/" 开头：仍按契约拼（不按形状猜——
+            # 删掉幂等特判后此形态也是正确结果）
             ("commandcode-goat", "commandcode-goat/deepseek/x",
-             "commandcode-goat/deepseek/x"),             # 已带前缀 → 幂等
+             "commandcode-goat/commandcode-goat/deepseek/x"),
             ("", "deepseek-v4-flash", "deepseek-v4-flash"),   # 无 provider
             ("p", "", ""),                                     # 无 id
         ]
