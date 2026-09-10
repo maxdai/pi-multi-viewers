@@ -278,7 +278,7 @@ def gen_spec_skeleton(spec_dir, participants, topic=None, background=None,
     return participants, None
 
 
-def gen_agens_md(args, agent, participants, spec_background=None,
+def gen_agents_md(args, agent, participants, spec_background=None,
                  main_pi_cwd=None):
     """meeting 协议 AGENTS.md（共享协议 + background；身份/立场在 agent
     定义/question.md）。
@@ -295,22 +295,29 @@ def gen_agens_md(args, agent, participants, spec_background=None,
                   else (args.background or "（无）"))
     with open(os.path.join(TPL_DIR, "AGENTS.md.tpl")) as f:
         tpl = f.read()
+    # cwd 节：占位符填充（T5 修复，e2e7 评审）——原实现先 format 出
+    # "（未提供）"再整段字符串 replace 删除：模板文案/换行一改，隐藏
+    # 静默失效（模板与 python 双份文本耦合）。占位符方案：节文本单份
+    # 定义在此，模板位置显式可见；None → 空串（节消失）
+    if main_pi_cwd:
+        cwd_section = (
+            f"\n## 主 pi 工作目录\n\n分析环境的主 pi 在 `{main_pi_cwd}` "
+            f"目录运行。与该目录相关的信息\n（源码、文档、配置）可在其中"
+            f"查找：如有需要可查看相关文件以获取\n比本背景更详细的信息。\n")
+    else:
+        cwd_section = ""
     out = tpl.format(
         AGENT_NAME=agent,
         N=str(len(participants)),
         PARTICIPANTS_DISPLAY="、".join(participants),
         SAMPLE_OTHER=sample,
         BACKGROUND=background,
-        MAIN_PI_CWD=main_pi_cwd or "（未提供）",
+        MAIN_PI_CWD_SECTION=cwd_section,
     )
-    if not main_pi_cwd:
-        # 手动场景不注入 cwd 节（隐藏，不写占位）
-        out = out.replace("\n## 主 pi 工作目录\n\n分析环境的主 pi 在 `（未提供）` 目录运行。与该目录相关的信息\n（源码、文档、配置）可在其中查找：如有需要可查看相关文件以获取\n比本背景更详细的信息。\n", "")
     return out
 
 
-def gen_agent_def(agent, participants, models=None, stances=None, extra=None,
-                  variant="max"):
+def gen_agent_def(agent, participants, models=None, stances=None, extra=None):
     """agent prompt 文件（Pi 适配：纯 markdown，无 opencode frontmatter）。
 
     Pi 没有 opencode agent 定义机制；每个 agent 的身份/分工通过
@@ -319,8 +326,7 @@ def gen_agent_def(agent, participants, models=None, stances=None, extra=None,
     分层（2026-08-09）：身份/特有内容在此；共享协议/背景在 AGENTS.md；
     话题/立场/问题在 question.md。
     extra: spec/agents/X.md 内容（跳过首行）追加到正文尾部。
-    variant: 本参数保留兼容（输出里不暴露，实际由 pi-agent.json 的
-    thinking 字段承载）。
+    （thinking/variant 由 pi-agent.json 承载，不在本函数定义中）
     """
     model_body = ""
     if models and agent in models:
@@ -663,12 +669,12 @@ def setup_environment(args, participants, base, spec_dir=None,
         run(["git", "config", "user.name", GIT_USER], cwd=workdir)
         run(["git", "config", "user.email", GIT_EMAIL], cwd=workdir)
         with open(os.path.join(workdir, "AGENTS.md"), "w") as f:
-            f.write(gen_agens_md(args, p, participants, spec_background,
+            f.write(gen_agents_md(args, p, participants, spec_background,
                                  main_pi_cwd=os.getcwd()))
         mv = models.get(p, (None, "max"))
         with open(os.path.join(workdir, ".pi/agent", f"{p}.md"), "w") as f:
             f.write(gen_agent_def(p, participants, {p: mv[0]} if mv[0] else None,
-                                  stances_arg, agent_extra.get(p), variant=mv[1]))
+                                  stances_arg, agent_extra.get(p)))
         with open(os.path.join(workdir, "pi-agent.json"), "w") as f:
             json.dump({
                 "model": mv[0] or "",
@@ -842,9 +848,10 @@ def main():
     parser.add_argument("--spec", default=None,
                         help="讨论规格目录（内容源：question/background/agents，优先于 CLI 内容参数）")
     parser.add_argument("--fork-source", default=None,
-                        help="主 session 文件绝对路径（多视角 fork 模式）："
-                             "写入 protocol.json，各 agent 首唤 --fork 挂载主上下文；"
-                             "不传 = legacy 形态（workdir cwd + 新建 session）")
+                        help="主 session 文件绝对路径（fork-only）：写入 "
+                             "protocol.json，各 agent 首唤用活跃视图挂载主 "
+                             "上下文；metadata 不传 = 从主 pi 环境自动解析"
+                             "（PI_SESSION_ID；解析失败明确报错）")
     parser.add_argument("--pure", action="store_true", help="--pure 模式（禁外部插件）")
     parser.add_argument("--start", action="store_true", help="创建后启动讨论")
     parser.add_argument("--skip-setup", action="store_true",
@@ -978,7 +985,7 @@ def main():
     if args.skip_setup:
         if not os.path.exists(base):
             print(f"错误: 环境不存在 {base}")
-            return
+            sys.exit(1)
         print(f"[start] 跳过环境生成——只启动已有环境")
         # 参与者从已有环境的 protocol.json 读（单一事实源，不依赖 CLI）
         try:
@@ -987,15 +994,15 @@ def main():
             participants = json.loads(r.stdout).get("participants", [])
         except (ValueError, OSError):
             print("[error] 无法读取已有环境 protocol.json")
-            return
+            sys.exit(1)
     else:
         # review5 A8：创建前检测 base 已存在——git init --bare 幂等不删
         # 旧对象，重复 --dir 会复用旧 bare（旧 concluded 污染新讨论）。
         # 提示先 --cleanup（或手动删目录）。
         if os.path.exists(base):
             print(f"错误: 讨论目录已存在 {base}（请先 --cleanup 或删除，"
-                  f"避免旧 bare 污染——review5 A8）")
-            return
+                  f"避免旧 bare 污染）")
+            sys.exit(1)
         # 创建分支（--spec 提供内容源时 spec 优先，设计 16.5）
         spec_dir = None
         viewer_briefs = {}
@@ -1008,7 +1015,7 @@ def main():
                 viewers_dir=os.path.join(os.getcwd(), "viewers"))
             if err:
                 print(err)
-                return
+                sys.exit(1)
             participants = parts
         # 非 spec：--agents 未传 → 默认 a,b（M2：argparse 默认 None）
         if not args.spec and not participants:
@@ -1018,21 +1025,21 @@ def main():
         # 视角名合法）——非法 = 空名/路径分隔符/空白/human 保留名/>32 字符
         if not participants:
             print("错误: 参与者为空（--agents 或 spec/agents/ 无有效 agent）")
-            return
+            sys.exit(1)
         bad = [p for p in participants
                if not p or re.search(r"[/\\\s]", p) or len(p) > 32]
         if bad:
             print(f"错误: 非法 agent 名（禁止空名/路径分隔符/空白，≤32 字符）：{bad}")
-            return
+            sys.exit(1)
         # human 保留名（helper 设计 §2.1）：human 是插话通道，不是参与者
         err = _check_reserved(participants)
         if err:
             print(err)
-            return
+            sys.exit(1)
         # resultWriter 必须 ∈ participants（spec 推断或 CLI 的 participants）
         if args.result_writer and args.result_writer not in participants:
             print(f"错误: resultWriter {args.result_writer} 不在参与者 {participants} 中")
-            return
+            sys.exit(1)
         # fork-only（2026-09-09 定）：创建必须携带主 session 文件——无
         # fork 上下文的多视角分析违背产品本质，明确报错而非静默退化。
         # --fork-source 未显式传 → 从主 pi 环境（PI_SESSION_ID）自动解析
@@ -1045,7 +1052,7 @@ def main():
         # 无 spec 时创建必须给 --topic（否则是无效的 --start 单独用）
         if not args.spec and not args.topic:
             print("错误: 需要 --topic（或使用 --skip-setup 启动已有环境）")
-            return
+            sys.exit(1)
         setup_environment(args, participants, base, spec_dir,
                           viewer_briefs=viewer_briefs)
     if args.start:
@@ -1069,4 +1076,5 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    # 传递 main 返回码（--wait 超时返回 1——此前被丢弃，wrapper 判据失效）
+    sys.exit(main() or 0)

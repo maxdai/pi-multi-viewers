@@ -10,13 +10,13 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from start_discussion import (
-    gen_protocol, gen_question, gen_agent_def, gen_agens_md,
+    gen_protocol, gen_question, gen_agent_def, gen_agents_md,
     run, _resolve_path, _default_model, check_status,
 )
 
 
 class Args:
-    """gen_agens_md 的 args 桩（只读 background）。"""
+    """gen_agents_md 的 args 桩（只读 background）。"""
     def __init__(self, background=None):
         self.background = background
 
@@ -108,29 +108,29 @@ class TestGenAgentDef(unittest.TestCase):
 
 class TestGenAgensMd(unittest.TestCase):
     def test_background_default(self):
-        md = gen_agens_md(Args(), "a", ["a", "b"])
+        md = gen_agents_md(Args(), "a", ["a", "b"])
         self.assertIn("## 背景", md)
         self.assertIn("（无）", md)
         self.assertIn("参与者：a、b", md)
 
     def test_background_custom(self):
-        md = gen_agens_md(Args("审核代码"), "b", ["a", "b", "c"])
+        md = gen_agents_md(Args("审核代码"), "b", ["a", "b", "c"])
         self.assertIn("审核代码", md)
         self.assertIn("参与者：a、b、c", md)
 
     def test_main_pi_cwd_injected(self):
         """主 pi cwd 程序化注入（2026-09-02）：传入时出现节，未传时隐藏。"""
-        md = gen_agens_md(Args(), "a", ["a", "b"], main_pi_cwd="/x/proj")
+        md = gen_agents_md(Args(), "a", ["a", "b"], main_pi_cwd="/x/proj")
         self.assertIn("主 pi 工作目录", md)
         self.assertIn("/x/proj", md)
         # 未传（手动场景）→ 节隐藏
-        md2 = gen_agens_md(Args(), "a", ["a", "b"])
+        md2 = gen_agents_md(Args(), "a", ["a", "b"])
         self.assertNotIn("主 pi 工作目录", md2)
         self.assertNotIn("（未提供）", md2)
 
     def test_no_prepare_section(self):
         """prepare 机制已移除（fork 模式上下文自带）：模板与产物均无引用节。"""
-        md = gen_agens_md(Args(), "a", ["a", "b"], main_pi_cwd="/x")
+        md = gen_agents_md(Args(), "a", ["a", "b"], main_pi_cwd="/x")
         self.assertNotIn("讨论背景文件", md)
         self.assertNotIn("discuss_prepare", md)
         self.assertNotIn("PREPARE_FILE_SECTION", md)

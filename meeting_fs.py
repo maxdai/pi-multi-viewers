@@ -381,9 +381,14 @@ def build_active_fork_source(src_session, out_path, new_id, new_cwd):
     条目），与 pi rebuild 上下文的算法一致（buildContextEntries）。
 
     产物：out_path（jsonl）= 新 header（id=new_id, cwd=new_cwd,
-    parentSession=源路径）+ [compaction] + firstKept 起的条目。
-    无 compaction 的源 → 只写 header + 全部条目？否——返回错误
-    （行为先例风险不变，调用方决定兜底：bootstrap/拒绝启动）。
+    parentSession=源路径, forkSourceMode=active|full）+ [compaction] +
+    firstKept 起的条目。header.forkSourceMode 是**可核查标记**
+    （active=压缩态裁剪；full=无 compaction 全量兜底）——审计时一眼
+    可知该 fork 源走了哪条路径。
+    无 compaction 的源 → **全量兜底**（active=entries[1:]）：引导
+    session（零 LLM bootstrap/几轮对话）本就干净无行为先例；大 session
+    无 compaction = 主 pi 从未压缩，全量复制风险由调用方评估（标记为
+    full 供核查）。
 
     返回 (entries_written, error)。
     """
@@ -395,25 +400,26 @@ def build_active_fork_source(src_session, out_path, new_id, new_cwd):
     header = next((e for e in entries if e.get("type") == "session"), None)
     if header is None:
         return 0, "源 session 无 header"
-    comps = [(i, e) for i, e in enumerate(entries) if e.get("type") == "compaction"]
-    if not comps:
-        # 无 compaction 兜底：引导 session（pi --print 造的几条消息）本就
-        # 干净无行为先例，全量即活跃视图；大 session 无 compaction 说明
-        # 主 pi 从未压缩（历史=活跃），此时全量复制风险自担——文件头加
-        # 标记供核查。拒绝会堵死引导 session 正道（e2e 预检实测 2026-09-09）
-        active = entries[1:]  # 除 header 外全量
-        truncated = False
+    comps = [(i, e) for i, e in enumerate(entries)
+             if e.get("type") == "compaction"]
     if comps:
         _i_last, comp = comps[-1]
         kept_id = comp.get("firstKeptEntryId")
-        idx_by_id = {e.get("id"): i for i, e in enumerate(entries) if e.get("id")}
+        idx_by_id = {e.get("id"): i for i, e in enumerate(entries)
+                     if e.get("id")}
         kept_idx = idx_by_id.get(kept_id)
         if kept_idx is None:
             return 0, f"firstKeptEntryId {kept_id} 不在源 session 中"
         active = [comp] + entries[kept_idx:]
         new_ts = comp.get("timestamp") or header.get("timestamp")
+        mode = "active"
     else:
+        # 无 compaction 兜底：引导 session 本就干净无行为先例（零 LLM
+        # bootstrap/几轮对话），全量即活跃视图；大 session 无 compaction
+        # = 主 pi 从未压缩，全量风险由调用方评估——header 标记 full 供核查
+        active = entries[1:]  # 除 header 外全量
         new_ts = header.get("timestamp")
+        mode = "full"
     new_header = {
         "type": "session",
         "version": header.get("version", 3),
@@ -421,6 +427,7 @@ def build_active_fork_source(src_session, out_path, new_id, new_cwd):
         "timestamp": new_ts,
         "cwd": new_cwd,
         "parentSession": src_session,
+        "forkSourceMode": mode,
     }
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     with open(out_path, "w", encoding="utf-8") as f:

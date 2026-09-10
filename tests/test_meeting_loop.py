@@ -521,14 +521,6 @@ class TestMiscLoop(unittest.TestCase):
         with self.assertRaises(meeting_loop.RecoverableWakeError):
             raise e
 
-    def test_session_id_format(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            work = os.path.join(tmp, "disc-abc", "work-a")
-            os.makedirs(work)
-            sid = meeting_loop.session_id(work, "a")
-            self.assertIn("disc-abc", sid)
-            self.assertIn("-a", sid)
-
     def test_save_load_session_id(self):
         with tempfile.TemporaryDirectory() as tmp:
             work = os.path.join(tmp, "disc", "work-a")

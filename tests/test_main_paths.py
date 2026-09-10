@@ -20,6 +20,49 @@ from unittest import mock
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
+class TestCliExitCodes(unittest.TestCase):
+    """CLI 错误退出码语义（W4 修复，e2e7 评审）：错误分支必须 exit≠0
+    ——此前裸 return 使 wrapper `if ! python3 …` 判据失效（静默失败：
+    打印错误后继续 rm spec + 报"已启动"）。"""
+
+    def _run(self, args, cwd=None):
+        import subprocess
+        ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        return subprocess.run(
+            [sys.executable, os.path.join(ROOT, "start_discussion.py"), *args],
+            capture_output=True, text=True, cwd=cwd or ROOT)
+
+    def test_skip_setup_missing_env_exit1(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            r = self._run(["--dir", os.path.join(tmp, "nope"),
+                           "--skip-setup", "--start"])
+            self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+
+    def test_dir_exists_exit1(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            base = os.path.join(tmp, "discuss-x")
+            os.makedirs(base)
+            r = self._run(["--dir", base, "--topic", "T", "--agents", "a,b",
+                           "--fork-source", "/s/x.jsonl"])
+            self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+
+    def test_bad_agent_name_exit1(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            r = self._run(["--dir", os.path.join(tmp, "d"), "--topic", "T",
+                           "--agents", "a b", "--fork-source", "/s/x.jsonl"])
+            self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+
+    def test_human_reserved_exit1(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            r = self._run(["--dir", os.path.join(tmp, "d"), "--topic", "T",
+                           "--agents", "a,human", "--fork-source", "/s/x.jsonl"])
+            self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+
+
 class TestMeetingLoopMain(unittest.TestCase):
     """meeting_loop.__main__ 拼接链：真实 subprocess 跑生产路径。
 

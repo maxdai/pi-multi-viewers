@@ -398,6 +398,7 @@ class TestActiveForkSource(unittest.TestCase):
             self.assertEqual(len(lines), 3)  # header + compaction + kept
             self.assertEqual(lines[0]["id"], "uuid-x")
             self.assertEqual(lines[0]["cwd"], "/proj")
+            self.assertEqual(lines[0]["forkSourceMode"], "active")  # 可核查标记
             self.assertEqual(lines[1]["type"], "compaction")
             self.assertEqual(lines[2]["id"], "k1")  # 旧历史 m1 被裁掉
 
@@ -411,6 +412,7 @@ class TestActiveForkSource(unittest.TestCase):
             lines = [json.loads(x) for x in open(out)]
             self.assertEqual(len(lines), 2)  # header + 全量 1 条
             self.assertEqual(lines[1]["id"], "m1")
+            self.assertEqual(lines[0]["forkSourceMode"], "full")  # 全量兜底标记
 
     def test_bad_source(self):
         with tempfile.TemporaryDirectory() as tmp:

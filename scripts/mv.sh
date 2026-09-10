@@ -19,9 +19,6 @@ START_DISCUSSION="$ROOT_DIR/start_discussion.py"
 HUMAN_VIEWER="$ROOT_DIR/human_viewer.py"
 HUMAN_SAYER="$ROOT_DIR/human_sayer.py"
 
-DEFAULT_AGENTS="a,b,c"
-DEFAULT_MAX_MEETING=10
-DEFAULT_MAX_RR=5
 
 usage() {
     cat <<'USAGE_EOF'
@@ -153,8 +150,6 @@ cmd_say() {
 # 定位主 pi 的 session 文件：优先 PI_SESSION_FILE，否则用当前 cwd 编码路径查找
 # 读取主 pi 的 model/thinking（用户 2026-08-31：aft 不再替换 bash 后
 # 环境变量可用且是当前生效值——优先环境变量，session 文件解析仅为兜底）
-# agents 列表（DEFAULT_AGENTS 逗号分隔 → 行分隔写入 .order；
-# --agents 可覆盖：名称列表 "a,b,c" 或纯数字 "4"（生成 a..<n>））
 cmd_prepare() {
     check_aft_bash
     local topic="" background="" agents_list=""
@@ -242,7 +237,10 @@ cmd_start() {
     # fork 源解析已收归 python（resolve_fork_source：env + sessions 编码
     # glob，2026-09-09 结构收敛；解析失败 python 内部报错退出）
     # 第 1 步：创建分析环境（不启动；fork 源自动解析）
-    if ! "$PYTHON" "$START_DISCUSSION" --dir "$dir_path" --spec "$spec_dir" --max-meeting "$DEFAULT_MAX_MEETING" --max-rr "$DEFAULT_MAX_RR"; then
+    # 配额（max-meeting/max-rr）是环境属性：唯一默认在 python argparse
+    # （10/7），创建时固化 protocol.json——wrapper 不传（W1 双源分叉修复：
+    # 此前 wrapper 5 与 python 7 不一致，两条入口 RR 上限差 40%）
+    if ! "$PYTHON" "$START_DISCUSSION" --dir "$dir_path" --spec "$spec_dir"; then
         fail "环境创建失败，请查看上方输出"
     fi
 

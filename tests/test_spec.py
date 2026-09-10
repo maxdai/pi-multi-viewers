@@ -2,7 +2,7 @@
 """spec 规格目录测试（设计 16：--spec-gen 骨架 + --spec 内容注入）。
 
 覆盖：_spec_read（跳过首行）/ gen_spec_skeleton（骨架结构）/
-gen_agens_md + gen_agent_def（spec 内容注入）/ _spec_models（model+variant
+gen_agents_md + gen_agent_def（spec 内容注入）/ _spec_models（model+variant
 双列解析）/ _resolve_spec（互斥 + participants 推断）/ _default_model
 （Pi settings 解析）/ setup_environment（完整创建 + 回退）。
 """
@@ -18,7 +18,7 @@ from unittest import mock
 
 from start_discussion import (
     _spec_read, _spec_models, _resolve_spec, gen_spec_skeleton,
-    gen_agens_md, gen_agent_def, setup_environment,
+    gen_agents_md, gen_agent_def, setup_environment,
     _default_model, _strip_empty_sections,
 )
 
@@ -131,13 +131,13 @@ class TestSpecSkeleton(unittest.TestCase):
 class TestSpecInjection(unittest.TestCase):
     def test_agens_md_spec_background(self):
         args = Args(background="CLI 背景")
-        md = gen_agens_md(args, "a", ["a", "b"], spec_background="spec 背景")
+        md = gen_agents_md(args, "a", ["a", "b"], spec_background="spec 背景")
         self.assertIn("spec 背景", md)
         self.assertNotIn("CLI 背景", md)   # spec 优先
 
     def test_agens_md_fallback_cli(self):
         args = Args(background="CLI 背景")
-        md = gen_agens_md(args, "a", ["a", "b"], spec_background=None)
+        md = gen_agents_md(args, "a", ["a", "b"], spec_background=None)
         self.assertIn("CLI 背景", md)
 
     def test_agent_def_extra(self):
@@ -218,8 +218,8 @@ class TestSpecModels(unittest.TestCase):
             models = _spec_models(d, ["a", "b"])
             da = gen_agent_def("a", ["a", "b"],
                                models={"a": models["a"][0]},
-                               variant=models["a"][1])
-            db = gen_agent_def("b", ["a", "b"], variant=models["b"][1])
+                               )
+            db = gen_agent_def("b", ["a", "b"])
             self.assertIn("你使用模型 opencode-go/gpt-5.6-luna 参与讨论", da)
             self.assertNotIn("你使用模型", db)   # default → 无 model 正文
 

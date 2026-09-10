@@ -4,7 +4,8 @@
 复用 meeting_engine 的唯一状态机，只注入"唤醒 pi"的 responder。
 协议逻辑（锁/配额/级联/信号）全在引擎，此处只做 LLM 交互。
 
-用法：python3 meeting_loop.py <workdir> <agent> [--max-meeting N] [--max-rr N] [--stall-timeout S] [--pure]
+用法：python3 meeting_loop.py <workdir> <agent> [--pure]
+（配额/超时从 protocol.json 读——单一事实源；无 CLI 覆盖）
 """
 
 import json
@@ -79,18 +80,6 @@ def mem_available_mb():
     except OSError:
         return 99999
     return 99999
-
-
-def session_id(workdir, agent):
-    """返回本 agent 的 pi session id（first run 创建，之后复用）。
-
-    session 文件存放在 <base>/pi-sessions，随讨论目录一起清理。
-    id 使用 base 目录名 + agent 名，保证同一讨论内各异、且可读。
-    """
-    base = os.path.dirname(workdir)
-    base_name = os.path.basename(base.rstrip("/")) or "discussion"
-    ident = re.sub(r"[^A-Za-z0-9._-]+", "-", f"discuss-{base_name}-{agent}")
-    return ident
 
 
 def load_session_id(workdir, agent):
@@ -351,11 +340,18 @@ def wake_llm(workdir, agent, prompt, pure=False, fork_source=None, fork_cwd=None
 def _read_perspective_brief(workdir, agent):
     """读视角任务书正文（wake prompt 身份重申用）。
 
-    来源：work-<agent>/.pi/agent/<agent>.md（prompt_file 注入源的同一份）。
-    缺失/超长（>500 字，任务书是全量正文，wake 只需首段锚定）→ 截取前
-    500 字；文件不存在 → None（不影响唤醒，仅少一段重申）。
+    来源：pi-agent.json 的 prompt_file 字段（与注入同一事实源，L3 修复
+    ——原硬编码 .pi/agent/<agent>.md，与注入路径两处推导，prompt_file
+    一改身份重申静默降级）；缺失字段回退默认路径（前向兼容）。
+    缺失/超长（>500 字）→ 截断；文件不存在 → None（不影响唤醒）。
     """
-    fp = os.path.join(workdir, ".pi/agent", f"{agent}.md")
+    try:
+        with open(os.path.join(workdir, "pi-agent.json")) as f:
+            pf = json.load(f).get("prompt_file") or ""
+    except (OSError, ValueError):
+        pf = ""
+    fp = (os.path.join(workdir, pf) if pf
+          else os.path.join(workdir, ".pi/agent", f"{agent}.md"))
     try:
         with open(fp, encoding="utf-8") as f:
             brief = f.read().strip()
@@ -462,15 +458,8 @@ if __name__ == "__main__":
         mr = proto["maxRRRounds"]
     if proto.get("stallTimeoutSeconds"):
         st = proto["stallTimeoutSeconds"]
-    for i, a in enumerate(sys.argv):
-        if a in ("--max-meeting", "--max-rr", "--stall-timeout") \
-                and i + 1 < len(sys.argv):
-            if a == "--max-meeting":
-                mm = int(sys.argv[i + 1])
-            elif a == "--max-rr":
-                mr = int(sys.argv[i + 1])
-            else:
-                st = int(sys.argv[i + 1])
+    # （CLI 配额覆盖通道已删——L5：协议是配额唯一事实源，生产无调用方；
+    # docstring 用法行同步删除）
     fork_source = proto.get("forkSource") or ""
     if not fork_source:
         print("[fatal] protocol.json 缺 forkSource——多视角模式必须在主 pi "
