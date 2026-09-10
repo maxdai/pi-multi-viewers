@@ -240,6 +240,35 @@ def _build_wake_cmd(workdir, agent, sid, cfg, fork_source, fork_cwd,
             log(agent, f"[fatal] 活跃视图 fork 源生成失败: {err}")
             raise RuntimeError(err)
         log(agent, f"fork 源（活跃视图 {n} 条）: {os.path.basename(active_src)}")
+        # 切换叙事（用户 2026-09-10 设计）：源尾部注入"停止旧任务 →
+        # 新任务说明 → assistant 确认"对话——显式切断历史叙事惯性
+        # （agent 读到的最后叙事是任务切换共识，不再扮演主 pi）。
+        # 任务说明内容 = 视角 + 主题（question.md），与 wake prompt 呼应
+        brief = _read_perspective_brief(workdir, agent) or f"{agent} 视角参与者"
+        qpath = os.path.join(workdir, "question.md")
+        topic = ""
+        try:
+            with open(qpath, encoding="utf-8") as f:
+                qlines = [l for l in f.read().splitlines()
+                          if l.startswith("# 分析主题")]
+            if qlines:
+                topic = qlines[0].replace("# 分析主题：", "").strip()
+        except OSError:
+            pass
+        turns = [
+            ("user", "从现在开始，我们停止之前的任务的执行，开始新任务。"),
+            ("assistant", "好的，请说明新任务的具体信息。"),
+            ("user", f"新任务：你是多视角分析中的「{agent}」视角参与者。{brief}"
+                     f"分析主题：{topic or '见 question.md'}。你的唯一任务是"
+                     f"参与这次多视角分析——按视角产出分析/回应其他参与者，"
+                     f"写消息文件的路径由本地循环在每次唤醒时告知。上下文中的"
+                     f"历史（之前的开发、监控、测试等）都与新任务无关。"),
+            ("assistant", f"好的，我已理解新任务：以「{agent}」视角参与分析"
+                          f"（主题：{topic or '见 question.md'}），完成每次唤醒"
+                          f"指定的消息写入，不做任务以外的任何事。"),
+        ]
+        tn = meeting_fs.append_handoff_turns(active_src, turns)
+        log(agent, f"切换叙事已注入（{tn} 回合）")
         cmd = ["pi", "--mode", "json", "--session", active_src,
                "--name", display_name, "--session-dir", session_dir]
     else:

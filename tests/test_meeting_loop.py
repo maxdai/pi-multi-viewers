@@ -318,7 +318,15 @@ class TestForkWake(unittest.TestCase):
         self.assertEqual(fl[0]["type"], "session")
         self.assertEqual(fl[0]["cwd"], self.cwd_main)
         self.assertEqual(fl[1]["type"], "compaction")
-        self.assertEqual([e.get("id") for e in fl[1:]], ["c1", "keep1"])
+        # 活跃视图条目 + 尾部切换叙事（4 回合：user/assistant ×2）
+        self.assertEqual([e.get("type") for e in fl[1:3]], ["compaction", "message"])
+        self.assertEqual([e.get("id") for e in fl[1:3]], ["c1", "keep1"])
+        turns = fl[3:]
+        self.assertEqual(len(turns), 4)
+        self.assertEqual([t["message"]["role"] for t in turns],
+                         ["user", "assistant", "user", "assistant"])
+        self.assertIn("停止之前的任务", turns[0]["message"]["content"][0]["text"])
+        self.assertIn("「a」", turns[2]["message"]["content"][0]["text"])  # 视角名
         self.assertIn("--name", cmd)
         self.assertTrue(cmd[cmd.index("--name") + 1].endswith("-a"))
         self.assertNotIn("--session-id", cmd)  # id 已写进 header，pi 沿用

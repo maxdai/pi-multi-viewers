@@ -9,6 +9,7 @@
 
 import json
 import os
+import uuid
 import re
 import subprocess
 import time
@@ -510,3 +511,36 @@ def preserve_result_md(base):
     with open(dest, "w") as f:
         f.write(r.stdout)
     return dest
+
+def append_handoff_turns(session_file, turns):
+    """session 尾部追加对话回合（切换叙事，2026-09-09 设计）。
+
+    turns: [(role, text), ...]——按序追加，parentId 接到现有链尾，
+    最简字段（role/content，无 provider/usage——pi 加载只关心角色与
+    内容，冒烟实测通过）。
+    用途：fork 源尾部注入"停止旧任务 → 新任务说明 → 确认"对话，
+    显式切断历史叙事惯性（agent 读到的最后叙事是任务切换共识，
+    无法再把自己当成旧叙事的延续）。
+    返回追加条数。
+    """
+    with open(session_file, encoding="utf-8") as f:
+        lines = [json.loads(l) for l in f if l.strip()]
+    parent = None
+    for e in reversed(lines):
+        if e.get("id"):
+            parent = e["id"]
+            break
+    from datetime import datetime, timezone
+    n = 0
+    with open(session_file, "a", encoding="utf-8") as f:
+        for role, text in turns:
+            eid = uuid.uuid4().hex[:8]
+            e = {"type": "message", "id": eid, "parentId": parent,
+                 "timestamp": datetime.now(timezone.utc).isoformat().replace(
+                     "+00:00", "Z"),
+                 "message": {"role": role,
+                             "content": [{"type": "text", "text": text}]}}
+            f.write(json.dumps(e, ensure_ascii=False) + "\n")
+            parent = eid
+            n += 1
+    return n
