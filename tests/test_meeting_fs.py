@@ -415,6 +415,20 @@ class TestActiveForkSource(unittest.TestCase):
             self.assertEqual(lines[1]["id"], "m1")
             self.assertEqual(lines[0]["forkSourceMode"], "full")  # 全量兜底标记
 
+    def test_force_full(self):
+        """force_full=True：有 compaction 的源也全量（forkMode 参数化，
+        用户 2026-09-10——验证全量历史+切换叙事场景）。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            src = self._make_src(tmp)  # 含 compaction + keep1
+            out = os.path.join(tmp, "full.jsonl")
+            n, err = build_active_fork_source(src, out, "u", "/p",
+                                              force_full=True)
+            self.assertIsNone(err)
+            lines = [json.loads(x) for x in open(out)]
+            self.assertEqual(len(lines), 4)  # header + m1 + c1 + k1（全量）
+            self.assertEqual(lines[0]["forkSourceMode"], "full")
+            self.assertEqual(lines[1]["id"], "m1")  # 旧历史保留
+
     def test_bad_source(self):
         with tempfile.TemporaryDirectory() as tmp:
             n, err = build_active_fork_source(

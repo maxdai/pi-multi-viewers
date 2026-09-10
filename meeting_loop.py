@@ -217,25 +217,24 @@ def recover_git_lock(workdir, agent):
 
 
 def _build_wake_cmd(workdir, agent, sid, cfg, fork_source, fork_cwd,
-                    session_dir, first_wake, pure, prompt):
+                    session_dir, first_wake, pure, prompt, fork_mode="active"):
     """组装唤醒命令（#3 拆分，e2e7 评审）：返回 (cmd, spawn_cwd)。
 
-    首唤（first_wake 且 sid 已由调用方预生成）：活跃视图 fork 源
-    （build_active_fork_source）→ --session 直接打开；续接：
-    --session-id。cwd = fork_cwd（主项目）优先。协议/视角注入在此
-    追加（--append-system-prompt，文件存在才加）。
+    首唤（first_wake 且 sid 已由调用方预生成）：fork 源生成
+    （build_active_fork_source，fork_mode=active|full）→ --session
+    直接打开；续接：--session-id。cwd = fork_cwd（主项目）优先。
+    协议/视角注入在此追加（--append-system-prompt，文件存在才加）。
     """
     base = os.path.dirname(workdir)
     if first_wake:
         base_name = os.path.basename(base.rstrip("/")) or "discussion"
         display_name = f"{base_name}-{agent}"
-        # 活跃视图 fork 源（方案 b，用户 2026-09-09 定）：裁剪版 session
-        # 文件 + --session 直接打开——不再用 pi --fork 全量复制（全量
-        # 历史的行为先例让 agent 继续扮演主 pi）。活跃视图 = 最后
-        # compaction + firstKept 起条目（pi rebuild 上下文同款算法）。
+        # fork 源（用户 2026-09-10 参数化）：裁剪策略从 protocol.json
+        # forkMode 读（active=压缩态省 token / full=全量保留上下文）
         active_src = os.path.join(session_dir, f"fork-src-{sid}.jsonl")
         n, err = meeting_fs.build_active_fork_source(
-            fork_source, active_src, sid, fork_cwd or workdir)
+            fork_source, active_src, sid, fork_cwd or workdir,
+            force_full=(fork_mode == "full"))
         if err:
             log(agent, f"[fatal] 活跃视图 fork 源生成失败: {err}")
             raise RuntimeError(err)
@@ -342,7 +341,8 @@ def _run_wake_proc(cmd, spawn_cwd, workdir, agent):
                                        err or "")
 
 
-def wake_llm(workdir, agent, prompt, pure=False, fork_source=None, fork_cwd=None):
+def wake_llm(workdir, agent, prompt, pure=False, fork_source=None, fork_cwd=None,
+             fork_mode="active"):
     """唤醒 pi（fork-only：首唤 --session 活跃视图，后续 --session-id
     续接）。返回 (sessionID, returncode)。
 
@@ -366,7 +366,7 @@ def wake_llm(workdir, agent, prompt, pure=False, fork_source=None, fork_cwd=None
         sid = str(uuid.uuid4())
     cmd, spawn_cwd = _build_wake_cmd(workdir, agent, sid, cfg, fork_source,
                                      fork_cwd, session_dir, first_wake,
-                                     pure, prompt)
+                                     pure, prompt, fork_mode)
 
     log_dir = os.path.join(base, "wake-logs")
     os.makedirs(log_dir, exist_ok=True)
@@ -420,7 +420,7 @@ def _read_perspective_brief(workdir, agent):
     return brief or None
 
 
-def make_responder(pure, fork_source=None, fork_cwd=None):
+def make_responder(pure, fork_source=None, fork_cwd=None, fork_mode="active"):
     """构造真实 LLM responder：唤醒 pi，LLM 写内容文件。
 
     LLM 只提供内容（写消息文件），流程（补全字段/commit/push）
@@ -465,7 +465,8 @@ def make_responder(pure, fork_source=None, fork_cwd=None):
             log(agent, "内存不足——抛可恢复异常（不代写 freezing，下轮重试）")
             raise RecoverableWakeError("内存不足")
         wake_llm(workdir, agent, prompt, pure,
-                 fork_source=fork_source, fork_cwd=fork_cwd)
+                 fork_source=fork_source, fork_cwd=fork_cwd,
+                 fork_mode=fork_mode)
         return True
     return responder
 
@@ -513,7 +514,8 @@ if __name__ == "__main__":
         agent_loop(workdir, agent,
                    make_responder(pure,
                                   fork_source=fork_source,
-                                  fork_cwd=proto.get("forkCwd") or ""),
+                                  fork_cwd=proto.get("forkCwd") or "",
+                                  fork_mode=proto.get("forkMode") or "active"),
                    max_meeting=mm, max_rr=mr, stall_timeout=st)
     except KeyboardInterrupt:
         log(agent, "被中断")

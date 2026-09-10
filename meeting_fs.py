@@ -371,25 +371,19 @@ def parse_log_nameonly(output):
         commits.append((cur, files))
     return commits
 
-def build_active_fork_source(src_session, out_path, new_id, new_cwd):
-    """生成"活跃视图"fork 源（方案 b，用户 2026-09-09）：裁剪版 session
-    文件，供 wake_llm 首唤 --session 直接打开（不再用 pi --fork 全量复制）。
+def build_active_fork_source(src_session, out_path, new_id, new_cwd,
+                             force_full=False):
+    """生成 fork 源 session 文件（用户 2026-09-10 参数化）——供 wake_llm
+    首唤 --session 直接打开（不再用 pi --fork 全量复制）。
 
-    动机（e2e 四轮实测）：全量 fork 让 agent 携带主 session 的行为先例
-    （5000 条历史里"主 pi"的监控/开发动作），wake prompt 身份锚定也压不
-    住角色连续性——agent 继续扮演主 pi 而非视角参与者。活跃视图 =
-    主 session 当前的压缩态（最后 compaction + firstKeptEntryId 起的
-    条目），与 pi rebuild 上下文的算法一致（buildContextEntries）。
-
-    产物：out_path（jsonl）= 新 header（id=new_id, cwd=new_cwd,
-    parentSession=源路径, forkSourceMode=active|full）+ [compaction] +
-    firstKept 起的条目。header.forkSourceMode 是**可核查标记**
-    （active=压缩态裁剪；full=无 compaction 全量兜底）——审计时一眼
-    可知该 fork 源走了哪条路径。
-    无 compaction 的源 → **全量兜底**（active=entries[1:]）：引导
-    session（零 LLM bootstrap/几轮对话）本就干净无行为先例；大 session
-    无 compaction = 主 pi 从未压缩，全量复制风险由调用方评估（标记为
-    full 供核查）。
+    两种裁剪策略（forkSourceMode 标记可核查）：
+      active（默认）：最后 compaction + firstKeptEntryId 起的条目——
+        主 session 的压缩态，与 pi rebuild 上下文算法一致（省 token）
+      full（force_full=True 或源无 compaction）：全部条目——用户
+        2026-09-10 定：验证"全量历史 + 切换叙事"能否正确执行任务
+        （历史不构成障碍，指令清晰度才是）；保留 fork 全量上下文的
+        产品初衷
+    产物 header 含 forkSourceMode 标记供核查。
 
     返回 (entries_written, error)。
     """
@@ -401,8 +395,9 @@ def build_active_fork_source(src_session, out_path, new_id, new_cwd):
     header = next((e for e in entries if e.get("type") == "session"), None)
     if header is None:
         return 0, "源 session 无 header"
-    comps = [(i, e) for i, e in enumerate(entries)
-             if e.get("type") == "compaction"]
+    comps = [] if force_full else [
+        (i, e) for i, e in enumerate(entries)
+        if e.get("type") == "compaction"]
     if comps:
         _i_last, comp = comps[-1]
         kept_id = comp.get("firstKeptEntryId")
@@ -415,9 +410,8 @@ def build_active_fork_source(src_session, out_path, new_id, new_cwd):
         new_ts = comp.get("timestamp") or header.get("timestamp")
         mode = "active"
     else:
-        # 无 compaction 兜底：引导 session 本就干净无行为先例（零 LLM
-        # bootstrap/几轮对话），全量即活跃视图；大 session 无 compaction
-        # = 主 pi 从未压缩，全量风险由调用方评估——header 标记 full 供核查
+        # full 分支：force_full 或源无 compaction（引导 session 本就干净
+        # 无行为先例；大 session 全量 = 用户显式选择的验证/保留策略）
         active = entries[1:]  # 除 header 外全量
         new_ts = header.get("timestamp")
         mode = "full"

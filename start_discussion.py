@@ -363,7 +363,7 @@ def gen_question(topic, stances, background, questions):
 
 def gen_protocol(topic, participants, max_meeting, max_rr, pure=False,
                  result_writer=None, stall_timeout=600,
-                 fork_source=None, fork_cwd=None):
+                 fork_source=None, fork_cwd=None, fork_mode="active"):
     """protocol.json（meeting 模式）。"""
     rw = result_writer or participants[-1]
     proto = {
@@ -380,10 +380,12 @@ def gen_protocol(topic, participants, max_meeting, max_rr, pure=False,
     if pure:
         proto["pure"] = True
     if fork_source:
-        # fork 模式（多视角）：首唤挂载主 session 全量上下文 + cwd=主项目
-        # （agent 可直接读项目文件）。实测 2026-09-09 全部验证通过。
+        # fork 模式（多视角）：首唤挂载主 session + cwd=主项目
+        # forkMode: active（默认，压缩态）/ full（全量，用户 2026-09-10
+        # 参数化——验证/保留上下文两种策略均一等公民）
         proto["forkSource"] = fork_source
         proto["forkCwd"] = fork_cwd or os.getcwd()
+        proto["forkMode"] = fork_mode
     return proto
 
 
@@ -710,7 +712,8 @@ def setup_environment(args, participants, base, spec_dir=None,
                                args.max_rr, args.pure, args.result_writer,
                                args.stall_timeout,
                                fork_source=getattr(args, "fork_source", None),
-                               fork_cwd=os.getcwd()),
+                               fork_cwd=os.getcwd(),
+                               fork_mode=getattr(args, "fork_mode", "active")),
                   f, indent=2, ensure_ascii=False)
     with open(os.path.join(wa, "question.md"), "w") as f:
         if spec_question is not None:
@@ -888,6 +891,9 @@ def main():
                         help="生成 spec 骨架到 DIR（如 --spec-gen myspec/；不需 --dir）")
     parser.add_argument("--spec", default=None,
                         help="讨论规格目录（内容源：question/background/agents，优先于 CLI 内容参数）")
+    parser.add_argument("--fork-mode", default="active", choices=["active", "full"],
+                        help="fork 裁剪策略：active=压缩态（默认，省 token）；"
+                             "full=全量（保留完整上下文）")
     parser.add_argument("--fork-source", default=None,
                         help="主 session 文件绝对路径（fork-only）：写入 "
                              "protocol.json，各 agent 首唤用活跃视图挂载主 "
