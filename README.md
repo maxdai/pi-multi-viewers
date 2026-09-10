@@ -72,9 +72,10 @@ ls ~/.pi/agent/npm/node_modules/pi-multi-viewers/scripts/mv.sh
 
 或命令行：
 
+```bash
 # 一次性准备：项目 cwd 下建 viewers/（稳定视角资产，文件名即 agent 名）
-# 本仓库自带示范（viewers/性能.md + viewers/可读性.md——措辞经首次实验验证，
-# 两个视角刻意对立：性能与可读性会产生真实交锋）。在新项目里照此建自己的。
+# 本仓库自带示范（viewers/ 下三个视角——措辞经实验验证，性能与简单化
+# 刻意对立）。在新项目里照此建自己的，每个文件只写视角内容。
 ls viewers/
 
 # 每次：生成主题骨架（不需要 --agents——启动时自动发现 viewers/*.md）
@@ -82,9 +83,14 @@ scripts/mv.sh --prepare "<主题>"              # spec = question.md(+background
 scripts/mv.sh --start <spec目录>              # 启动（自动挂载主 session；默认 budget 模式）
 #  可选：--fork-mode compaction|budget|full（见上表；一般不调）
 # 显式 --agents 仍可用：一次性自定义 agent（覆盖 viewers 发现）
-scripts/mv.sh --view <dir> --follow           # 观看（不进 LLM）
-scripts/mv.sh --say <dir> "<文本>"            # 插话
-scripts/mv.sh --cleanup <dir>                 # 收尾（result.md 自动留存）
+
+# 观看：--start 会输出可直接执行的 !! 流式观看命令（复制执行）
+scripts/mv.sh --view <dir>                    # 或一次性增量查看（主 pi 记录 HEAD 作下轮 --since）
+
+# 插话 / 状态 / 收尾
+scripts/mv.sh --say <dir> "<文本>"             # 插话（agents 可见并可回应）
+scripts/mv.sh --status <dir>                  # running / done / stalled / stopped
+scripts/mv.sh --cleanup <dir>                 # 收尾（result.md 自动留存到 <dir>-result.md）
 ```
 
 ## 架构
