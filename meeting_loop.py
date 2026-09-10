@@ -268,7 +268,7 @@ def _build_wake_cmd(workdir, agent, sid, cfg, fork_source, fork_cwd,
                           f"指定的消息写入，不做任务以外的任何事。"),
         ]
         tn = meeting_fs.append_handoff_turns(active_src, turns)
-        log(agent, f"切换叙事已注入（{tn} 回合）")
+        log(agent, f"切换叙事已注入（{tn} 条消息/2 对对话）")
         cmd = ["pi", "--mode", "json", "--session", active_src,
                "--name", display_name, "--session-dir", session_dir]
     else:
