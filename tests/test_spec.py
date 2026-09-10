@@ -413,6 +413,24 @@ class TestResolveSpec(unittest.TestCase):
             self.assertEqual(briefs["林然"], "性格视角")
             self.assertEqual(briefs["苏晚"], "命运视角")
 
+    def test_viewers_empty_brief_rejected(self):
+        """空视角任务书 → 报错（无 lenses 的 agent 会让多视角退化成
+        同名随机视角——静默退化）。覆盖 _resolve_spec 的 viewers 回退路径。"""
+        with tempfile.TemporaryDirectory() as d:
+            os.makedirs(os.path.join(d, "viewers"))
+            with open(os.path.join(d, "viewers", "性能.md"), "w") as f:
+                f.write("性能视角正文")
+            with open(os.path.join(d, "viewers", "占位.md"), "w") as f:
+                f.write("   \n\n")          # 纯空白
+            with open(os.path.join(d, "question.md"), "w") as f:
+                f.write("# 分析主题：T\n")
+            sd, parts, briefs, err = _resolve_spec(
+                d, None, None, None, None, None, None,
+                viewers_dir=os.path.join(d, "viewers"))
+            self.assertIsNone(sd)
+            self.assertIn("视角任务书不能为空", err)
+            self.assertIn("占位", err)
+
     def test_viewers_min_two(self):
         """meeting 至少两个 LLM agents（用户 2026-09-09）：viewers 仅 1 个
         .md → 专属错误（非通用"未找到"）。"""

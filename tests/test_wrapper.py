@@ -117,6 +117,28 @@ class TestPrepare(unittest.TestCase):
             self.assertEqual([d for d in os.listdir(tmp)
                               if d.startswith("mv-spec-")], [])
 
+    def test_prepare_rejects_empty_viewer(self):
+        """空视角任务书 → 报错不生成 spec（无 lenses 的 agent 会让多视角
+        退化成同名随机视角——静默退化，与无静默铁律相悖）。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            vd = os.path.join(tmp, "viewers")
+            os.makedirs(vd)
+            with open(os.path.join(vd, "性能.md"), "w") as f:
+                f.write("性能视角正文")
+            with open(os.path.join(vd, "占位.md"), "w") as f:
+                f.write("")                      # 空文件
+            with open(os.path.join(vd, "空白.md"), "w") as f:
+                f.write("\n\n  \n")            # 纯空白
+            r = run_wrapper(["--prepare", "T"], cwd=tmp)
+            self.assertNotEqual(r.returncode, 0)
+            out = r.stdout + r.stderr
+            self.assertIn("视角任务书不能为空", out)
+            self.assertIn("占位", out)
+            self.assertIn("空白", out)
+            # 零产物（校验在骨架生成之前）
+            self.assertEqual([d for d in os.listdir(tmp)
+                              if d.startswith("mv-spec-")], [])
+
     def test_prepare_rejects_single_viewer(self):
         """viewers/ 仅 1 个视角 → 失败（meeting 至少 2 agents）。"""
         with tempfile.TemporaryDirectory() as tmp:

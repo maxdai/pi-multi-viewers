@@ -473,22 +473,28 @@ def _check_reserved(participants):
 def _discover_viewers(viewers_dir):
     """发现 viewers 目录（多视角产品约定）：*.md 文件名即 agent 名。
 
-    返回 (participants, briefs)——participants 按文件名排序（决定 starter/
-    RR 轮转与默认 resultWriter）；briefs = {agent: 视角任务书正文}。
-    目录不存在/无文件 → (None, None)（调用方决定报错或回退）。
+    返回 (participants, briefs, errors)——participants 按文件名排序（决定
+    starter/RR 轮转与默认 resultWriter）；briefs = {agent: 视角任务书正文}；
+    errors = [(name, 原因)]（空/纯空白视角——这类视角无 lenses，会让多视角
+    退化成同名随机视角，属静默退化，必须报错而非放行）。
+    目录不存在/无文件 → (None, None, [])（调用方决定报错或回退）。
     """
     if not os.path.isdir(viewers_dir):
-        return None, None
+        return None, None, []
     names = sorted(
         f[:-3] for f in os.listdir(viewers_dir)
         if f.endswith(".md") and not f.startswith("."))
     if not names:
-        return None, None
-    briefs = {}
+        return None, None, []
+    briefs, errors = {}, []
     for n in names:
-        with open(os.path.join(viewers_dir, f"{n}.md")) as f:
-            briefs[n] = f.read().strip("\n")
-    return names, briefs
+        with open(os.path.join(viewers_dir, f"{n}.md"), encoding="utf-8") as f:
+            brief = f.read().strip("\n")
+        if not brief.strip():
+            errors.append((n, "空视角任务书（没有任何视角内容）"))
+            continue
+        briefs[n] = brief
+    return names, briefs, errors
 
 
 def resolve_fork_source():
@@ -529,10 +535,16 @@ def _snapshot_viewers(spec_dir, viewers_dir):
     把正文首行当说明吃掉，实测缺口）。
     返回 (participants, error)。
     """
-    names, _briefs = _discover_viewers(viewers_dir)
+    names, _briefs, empty = _discover_viewers(viewers_dir)
     if names is None:
         return None, ("错误: 未找到 viewers/ 目录——多视角分析的视角资产"
                       "必须先建好（项目 cwd 下 viewers/<视角名>.md，至少 2 个）")
+    if empty:
+        # 空视角 = 没有 lenses 的 agent：行为由模型自由发挥，多视角退化成
+        # "同名随机视角"——静默退化，与无静默铁律相悖（占位文件忘写是常见成因）
+        detail = "、".join(f"viewers/{n}.md（{why}）" for n, why in empty)
+        return None, (f"错误: {detail}——视角任务书不能为空"
+                      f"（写清该视角用什么 lenses 看分析对象）")
     for n in names:
         err = check_agent_name(n)
         if err:
@@ -614,11 +626,17 @@ def _resolve_spec(spec, agents, topic, background, stances, questions, models,
             return None, None, None, "错误: spec/agents/ 下没有 agent 定义文件"
     else:
         # viewers 发现（多视角产品约定）：cwd/viewers/*.md，文件名即 agent 名
-        participants, viewer_briefs = _discover_viewers(viewers_dir)
+        participants, viewer_briefs, empty = _discover_viewers(viewers_dir)
         if participants is None:
             return None, None, None, (
                 "错误: spec 缺少 agents/ 且未找到 viewers/ 目录"
                 "（项目 cwd 下建 viewers/<视角名>.md，或 --spec-gen --agents 生成）")
+        if empty:
+            # 同 _snapshot_viewers：空视角 = 无 lenses 的 agent（静默退化）
+            detail = "、".join(f"viewers/{n}.md（{why}）" for n, why in empty)
+            return None, None, None, (
+                f"错误: {detail}——视角任务书不能为空"
+                f"（写清该视角用什么 lenses 看分析对象）")
         err_names = validate_participants(participants)
         if err_names:
             return None, None, None, err_names

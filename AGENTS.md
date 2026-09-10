@@ -61,8 +61,11 @@ tests/               测试（unittest discover tests）
 
 **viewers/ 分支约定**：spec 的 `agents/` 目录存在 = 显式模式（优先）；
 不存在 → 项目 cwd 的 `viewers/*.md` 发现（文件名即 agent 名：中文合法，
-禁路径分隔符/空白/human/≤32；文件名排序定 starter/RR/resultWriter）；
-两者皆无 → 明确报错。**meeting 至少 2 个 LLM agents**（0/1 个视角拒绝启动）。
+禁路径分隔符/空白/human/≤32；**文件名是 agent 名唯一来源**——视角文件只写
+视角内容，身份/参与者/消息格式由脚本注入；文件名排序定 starter/RR/
+resultWriter）；两者皆无 → 明确报错。**meeting 至少 2 个 LLM agents**
+（0/1 个视角拒绝启动）。**空视角任务书拒绝启动**（纯空白 = 无 lenses 的
+agent，会让多视角退化成同名随机视角——静默退化）。
 
 **核心不变式**：状态机只在 `meeting_engine.agent_loop` 一份；fake_agent 与
 meeting_loop 通过注入 responder 复用。human 插话不改变状态机——只在
