@@ -83,6 +83,15 @@ def mem_available_mb():
     return 99999
 
 
+def mem_peak_mb():
+    """本进程峰值 RSS（MB）——构建观测点用（见 _prepare_fork_session）。"""
+    try:
+        import resource
+        return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
+    except (ImportError, ValueError):
+        return 0
+
+
 def load_session_id(workdir, agent):
     path = os.path.join(os.path.dirname(workdir), f"status-{agent}.json")
     try:
@@ -218,26 +227,34 @@ def recover_git_lock(workdir, agent):
 
 def _prepare_fork_session(workdir, agent, sid, fork_source, fork_cwd,
                           session_dir, fork_mode, topic):
-    """首唤准备（可读性 #2 拆分）：生成 fork 源 + 注入切换叙事；
-    返回 fork 源路径。
+    """首唤准备：生成 fork 源 + 注入切换叙事；返回 fork 源路径。
 
     与命令组装分开：这里是"首唤一次性准备"（文件生成/叙事注入/统计
-    日志），后者是纯命令拼装——混在一起曾让单函数 125 行。
+    日志），后者是纯命令拼装——两事混在一起曾让单函数 125 行。
+
+    构建观测点：耗时与峰值 RSS 随统计行一起打印（触发条件可核验的
+    最低手段——不建指标体系、不进 status）。
     """
     fork_src = os.path.join(session_dir, f"fork-src-{sid}.jsonl")
+    t0 = time.perf_counter()
     n, err = meeting_fs.build_fork_source(
         fork_source, fork_src, sid, fork_cwd or workdir, mode=fork_mode)
     if err:
         log(agent, f"[fatal] fork 源生成失败（mode={fork_mode}）: {err}")
         raise RuntimeError(err)
-    # 统计取自产物自描述 header（P15 单一来源；读失败降级为只打条数）
+    build_ms = (time.perf_counter() - t0) * 1000
+    # 统计取自产物自描述 header（单一来源；读失败降级为只打条数）
     stats = meeting_fs.read_fork_stats(fork_src)
+    perf = f"{build_ms:.0f}ms/{mem_peak_mb():.0f}MB"
     if stats.get("est") is not None:
+        est = stats["est"]
+        est_txt = f"est≈{est // 1000}k" if est >= 1000 else f"est≈{est}"
         log(agent, f"fork 源（{stats.get('mode') or fork_mode}，{n} 条，"
-                   f"丢弃 {stats.get('dropped')} 条，est≈{stats['est'] // 1000}k"
-                   f"（字符/3 估算））: {os.path.basename(fork_src)}")
+                   f"丢弃 {stats.get('dropped')} 条，{est_txt}"
+                   f"（字符/3 估算），构建 {perf}）: {os.path.basename(fork_src)}")
     else:
-        log(agent, f"fork 源（{fork_mode}，{n} 条）: {os.path.basename(fork_src)}")
+        log(agent, f"fork 源（{fork_mode}，{n} 条，构建 {perf}）: "
+                   f"{os.path.basename(fork_src)}")
     # 切换叙事：源尾部注入"停止旧任务 → 新任务说明 → assistant 确认"
     # 对话——显式切断历史叙事惯性（agent 读到的最后叙事是任务切换
     # 共识，不再扮演主 pi）。任务说明 = 视角 brief + 主题（来自

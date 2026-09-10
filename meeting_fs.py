@@ -391,10 +391,10 @@ def parse_log_nameonly(output):
 FORK_MODES = ("budget", "compaction", "full")
 DEFAULT_FORK_MODE = "budget"
 #
-# 版本守卫（P0，e2e10 评审）：值域校验在 build_fork_source 入口
-# （open 之前）做——非法/历史值（rename 前的 active/curated）一律报错，
-# 绝不静默落到"混合分支"（实测：非法值走"边界后全量、不折叠、无预算"
-# → 930k tokens 超窗，且被 engine 异常边界吞成廉价重试）。
+# 版本守卫：值域校验在 build_fork_source 入口（open 之前）做——非法值
+# 与历史值（改名前的 active/curated）一律报错，绝不静默落到"混合分支"
+# （曾实测：非法值走"边界后全量、不折叠、无预算"→ 930k tokens 超窗，
+# 且被 engine 的异常边界吞成廉价重试）。
 #
 # 预算取值（口径见设计文档「规模口径」节）：
 # - 现行重估公式（**事后归纳，非原始设计目标**）：基线 ≤ 约 20%×
@@ -411,9 +411,10 @@ _TOOL_CALL_MAX_CHARS = 1200    # 工具调用参数上限
 
 
 def read_fork_stats(path):
-    """读 fork 源 header 的统计字段（P15）。
+    """读 fork 源 header 的统计字段。
 
-    日志所需的 mode/估算/丢弃数取自**同一来源**（产物自描述 header）
+    只读首行（O(1)，与产物大小无关）。日志所需的 mode/估算/丢弃数取自
+    **同一来源**（产物自描述 header）
     ——header 格式知识只留本模块，调用方不内联解析（条数由构建返回值提供）。
     读失败返回 {}（调用方降级为只打模式/条数，不阻塞首唤）。
     """
@@ -432,7 +433,11 @@ def read_fork_stats(path):
 
 
 def _est_tokens(text):
-    """粗估 token 数（≈3 字符/token）——仅用于预算裁剪。"""
+    """粗估 token 数（≈3 字符/token）——仅用于预算裁剪。
+
+    无文本条目（如 compaction）按 1 token 计——量级 <0.01%，不构成
+    容量风险；est 只是集合近似指纹，不是数值承诺（见 I4）。
+    """
     return max(1, len(text) // 3)
 
 
@@ -535,16 +540,62 @@ def _fold_entry(entry, full_result):
     return n
 
 
-def _budget_entries(entries, keep_tokens, summary=""):
-    """按预算裁剪 + 折叠（budget）。返回 **(preface 文本, kept 条目,
-    丢弃条数)**（估算值由调用方对最终产物统一计算——单一测点）。
+def _normalize_entries(entries):
+    """移除窗口内的 compaction 条目，并把指向它们的 parentId 上溯桥接。
 
-    两步顺序很重要：**先折叠、再按折叠后规模从尾部裁**（按原始规模
-    裁会把预算浪费在随后被折叠掉的内容上，实测 80k 预算只落到 17.5k）。
-    保留**连续后缀**（时间连续性不可破坏）——至少保留最后 1 条
-    （即使它单独超预算，否则 fork 源会变成空会话）。
+    为什么必须移除（pi replay 语义，2026-09-10 实测）：replay 以**路径上
+    最后一个 compaction** 的 `firstKeptEntryId` 为起点——窗口内若有
+    compaction 且它不是窗口首条，则锚之前的条目会被**静默丢弃**
+    （实测产物 [preface, old, k1, k2, C1, n0..n2] → 可见仅 [C1, n0..n2]，
+    我们的 preface 也被丢掉）。移除后窗口内无锚，replay 从链首开始 =
+    全集合可见（不变量 I4：声明集合 == replay 可见集合）。
+
+    桥接规则：
+      - 被移除 compaction 的子条目 → parentId 上溯到第一个非 compaction
+        祖先（连续 compaction 链也正确）
+      - 上溯出产物（祖先被裁剪）→ 链首显式 `parentId=None`（与 preface 同型）
+
+    **为什么连退化情形也要移除**（e2e11 实测 + I4 测试推翻初版守卫）：
+    初版守卫“窗口仅含 compaction → 保留该条”会破坏 I4——保留的 comp
+    仍带 `firstKeptEntryId`，而其锚点早已被预算裁掉 → replay 仍会丢弃
+    锚点之前的全部条目（含我们的 preface）。因此一致地移除全部 comp；
+    空 body 由调用方以 preface（“已省略…”说明）兼顾，产物不会为空。
+
+    信息损失有界：最后一条 compaction 的摘要已在 preface（"此前压缩
+    摘要"行）；更早的是被滚动摘要覆盖的旧摘要。
+
+    返回 (new_entries, removed_n)。
     """
-    # ① 折叠（最近 _TOOL_RESULT_KEEP 条工具输出保留全文）
+    comps = [e for e in entries if e.get("type") == "compaction"]
+    if not comps:
+        return entries, 0
+    removed = {e.get("id"): e for e in comps if e.get("id")}
+    out = []
+    for e in entries:
+        if e.get("type") == "compaction":
+            continue
+        pid = e.get("parentId")
+        while pid in removed:          # 上溯桥接（可能连续多个）
+            pid = removed[pid].get("parentId")
+        out.append(dict(e, parentId=pid))
+    # 上溯出产物（祖先被预算裁掉）→ 链首显式 None
+    ids = {e.get("id") for e in out}
+    out = [e if e.get("parentId") in ids else dict(e, parentId=None)
+           for e in out]
+    return out, len(comps)
+
+
+def _budget_entries(entries, keep_tokens, summary=""):
+    """budget 裁剪流水线的后半段（前置在 build_fork_source：边界选取）。
+
+    流水线：**fold → trim → align → normalize**；preface 与 est 由调用方
+    在规范化后施加（顺序不可换——est 必须反映最终产物）。
+
+    返回 **(preface 文本, kept 条目, 预算丢弃数, 规范化移除数)**——两个
+    计数分开回报，因为 header 的 `forkSourceDropped` 是两者之和（不变量
+    I5 记账闭合），而 preface 文本只描述预算省略部分。
+    """
+    # ① fold：折叠（最近 _TOOL_RESULT_KEEP 条工具输出保留全文）
     seen, folded = 0, []
     for e in reversed(entries):
         full = True
@@ -553,8 +604,8 @@ def _budget_entries(entries, keep_tokens, summary=""):
             full = seen <= _TOOL_RESULT_KEEP
         folded.append(_fold_entry(e, full))
     folded.reverse()
-    # ② 从尾部累计**折叠后**规模（顺序很重要：按原始规模裁会把预算
-    #    浪费在随后就被折叠掉的内容上——实测 80k 预算只落到 17.5k）
+    # ② trim：从尾部累计**折叠后**规模（顺序很重要：按原始规模裁会把
+    #    预算浪费在随后就被折叠掉的内容上——实测 80k 预算只落到 17.5k）
     cut, acc, i = len(folded), 0, len(folded) - 1
     while i >= 0:
         t = _est_tokens(_entry_text(folded[i]))
@@ -563,22 +614,28 @@ def _budget_entries(entries, keep_tokens, summary=""):
         acc += t
         cut = i
         i -= 1
-    dropped, kept = folded[:cut], folded[cut:]
-    # 边界对齐（provider 硬约束：tool 消息必须有其 tool_calls 前置）：
+    # ③ align：provider 硬约束（tool 消息必须有其 tool_calls 前置）
     #  - 保留区以 toolResult 开头 → 向前扩展，把它的 toolCall 一起纳入
-    #  - 扩展到顶仍是孤儿（源本身不完整）→ 丢弃该条
+    #  - 扩展到顶仍是孤儿（源本身不完整）→ 丢弃这些无主条目
     # （DeepSeek/OpenAI 直接报 "Messages with role 'tool' must be a
     #  response to a preceding message with 'tool_calls'"，2026-09-10 实测）
-    while kept and (kept[0].get("message") or {}).get("role") == "toolResult":
-        if cut > 0:
-            cut -= 1
-            kept = folded[cut:]
-        else:
-            dropped.append(kept[0])
-            kept = kept[1:]
+    # 两段式：先向前扩展（cut 只减），再清理头部孤儿（cut 只增，必然终止）
+    while cut > 0 and (folded[cut].get("message") or {}).get("role") == "toolResult":
+        cut -= 1
+    while folded[cut:] and \
+            (folded[cut].get("message") or {}).get("role") == "toolResult":
+        cut += 1
+    # 计数在**对齐之后**按最终切点重算（曾按对齐前的切点绑定进 dropped，
+    # 回扩条目会同时留在 kept 与 dropped → 双重计数，实测场景 B/C）
+    kept = folded[cut:]
+    dropped = folded[:cut]
+    # ④ normalize：移除窗口内 compaction 并桥接（见 _normalize_entries）
+    kept, removed_n = _normalize_entries(kept)
     dropped_tokens = sum(_est_tokens(_entry_text(e)) for e in dropped)
     preface = ""
-    if dropped or summary:
+    # 规范化可能把 body 清空（窗口只容下了 compaction）——此时必须给出
+    # preface 作为内容（否则产物只剩 header；且它正是那段历史的交代）
+    if dropped or summary or not kept:
         lines = [
             "[上下文说明] 本次分析的上下文来自主 pi 会话，"
             "过早的历史已按预算压缩。",
@@ -589,7 +646,7 @@ def _budget_entries(entries, keep_tokens, summary=""):
         if summary:
             lines.append(f"此前压缩摘要：{summary.strip()}")
         preface = "\n".join(lines)
-    return preface, kept, len(dropped)
+    return preface, kept, len(dropped), removed_n
 
 
 def build_fork_source(src_session, out_path, new_id, new_cwd,
@@ -604,13 +661,32 @@ def build_fork_source(src_session, out_path, new_id, new_cwd,
         比文件条目小得多（压缩层不在条目里）——实测本会话原始条目
         919k/934k tokens，加 384k completion 预留 > 1M 窗口。
         compaction/full 都是条目级裁剪、无总量上限，对长会话不够。
-      compaction：最后 compaction + firstKeptEntryId 起的条目——主 session
-        的**条目级**压缩态，内容原样保留（thinking/工具输出不折叠）
+      compaction：从最后一条 compaction 的 `firstKeptEntryId` 起的条目
+        （**含该 compaction 条目本身，位于其自然位置**）——主 session 的
+        **条目级**压缩态，内容原样保留（thinking/工具输出不折叠）；
+        锚点 ID 不在源中 → 明确报错
       full：全部条目（含无 compaction 的引导 session）
     budget 与 compaction 在**无 compaction 时**均全量（引导 session 本就
     干净无先例）；budget 仍会跑折叠与统计。
 
-    产物 header 自描述（P15 单一来源）：forkSourceMode /
+    产物不变量（I1–I5；由构造保证 + 测试断言，**不做生产守卫**——判定
+    依据是复杂度匹配：失败路径设计与归因的成本高于"用检查代替构造纪律"）：
+      I1 产物内 id 唯一
+      I2 链连续：从末条上溯可覆盖**全部**条目；除链首外 parentId 均指向
+         产物内条目（链首显式；compaction 模式下链首的父在窗口外属边界
+         语义——replay 走到此处即停）
+      I3 replay 所用锚点（路径上最后一个 compaction 的 firstKeptEntryId）
+         指向产物内条目
+      I4 **声明集合 == pi replay 可见集合**（budget/compaction 两个**窗口
+         构造**模式；budget 据此移除窗口内 compaction——否则 replay 会丢弃
+         锚点之前的条目，含 preface，实测 2026-09-10）。
+         full 模式**不适用**：它是源的忠实拷贝，replay 可见集合与**源会话
+         自身**语义一致（源里有什么 compaction 就有什么可见性边界），
+         我们不做窗口构造，也不改写历史。
+      I5 记账闭合：源保留区条目数 = 产物非 preface 条目数 +
+         `forkSourceDropped`（= 预算丢弃数 + 规范化移除数）
+
+    产物 header 自描述（单一来源）：forkSourceMode /
     forkSourceTokensEst（估算基准，**不预测请求规模**）/ forkSourceDropped。
     keep_tokens：budget 的预算（默认 BUDGET_KEEP_TOKENS）。
     返回 (entries_written, error)。
@@ -629,30 +705,41 @@ def build_fork_source(src_session, out_path, new_id, new_cwd,
     comps = [(i, e) for i, e in enumerate(entries)
              if e.get("type") == "compaction"]
     summary = ""
-    dropped_n = None
     new_ts = header.get("timestamp")
-    body = entries[1:]                     # full / 无 compaction：全量
-    if mode != "full" and comps:
-        # compaction / budget 共用压缩态边界（最后 compaction 的 firstKeptEntryId）
-        comp_idx, comp = comps[-1]
+    idx_by_id = {e.get("id"): i for i, e in enumerate(entries) if e.get("id")}
+    if mode == "full" or (mode == "compaction" and not comps):
+        # full：全部条目。compaction 遇无 compaction 的源（引导 session）
+        # 也全量——本就无边界可依（既有语义，标记 full）
+        body = entries[1:]
+        if mode == "compaction":
+            mode = "full"
+    elif mode == "compaction":
+        # compaction：条目级压缩态，内容原样保留（thinking/工具输出不折叠）。
+        # 产物 = entries[kept_idx:]——它**已含**最后一条 compaction 条目
+        # （pi 的 appendCompaction 使锚点位置小于 comp 位置），“补一条
+        # comp” 恒为重复且引入 last-wins 顺序依赖（e2e11 实测）
+        comp = comps[-1][1]
         summary = comp.get("summary") or ""
         new_ts = comp.get("timestamp") or new_ts
-        kept_id = comp.get("firstKeptEntryId")
-        idx_by_id = {e.get("id"): i for i, e in enumerate(entries)
-                     if e.get("id")}
-        kept_idx = idx_by_id.get(kept_id)
+        kept_idx = idx_by_id.get(comp.get("firstKeptEntryId"))
         if kept_idx is None:
-            if mode == "compaction":
-                return 0, f"firstKeptEntryId {kept_id} 不在源 session 中"
-            kept_idx = comp_idx + 1         # budget 容错：边界 ID 失效
+            return 0, (f"firstKeptEntryId {comp.get('firstKeptEntryId')} "
+                       f"不在源 session 中")
         body = entries[kept_idx:]
-        if mode == "compaction":      # 分派用字面量（非默认值语义，勿换常量）
-            body = [comp] + body
-    elif mode == "compaction":
-        # 无 compaction 的源（如引导 session）：full 分支（既有语义）
-        mode = "full"
-    if mode == "budget":              # 分派用字面量（非默认值语义，勿换常量）
-        preface, body, dropped_n = _budget_entries(
+    elif mode == "budget":
+        # budget：压缩态边界 → 折叠 → 预算裁剪 → 边界对齐 → 规范化
+        if comps:
+            comp = comps[-1][1]
+            summary = comp.get("summary") or ""
+            new_ts = comp.get("timestamp") or new_ts
+            kept_idx = idx_by_id.get(comp.get("firstKeptEntryId"))
+            if kept_idx is None:
+                # 边界 ID 失效：从最后 compaction 条目之后取（容错）
+                kept_idx = entries.index(comp) + 1
+            body = entries[kept_idx:]
+        else:
+            body = entries[1:]
+        preface, body, dropped_n, removed_n = _budget_entries(
             body, keep_tokens or BUDGET_KEEP_TOKENS, summary)
         if preface:
             pid = uuid.uuid4().hex[:8]
@@ -663,10 +750,16 @@ def build_fork_source(src_session, out_path, new_id, new_cwd,
                 "message": {"role": "user",
                             "content": [{"type": "text", "text": preface}]},
             }] + body
-            # 保留区首条接回 preface（P4）：不置 None——保持"一条链"
-            # 单一心智模型（budget 不保证原始链完整——见本函数 docstring）
+            # 保留区首条接回 preface（一条链；规范化已保证它不再指向
+            # 窗口外）
             if len(body) > 1:
                 body[1] = dict(body[1], parentId=pid)
+        # 双口径合计（不变量 I5 记账闭合）：header 计“预算丢弃 + 规范化
+        # 移除”，而 preface 文本只描述预算部分
+        dropped_total = dropped_n + removed_n
+    else:                                   # pragma: no cover
+        # 值域守卫之后仍可达的只剩“新值已入 FORK_MODES 但分派未跟上”
+        return 0, f"forkMode {mode!r} 尚未实现分派"
     new_header = {
         "type": "session",
         "version": header.get("version", 3),
@@ -678,10 +771,10 @@ def build_fork_source(src_session, out_path, new_id, new_cwd,
     }
     if mode == "budget":
         # 产物侧指纹（口径见设计文档「规模口径」）：对**最终产物**统一
-        # 计算（单一测点；边界对齐后重算，P3）；不预测请求规模
+        # 计算（单一测点）；不预测请求规模
         new_header["forkSourceTokensEst"] = sum(
             _est_tokens(_entry_text(e)) for e in body)
-        new_header["forkSourceDropped"] = dropped_n
+        new_header["forkSourceDropped"] = dropped_total
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     with open(out_path, "w", encoding="utf-8") as f:
         f.write(json.dumps(new_header, ensure_ascii=False) + "\n")

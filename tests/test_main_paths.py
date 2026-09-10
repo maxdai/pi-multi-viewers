@@ -249,6 +249,48 @@ class TestStartDiscussionMain(unittest.TestCase):
                     sd.main()
                     cs.assert_called_once_with("/x")
 
+    def _wait_with_state(self, tmp, state, with_loop_log):
+        """--wait 在给定 check_status 下的终态输出（真实 subprocess 太重，
+        仅驱动 main 的等待分支）。"""
+        import start_discussion as sd
+        import human_viewer
+        base = os.path.join(tmp, "disc-x")
+        os.makedirs(base, exist_ok=True)
+        if with_loop_log:
+            with open(os.path.join(base, "loop-a.log"), "w") as f:
+                f.write("x")
+        out = []
+        with mock.patch("sys.argv", ["start_discussion.py", "--dir", base,
+                                     "--wait"]):
+            with mock.patch("start_discussion.check_status",
+                            return_value=state):
+                # --wait 前置会读 bare 的参与者列表（本测试不建 bare）
+                with mock.patch.object(human_viewer,
+                                       "participants_from_bare",
+                                       return_value=[]):
+                    with mock.patch("builtins.print",
+                                    side_effect=lambda *a, **k: out.append(
+                                        " ".join(str(x) for x in a))):
+                        rc = sd.main()
+        return rc, "\n".join(out), base
+
+    def test_wait_stopped_not_started(self):
+        """--wait：无 loop-*.log → 报"尚未启动"（status-*.json 要等首唤
+        完成才写，用它判断会把"已启动、首唤中崩溃"误判为未启动）。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            rc, txt, _ = self._wait_with_state(tmp, "stopped", False)
+            self.assertEqual(rc, 1)
+            self.assertIn("尚未启动", txt)
+            self.assertNotIn("崩溃", txt)
+
+    def test_wait_stopped_started_then_crashed(self):
+        """--wait：有 loop-*.log → 报"已启动但 loop 均不存活"。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            rc, txt, _ = self._wait_with_state(tmp, "stopped", True)
+            self.assertEqual(rc, 1)
+            self.assertIn("已启动", txt)
+            self.assertIn("崩溃", txt)
+
     def test_main_cleanup_dispatches(self):
         import start_discussion as sd
         with mock.patch("sys.argv", ["start_discussion.py", "--dir", "/x",

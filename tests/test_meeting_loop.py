@@ -80,12 +80,13 @@ class TestWakeLlm(unittest.TestCase):
             f.write('{"type":"message","id":"old1","parentId":null,'
                     '"timestamp":"2026-09-09T00:00:00.000Z",'
                     '"message":{"role":"user","content":"旧历史"}}\n')
-            f.write('{"type":"compaction","id":"c1","parentId":"old1",'
-                    '"timestamp":"2026-09-09T00:01:00.000Z",'
-                    '"summary":"压缩摘要","firstKeptEntryId":"keep1"}\n')
-            f.write('{"type":"message","id":"keep1","parentId":"c1",'
-                    '"timestamp":"2026-09-09T00:02:00.000Z",'
-                    '"message":{"role":"assistant","content":"保留的内容"}}\n')
+            f.write('{"type":"message","id":"keep1","parentId":"old1",'
+            '"timestamp":"2026-09-09T00:02:00.000Z",'
+            '"message":{"role":"assistant","content":"保留的内容"}}\n')
+            # compaction 追加在锚点之后（真实 pi 顺序：comp_idx > kept_idx）
+            f.write('{"type":"compaction","id":"c1","parentId":"keep1",'
+            '"timestamp":"2026-09-09T00:03:00.000Z",'
+            '"summary":"压缩摘要","firstKeptEntryId":"keep1"}\n')
         self.fork_cwd = os.path.join(self.tmp, "main")
         os.makedirs(self.fork_cwd)
 
@@ -266,12 +267,13 @@ class TestForkWake(unittest.TestCase):
             f.write('{"type":"message","id":"old1","parentId":null,'
                     '"timestamp":"2026-09-09T00:00:00.000Z",'
                     '"message":{"role":"user","content":"旧历史"}}\n')
-            f.write('{"type":"compaction","id":"c1","parentId":"old1",'
-                    '"timestamp":"2026-09-09T00:01:00.000Z",'
-                    '"summary":"压缩摘要","firstKeptEntryId":"keep1"}\n')
-            f.write('{"type":"message","id":"keep1","parentId":"c1",'
-                    '"timestamp":"2026-09-09T00:02:00.000Z",'
-                    '"message":{"role":"assistant","content":"保留的内容"}}\n')
+            f.write('{"type":"message","id":"keep1","parentId":"old1",'
+            '"timestamp":"2026-09-09T00:02:00.000Z",'
+            '"message":{"role":"assistant","content":"保留的内容"}}\n')
+            # compaction 追加在锚点之后（真实 pi 顺序：comp_idx > kept_idx）
+            f.write('{"type":"compaction","id":"c1","parentId":"keep1",'
+            '"timestamp":"2026-09-09T00:03:00.000Z",'
+            '"summary":"压缩摘要","firstKeptEntryId":"keep1"}\n')
         self.cwd_main = os.path.join(self.tmp, "main-project")
         os.makedirs(self.cwd_main)
 
@@ -315,15 +317,15 @@ class TestForkWake(unittest.TestCase):
         active_src = cmd[cmd.index("--session") + 1]
         self.assertTrue(active_src.endswith(".jsonl"))
         self.assertIn("fork-src-", active_src)
-        # 内容：header(新id/cwd) + compaction + firstKept 起
+        # 内容：header(新id/cwd) + 锚点条目 + compaction（自然位置）
         with open(active_src) as f:
             fl = [json.loads(x) for x in f]
         self.assertEqual(fl[0]["type"], "session")
         self.assertEqual(fl[0]["cwd"], self.cwd_main)
-        self.assertEqual(fl[1]["type"], "compaction")
+        self.assertEqual(fl[1]["type"], "message")
         # 保留条目 + 尾部切换叙事（4 回合：user/assistant ×2）
-        self.assertEqual([e.get("type") for e in fl[1:3]], ["compaction", "message"])
-        self.assertEqual([e.get("id") for e in fl[1:3]], ["c1", "keep1"])
+        self.assertEqual([e.get("type") for e in fl[1:3]], ["message", "compaction"])
+        self.assertEqual([e.get("id") for e in fl[1:3]], ["keep1", "c1"])
         turns = fl[3:]
         self.assertEqual(len(turns), 4)
         self.assertEqual([t["message"]["role"] for t in turns],

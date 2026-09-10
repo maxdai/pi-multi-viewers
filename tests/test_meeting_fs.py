@@ -366,8 +366,322 @@ class TestMessages(unittest.TestCase):
             shutil.rmtree(tmp, ignore_errors=True)
 
 
-if __name__ == "__main__":
-    unittest.main()
+
+def _replay_visible(entries):
+    """测试期 oracle：复刻 pi 的 buildSessionPath + buildContextEntries
+    （`session-manager.js`，函数名已钉住）——peek 我们的产物在 pi 眼里
+    **实际可见**哪些条目（不变量 I4）。
+
+    **禁生产复刻**：这是对"我们产物结构"的回归保护，不承担检测 pi
+    变更（pi 漂移时 oracle 双侧静默——该防线归真实 e2e）。
+    """
+    index = {}
+    for e in entries:                      # last-wins（后写覆盖）
+        if e.get("id"):
+            index[e["id"]] = e
+    current = entries[-1] if entries else None
+    path = []
+    while current is not None:
+        path.append(current)
+        pid = current.get("parentId")
+        current = index.get(pid) if pid else None
+    path.reverse()
+    comp = None
+    for e in path:
+        if e.get("type") == "compaction":
+            comp = e
+    if comp is None:
+        return path
+    ci = next(i for i, e in enumerate(path) if e.get("id") == comp.get("id"))
+    out, found = [comp], False
+    for i in range(ci):
+        e = path[i]
+        if e.get("id") == comp.get("firstKeptEntryId"):
+            found = True
+        if found:
+            out.append(e)
+    out.extend(path[ci + 1:])
+    return out
+
+
+class TestForkSourceInvariants(unittest.TestCase):
+    """不变量 I1–I5 与 e2e11 结构修复（P1/P2/P3/台账）的回归保护。
+
+    测试名按不变量 ID 命名（契约↔断言可 grep 对齐）。
+    """
+
+    def _write(self, tmp, lines):
+        src = os.path.join(tmp, "src.jsonl")
+        with open(src, "w", encoding="utf-8") as f:
+            for e in lines:
+                f.write(json.dumps(e, ensure_ascii=False) + "\n")
+        return src
+
+    def _read(self, path):
+        with open(path, encoding="utf-8") as f:
+            return [json.loads(x) for x in f]
+
+    def _msg(self, mid, parent, role, text):
+        return {"type": "message", "id": mid, "parentId": parent,
+                "timestamp": "2026-09-10T00:00:00.000Z",
+                "message": {"role": role, "content": [
+                    {"type": "text", "text": text}]}}
+
+    def _chain_src(self, tmp, n=6, anchor_at=2, extra=None):
+        """构造真实顺序的源：message 链 + compaction 追加在锚点之后。"""
+        lines = [{"type": "session", "id": "src", "version": 3}]
+        prev = None
+        for i in range(n):
+            m = self._msg(f"m{i}", prev, "user", f"内容{i}")
+            lines.append(m)
+            prev = f"m{i}"
+        comp = {"type": "compaction", "id": "c1", "parentId": prev,
+                "timestamp": "2026-09-10T00:01:00.000Z",
+                "summary": "旧摘要", "firstKeptEntryId": f"m{anchor_at}"}
+        lines.append(comp)
+        lines.extend(extra or [])
+        return self._write(tmp, lines)
+
+    # ---- I1 产物内 id 唯一 ----
+    def test_i1_ids_unique(self):
+        for mode in ("budget", "compaction", "full"):
+            with self.subTest(mode=mode):
+                with tempfile.TemporaryDirectory() as tmp:
+                    src = self._chain_src(tmp)
+                    out = os.path.join(tmp, "o.jsonl")
+                    _, err = build_fork_source(src, out, "u", "/p", mode=mode)
+                    self.assertIsNone(err)
+                    ids = [e.get("id") for e in self._read(out)[1:]]
+                    self.assertEqual(len(ids), len(set(ids)), f"{mode}: id 重复")
+
+    # ---- I2 链覆盖全部条目（强形式）----
+    def test_i2_chain_covers_all(self):
+        """链覆盖全部条目；除**链首**外每条 parentId 指向产物内条目。
+
+        链首例外（compaction 模式）：窗口从锚点起，锚点的父在窗口外
+        ——replay 走到它就停（悬空与 None 同效），这是压缩态边界的语义，
+        不是缺陷（budget 模式下规范化会把链首显式置 None）。
+        """
+        for mode in ("budget", "compaction", "full"):
+            with self.subTest(mode=mode):
+                with tempfile.TemporaryDirectory() as tmp:
+                    src = self._chain_src(tmp)
+                    out = os.path.join(tmp, "o.jsonl")
+                    _, err = build_fork_source(src, out, "u", "/p", mode=mode)
+                    self.assertIsNone(err)
+                    body = self._read(out)[1:]
+                    ids = {e.get("id") for e in body}
+                    by_id = {e.get("id"): e for e in body}
+                    # 从末条上溯：链覆盖全部条目；只有链首可指向窗口外
+                    seen, cur, head = set(), body[-1], None
+                    while cur is not None:
+                        seen.add(cur.get("id"))
+                        pid = cur.get("parentId")
+                        if pid and pid not in by_id:
+                            head = cur.get("id")    # 链首：父在窗口外
+                            break
+                        cur = by_id.get(pid) if pid else None
+                    self.assertEqual(seen, ids, f"{mode}: 链未覆盖全部条目")
+                    dangling = [e.get("id") for e in body
+                                if e.get("parentId") is not None
+                                and e.get("parentId") not in ids]
+                    self.assertLessEqual(len(dangling), 1, f"{mode}: 多处悬空")
+                    if dangling:
+                        self.assertEqual(dangling[0], head,
+                                         f"{mode}: 悬空出现在非链首处")
+
+    # ---- I3 replay 使用的锚点必须在产物内（compaction 模式）----
+    def test_i3_replay_anchor_inside(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            src = self._chain_src(tmp)
+            out = os.path.join(tmp, "o.jsonl")
+            _, err = build_fork_source(src, out, "u", "/p", mode="compaction")
+            self.assertIsNone(err)
+            body = self._read(out)[1:]
+            ids = {e.get("id") for e in body}
+            for e in body:
+                if e.get("type") == "compaction":
+                    self.assertIn(e.get("firstKeptEntryId"), ids)
+
+    # ---- I4 声明集合 == pi replay 可见集合 ----
+    def test_i4_declared_set_equals_replay_visible(self):
+        """核心：budget 产物含 compaction（"刚压缩完就 fork"）时，replay
+        会静默丢弃锚点之前的条目（含我们的 preface）——规范化修复后
+        可见集合必须等于产物集合。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            src = self._chain_src(tmp)      # 窗口含 compaction（尾部）
+            out = os.path.join(tmp, "o.jsonl")
+            _, err = build_fork_source(src, out, "u", "/p",
+                                       mode="budget", keep_tokens=100000)
+            self.assertIsNone(err)
+            body = self._read(out)[1:]
+            ids = {e.get("id") for e in body}
+            visible = {e.get("id") for e in _replay_visible(body)}
+            self.assertEqual(visible, ids)  # I4：集合身份
+
+    def test_i4_full_matches_source_visibility(self):
+        """full 模式是**源的忠实拷贝**：其 replay 可见集合必须与源自身一致
+        （源里有 compaction 就有可见性边界——我们不构造窗口也不改写历史）。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            src = self._chain_src(tmp)
+            out = os.path.join(tmp, "o.jsonl")
+            _, err = build_fork_source(src, out, "u", "/p", mode="full")
+            self.assertIsNone(err)
+            src_entries = self._read(src)[1:]
+            body = self._read(out)[1:]
+            self.assertEqual({e.get("id") for e in _replay_visible(body)},
+                             {e.get("id") for e in _replay_visible(src_entries)})
+
+    def test_i4_compaction_mode_visible(self):
+        """compaction 模式：锚点条目在被保留区 → 可见集合 = 产物集合。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            src = self._chain_src(tmp)
+            out = os.path.join(tmp, "o.jsonl")
+            _, err = build_fork_source(src, out, "u", "/p", mode="compaction")
+            self.assertIsNone(err)
+            body = self._read(out)[1:]
+            ids = {e.get("id") for e in body}
+            self.assertEqual({e.get("id") for e in _replay_visible(body)}, ids)
+
+    # ---- I5 记账闭合 ----
+    def test_i5_accounting_closure(self):
+        """源保留区条目数 =（产物非 preface 条目数）+ forkSourceDropped。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            src = self._chain_src(tmp, n=8, anchor_at=1)
+            out = os.path.join(tmp, "o.jsonl")
+            _, err = build_fork_source(src, out, "u", "/p",
+                                       mode="budget", keep_tokens=1)
+            self.assertIsNone(err)
+            lines = self._read(out)
+            hdr, body = lines[0], lines[1:]
+            src_entries = self._read(src)
+            anchor = src_entries.index(
+                next(e for e in src_entries if e.get("id") == "m1"))
+            window_n = len(src_entries) - anchor          # 源保留区
+            preface_n = sum(
+                1 for e in body
+                if e.get("id") and "[上下文说明]" in json.dumps(e, ensure_ascii=False))
+            self.assertEqual(window_n,
+                             len(body) - preface_n + hdr["forkSourceDropped"])
+
+    # ---- P2：窗口含 compaction → 产物无 compaction（否则 replay 丢前缀）----
+    def test_p2_no_compaction_in_budget_product(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            src = self._chain_src(tmp)
+            out = os.path.join(tmp, "o.jsonl")
+            _, err = build_fork_source(src, out, "u", "/p", mode="budget")
+            self.assertIsNone(err)
+            body = self._read(out)[1:]
+            self.assertFalse([e for e in body if e.get("type") == "compaction"])
+            # 摘要进 preface（信息损失有界）
+            self.assertIn("旧摘要", body[0]["message"]["content"][0]["text"])
+
+    def test_p2_degenerate_window_only_compaction(self):
+        """退化情形：窗口只容下 compaction → 一律移除（含该条），由 preface
+        顶替内容；**不得**保留 comp（保留则 replay 仍按其锚点丢前缀，破坏
+        I4——初版守卫“保留该条”正是此误，由本测试推翻）。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            lines = [{"type": "session", "id": "src", "version": 3},
+                     self._msg("m0", None, "user", "旧"),
+                     self._msg("k0", "m0", "assistant", "保留"),
+                     {"type": "compaction", "id": "c1", "parentId": "k0",
+                      "summary": "摘要", "firstKeptEntryId": "k0"}]
+            src = self._write(tmp, lines)
+            out = os.path.join(tmp, "o.jsonl")
+            _, err = build_fork_source(src, out, "u", "/p",
+                                       mode="budget", keep_tokens=1)
+            self.assertIsNone(err)
+            body = self._read(out)[1:]
+            types = [e.get("type") for e in body]
+            self.assertEqual(types.count("compaction"), 0)   # 一律移除
+            self.assertTrue(body, "产物不得为空（preface 顶替）")
+            self.assertIn("上下文说明",
+                          body[0]["message"]["content"][0]["text"])
+            self.assertEqual({e.get("id") for e in _replay_visible(body)},
+                             {e.get("id") for e in body})     # I4
+
+    # ---- 台账：边界对齐不得双重计数 ----
+    def test_accounting_no_double_count_scenario_b(self):
+        """场景 B：big / a1(toolCall) / r1(toolResult)，预算只容 r1 →
+        对齐回扩纳入 a1——计数必须恰好等于源条目数。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            lines = [{"type": "session", "id": "src", "version": 3},
+                     self._msg("big", None, "user", "字" * 3000),
+                     {"type": "message", "id": "a1", "parentId": "big",
+                      "message": {"role": "assistant", "content": [
+                          {"type": "toolCall", "id": "t1", "name": "bash",
+                           "arguments": {"command": "x"}}]}},
+                     {"type": "message", "id": "r1", "parentId": "a1",
+                      "message": {"role": "toolResult", "toolCallId": "t1",
+                                  "toolName": "bash", "content": [
+                                      {"type": "text", "text": "out"}]}}]
+            src = self._write(tmp, lines)
+            out = os.path.join(tmp, "o.jsonl")
+            _, err = build_fork_source(src, out, "u", "/p",
+                                       mode="budget", keep_tokens=5)
+            self.assertIsNone(err)
+            hdr, body = (lambda L: (L[0], L[1:]))(self._read(out))
+            preface_n = 1 if "[上下文说明]" in json.dumps(body[0], ensure_ascii=False) else 0
+            window_n = 3                     # 源无 compaction → 窗口 = 全部
+            self.assertEqual(window_n,
+                             len(body) - preface_n + hdr["forkSourceDropped"])
+
+    def test_accounting_no_double_count_scenario_c(self):
+        """场景 C：big / 孤儿 r2（无前置 toolCall）→ 孤儿丢弃且只计一次。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            lines = [{"type": "session", "id": "src", "version": 3},
+                     self._msg("big", None, "user", "字" * 3000),
+                     {"type": "message", "id": "r2", "parentId": "big",
+                      "message": {"role": "toolResult", "toolCallId": "tx",
+                                  "toolName": "bash", "content": [
+                                      {"type": "text", "text": "out"}]}}]
+            src = self._write(tmp, lines)
+            out = os.path.join(tmp, "o.jsonl")
+            _, err = build_fork_source(src, out, "u", "/p",
+                                       mode="budget", keep_tokens=1)
+            self.assertIsNone(err)
+            hdr, body = (lambda L: (L[0], L[1:]))(self._read(out))
+            preface_n = 1 if "[内容已省略]" not in json.dumps(body[0], ensure_ascii=False) else 0
+            self.assertEqual(2, len(body) + hdr["forkSourceDropped"])
+
+    # ---- P3：分派与值集合的结构耦合 ----
+    def test_p3_new_mode_value_fails_loud(self):
+        """FORK_MODES 扩了新值但分派没跟上 → 必须报错（不得落入混合分支）。"""
+        import meeting_fs as mf
+        old = mf.FORK_MODES
+        mf.FORK_MODES = old + ("smart",)
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                src = self._chain_src(tmp)
+                out = os.path.join(tmp, "o.jsonl")
+                n, err = build_fork_source(src, out, "u", "/p", mode="smart")
+                self.assertEqual(n, 0)
+                self.assertIn("尚未实现分派", err)
+                self.assertFalse(os.path.exists(out))
+        finally:
+            mf.FORK_MODES = old
+
+    def test_p3_per_value_fingerprints(self):
+        """逐值指纹：三种模式各自的产物特征（防分派静默走错）。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            src = self._chain_src(tmp)
+            outs = {}
+            for mode in ("budget", "compaction", "full"):
+                out = os.path.join(tmp, f"{mode}.jsonl")
+                _, err = build_fork_source(src, out, "u", "/p", mode=mode)
+                self.assertIsNone(err)
+                outs[mode] = self._read(out)
+            # budget：有预算指纹与丢弃数
+            self.assertIn("forkSourceTokensEst", outs["budget"][0])
+            self.assertIn("forkSourceDropped", outs["budget"][0])
+            # compaction：包含 compaction 条目（自然位置）且无预算指纹
+            self.assertNotIn("forkSourceTokensEst", outs["compaction"][0])
+            self.assertTrue([e for e in outs["compaction"][1:]
+                             if e.get("type") == "compaction"])
+            # full：首条 = 源首条（m0），且无折叠/无预算指纹
+            self.assertNotIn("forkSourceTokensEst", outs["full"][0])
+            self.assertEqual(outs["full"][1]["id"], "m0")
+
 
 
 class TestActiveForkSource(unittest.TestCase):
@@ -381,12 +695,15 @@ class TestActiveForkSource(unittest.TestCase):
                     '"timestamp":"2026-09-09T00:00:00.000Z",'
                     '"message":{"role":"user","content":"旧"}}\n')
             if with_compaction:
-                f.write('{"type":"compaction","id":"c1","parentId":"m1",'
-                        '"timestamp":"2026-09-09T00:01:00.000Z",'
-                        '"summary":"摘要","firstKeptEntryId":"k1"}\n')
-                f.write('{"type":"message","id":"k1","parentId":"c1",'
+                # 真实顺序（pi appendCompaction 把 compaction 追加在当前叶
+                # 之后 → comp_idx > kept_idx，实测真实源 10/10 如此）：锚点
+                # 条目在前，compaction 条目在其后
+                f.write('{"type":"message","id":"k1","parentId":"m1",'
                         '"timestamp":"2026-09-09T00:02:00.000Z",'
                         '"message":{"role":"assistant","content":"新"}}\n')
+                f.write('{"type":"compaction","id":"c1","parentId":"k1",'
+                        '"timestamp":"2026-09-09T00:03:00.000Z",'
+                        '"summary":"摘要","firstKeptEntryId":"k1"}\n')
         return src
 
     def test_compaction_view(self):
@@ -397,12 +714,14 @@ class TestActiveForkSource(unittest.TestCase):
                                        mode="compaction")
             self.assertIsNone(err)
             lines = [json.loads(x) for x in open(out)]
-            self.assertEqual(len(lines), 3)  # header + compaction + kept
+            self.assertEqual(len(lines), 3)  # header + k1 + compaction
             self.assertEqual(lines[0]["id"], "uuid-x")
             self.assertEqual(lines[0]["cwd"], "/proj")
             self.assertEqual(lines[0]["forkSourceMode"], "compaction")  # 可核查标记
-            self.assertEqual(lines[1]["type"], "compaction")
-            self.assertEqual(lines[2]["id"], "k1")  # 旧历史 m1 被裁掉
+            self.assertEqual(lines[1]["id"], "k1")   # 旧历史 m1 被裁掉
+            # compaction 条目在其**自然位置**（= 锚点之后）——不补副本
+            # （补副本恒为重复且引入 last-wins 顺序依赖，e2e11 实测）
+            self.assertEqual(lines[2]["type"], "compaction")
 
     def test_no_compaction_bootstrap_fallback(self):
         """无 compaction（引导 session）→ 全量兜底（引导本就干净）。"""

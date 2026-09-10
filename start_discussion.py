@@ -16,6 +16,7 @@
 """
 
 import argparse
+import glob
 import json
 import os
 import meeting_fs
@@ -1005,12 +1006,18 @@ def main():
                 print(f"[wait] 讨论不存在: {base}")
                 return 1
             if state == "stopped":
-                # 终态（e2e10 评审）：无 result.md 且无 loop 存活——此前落入
-                # 10s 轮询无上界（与"loop 死后观察者不收敛"同族）。两种成因：
-                # 尚未启动，或启动后崩溃/被中断。
-                print("[wait] 讨论未在运行（无 result.md、无 loop 存活）——"
-                      "成因：尚未 --start，或启动后崩溃/被中断；"
-                      "查 status-*.json 与 loop-*.log，必要时 --cleanup")
+                # 终态：无 result.md 且无 loop 存活——此前落入 10s 轮询无上界
+                # （与"loop 死后观察者不收敛"同族）。
+                # 成因按 loop-*.log 是否存在分叉：log 由 --start 在 spawn 前
+                # 创建，而 status-*.json 要等首唤完成才写——用后者会把
+                # "已启动、首唤中崩溃"误判为"尚未启动"。
+                if glob.glob(os.path.join(base, "loop-*.log")):
+                    print("[wait] 已启动，但 loop 均不存活且无 result.md"
+                          "（启动后崩溃/被中断）——查 loop-*.log 与"
+                          " status-*.json，必要时 --cleanup")
+                else:
+                    print(f"[wait] 尚未启动（{base} 存在但无 loop 日志）"
+                          "——先 --start")
                 return 1
             _mode, lines, head, done = human_viewer.incremental(
                 bare, agents, since)
