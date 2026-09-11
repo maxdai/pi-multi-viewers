@@ -168,13 +168,13 @@ loop、状态从 git 共享事实推导、单一事实源 = protocol.json、无�
 5. **行为/语义修改同步文档**：对协议行为、产品形态的任何修改，必须同步
    README 与相关模板。
 
-## 安装/发版状态（2026-09-10）
+## 安装/发版状态（2026-09-11）
 
 - **当前形态**：prompt × 1（multi-viewers，开发机已注册可用）+
   extension × 1（multi-viewers-say 插话：零 LLM，直接 spawn human_sayer.py；
   目录发现 = `<cwd>/mv-<sessionId>-*` 最新，兜底 `mv-*`（排除
   `mv-spec-*`）并警告）
-  + wrapper。npm 发版 0.1.0 待办。
+  + wrapper。**npm 已发布 0.1.0（2026-09-11）**。
 - **开发机安装（两步，缺一不可；2026-09-10 实测）**：
   ① `pi install /root/pi-multi-viewers`——**注册包**（写
   `~/.pi/agent/settings.json` 的 `packages` 数组）；pi 不是"扫 node_modules

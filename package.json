@@ -20,7 +20,11 @@
     "templates",
     "prompts",
     "README.md",
-    "docs/examples"
+    "AGENTS.md",
+    "docs/design.md",
+    "docs/test-methodology.md",
+    "docs/examples",
+    "docs/reviews"
   ],
   "keywords": [
     "pi",
@@ -28,5 +32,10 @@
     "multi-agent",
     "session-fork",
     "analysis"
-  ]
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/maxdai/pi-multi-viewers.git"
+  },
+  "homepage": "https://github.com/maxdai/pi-multi-viewers#readme"
 }

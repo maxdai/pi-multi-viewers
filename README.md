@@ -37,7 +37,7 @@ provider 直接 400 拒绝（`pi --fork` 原生命令同样超窗）。budget �
 
 ## 安装
 
-**官方方式（npm 发版后）**：
+**官方方式（npm）**：
 
 ```bash
 pi install npm:pi-multi-viewers
