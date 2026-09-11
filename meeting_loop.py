@@ -277,12 +277,16 @@ def _prepare_fork_session(workdir, agent, sid, fork_source, fork_cwd,
     # 对话——显式切断历史叙事惯性（agent 读到的最后叙事是任务切换
     # 共识，不再扮演主 pi）。任务说明 = 视角 brief + 主题（来自
     # protocol.json.topic，P1：单一事实源，不再二次解析 question.md）
-    brief = _read_perspective_brief(workdir, agent) or f"{agent} 视角参与者"
     topic_txt = topic or "见 question.md"
     turns = [
         ("user", "从现在开始，我们停止之前的任务的执行，开始新任务。"),
         ("assistant", "好的，请说明新任务的具体信息。"),
-        ("user", f"新任务：你是多视角分析中的「{agent}」视角参与者。{brief}"
+        # 只交代"身份与任务书在哪"，**不拼视角文件正文**——身份/视角措辞
+        # 的唯一来源是 system prompt 注入（gen_agent_def + --append-system-prompt）；
+        # 此处再拼一遍会形成第三处措辞（与 gen_agent_def、AGENTS.md 各自生成），
+        # 且此前拼的是整个 agent 定义文件（含生成头）并带 500 字截断分支
+        ("user", f"新任务：你是多视角分析中的「{agent}」视角参与者。"
+                 f"你的身份与视角任务书已在 system prompt 中注入——按它行事。"
                  f"分析主题：{topic_txt}。你的唯一任务是参与这次多视角"
                  f"分析——按视角产出分析/回应其他参与者，写消息文件的路径"
                  f"由本地循环在每次唤醒时告知。上下文中的历史（之前的开发、"

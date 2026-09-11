@@ -369,6 +369,12 @@ class TestForkWake(unittest.TestCase):
                          ["user", "assistant", "user", "assistant"])
         self.assertIn("停止之前的任务", turns[0]["message"]["content"][0]["text"])
         self.assertIn("「a」", turns[2]["message"]["content"][0]["text"])  # 视角名
+        # R7：切换叙事**不拼视角文件正文**——身份/任务书的唯一来源是
+        # system prompt 注入；此处只交代"在哪"（此前拼整个 agent 定义
+        # 文件正文，形成第三处身份措辞 + 500 字截断分支）
+        new_task = turns[2]["message"]["content"][0]["text"]
+        self.assertIn("已在 system prompt 中注入", new_task)
+        self.assertNotIn("## 你的视角任务书", new_task)
         self.assertIn("--name", cmd)
         self.assertTrue(cmd[cmd.index("--name") + 1].endswith("-a"))
         self.assertNotIn("--session-id", cmd)  # id 已写进 header，pi 沿用

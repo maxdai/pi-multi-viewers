@@ -48,83 +48,6 @@ fail() {
     exit 1
 }
 
-check_aft_bash() {
-    # 预检：aft 是否关闭 bash 接管（只警告不阻断——手动跑讨论仍可用）。
-    # W3 收归（e2e7 评审）：三段近重复文案合并；JSONC 解析改用 python
-    # json 库（原 sed 剔注释 + grep 粗解析对字段位置/嵌套/多行值均不可靠）。
-    _aft_warn() {
-        echo "[aft] 警告: $1" >&2
-        echo "[aft]   本工具需要 \"bash\": false（关闭 aft 对 bash 的接管），" >&2
-        echo "[aft]   否则插话扩展找不到分析目录、models.md 退化为兜底值。" >&2
-        echo "[aft]   修复: 在 $HOME/.config/cortexkit/aft.jsonc 中添加 " >&2
-        echo "[aft]   \"bash\": false 并重启 pi。" >&2
-    }
-    local cfg="$HOME/.config/cortexkit/aft.jsonc"
-    [ -f "$cfg" ] || cfg="$HOME/.config/cortexkit/aft.json"
-    if [ ! -f "$cfg" ]; then
-        _aft_warn "未找到 $HOME/.config/cortexkit/aft.jsonc"
-        return
-    fi
-    # python 解析（jsonc：去注释后 json.loads；bash 字段 false 才算关闭）
-    # 注释剥离必须**字符串感知**——朴素正则会把 `"$schema": "https://…"`
-    # 里的 // 当注释吃掉 → 解析失败误报 unparseable（实测 2026-09-10）。
-    local verdict
-    verdict="$(python3 - "$cfg" <<'PYEOF'
-import json, sys
-
-
-def strip_jsonc(txt):
-    """去 // 与 /* */ 注释（字符串感知：URL 里的 // 不能被吃）。"""
-    out, i, n = [], 0, len(txt)
-    in_str = esc = False
-    while i < n:
-        c = txt[i]
-        if in_str:
-            out.append(c)
-            if esc:
-                esc = False
-            elif c == "\\":
-                esc = True
-            elif c == '"':
-                in_str = False
-            i += 1
-            continue
-        if c == '"':
-            in_str = True
-            out.append(c)
-            i += 1
-            continue
-        if c == "/" and i + 1 < n and txt[i + 1] == "/":
-            while i < n and txt[i] != "\n":
-                i += 1
-            continue
-        if c == "/" and i + 1 < n and txt[i + 1] == "*":
-            i += 2
-            while i + 1 < n and not (txt[i] == "*" and txt[i + 1] == "/"):
-                i += 1
-            i += 2
-            continue
-        out.append(c)
-        i += 1
-    return "".join(out)
-
-
-try:
-    raw = open(sys.argv[1], encoding="utf-8").read()
-    try:
-        cfg = json.loads(raw)          # 合法 JSON（最常见）直接解析
-    except ValueError:
-        cfg = json.loads(strip_jsonc(raw))
-except Exception:
-    print("unparseable")
-    sys.exit(0)
-print("off" if cfg.get("bash") is False else "on")
-PYEOF
-)"
-    if [ "$verdict" != "off" ]; then
-        _aft_warn "$cfg 中未设置 \"bash\": false（解析结果: $verdict）"
-    fi
-}
 
 
 require_dir() {
@@ -201,7 +124,6 @@ cmd_say() {
 # 读取主 pi 的 model/thinking（用户 2026-08-31：aft 不再替换 bash 后
 # 环境变量可用且是当前生效值——优先环境变量，session 文件解析仅为兜底）
 cmd_prepare() {
-    check_aft_bash
     local topic="" background="" agents_list=""
     if [ "$#" -lt 1 ]; then
         usage >&2
@@ -269,7 +191,6 @@ OUTPUT_EOF
 }
 
 cmd_start() {
-    check_aft_bash
     local spec_dir="$1"
     shift                      # 余参 = 透传给 python 的选项（如 --fork-mode X）
     require_dir "$spec_dir"
@@ -297,8 +218,18 @@ cmd_start() {
         fail "环境创建失败，请查看上方输出"
     fi
 
-    # 临时 spec 已被消费，删除
-    rm -rf "$spec_dir"
+    # spec 已被消费：只删**本工具生成的形态**（mv-spec-*）——用户自建的
+    # spec 目录不动（可能是有价值的视角快照）。删除前提示一行（此前静默
+    # 删除：spec 是视角任务书/背景/models 在用户侧的唯一副本，删了不可恢复）
+    case "$(basename "$spec_dir")" in
+        mv-spec-*)
+            echo "[start] spec 已消费，删除（本工具生成形态）: $spec_dir"
+            rm -rf "$spec_dir"
+            ;;
+        *)
+            echo "[start] spec 已消费（保留未删——非 mv-spec-* 形态）: $spec_dir"
+            ;;
+    esac
 
     # 第 3 步：启动已有环境
     if ! "$PYTHON" "$START_DISCUSSION" --dir "$dir_path" --skip-setup --start; then

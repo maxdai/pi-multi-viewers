@@ -155,6 +155,60 @@ class TestSpecInjection(unittest.TestCase):
         self.assertEqual(d1, d2)
 
 
+class TestCurrentSessionFile(unittest.TestCase):
+    """R6：session 文件查找的单点规则（sid 优先，兜底目录内最后）。"""
+
+    def _fake_sessions(self, tmp, names):
+        sdir = os.path.join(tmp, "sessions")
+        os.makedirs(sdir, exist_ok=True)
+        for n in names:
+            open(os.path.join(sdir, n), "w").close()
+        return sdir
+
+    def test_sid_match_wins_over_last(self):
+        """有 sid → 匹配该 sid 的文件（即使它不在字典序末尾）。"""
+        import start_discussion as sd
+        with tempfile.TemporaryDirectory() as tmp:
+            sdir = self._fake_sessions(tmp, ["a_AAA.jsonl", "b_ZZZ.jsonl"])
+            with mock.patch.dict(os.environ, {
+                    "PI_SESSION_FILE": "", "PI_SESSION_ID": "AAA"}):
+                with mock.patch.object(sd, "pi_sessions_dir",
+                                       return_value=sdir):
+                    self.assertTrue(sd.current_session_file()
+                                    .endswith("a_AAA.jsonl"))
+
+    def test_fallback_last_when_no_sid(self):
+        """无 sid → 目录内字典序最后（与旧兜底同规则）。"""
+        import start_discussion as sd
+        with tempfile.TemporaryDirectory() as tmp:
+            sdir = self._fake_sessions(tmp, ["a_AAA.jsonl", "b_ZZZ.jsonl"])
+            with mock.patch.dict(os.environ, {
+                    "PI_SESSION_FILE": "", "PI_SESSION_ID": ""}):
+                with mock.patch.object(sd, "pi_sessions_dir",
+                                       return_value=sdir):
+                    self.assertTrue(sd.current_session_file()
+                                    .endswith("b_ZZZ.jsonl"))
+
+    def test_session_file_env_wins(self):
+        """PI_SESSION_FILE（pi 直接给的路径）最精确，优先。"""
+        import start_discussion as sd
+        with tempfile.TemporaryDirectory() as tmp:
+            p = os.path.join(tmp, "given.jsonl")
+            open(p, "w").close()
+            with mock.patch.dict(os.environ, {"PI_SESSION_FILE": p}):
+                self.assertEqual(sd.current_session_file(), p)
+
+    def test_no_sessions_returns_empty(self):
+        """目录不存在/无文件 → 空串（调用方自决是否接受）。"""
+        import start_discussion as sd
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.dict(os.environ, {
+                    "PI_SESSION_FILE": "", "PI_SESSION_ID": ""}):
+                with mock.patch.object(sd, "pi_sessions_dir",
+                                       return_value=os.path.join(tmp, "no")):
+                    self.assertEqual(sd.current_session_file(), "")
+
+
 class TestSpecModels(unittest.TestCase):
     def test_skeleton_prefills_pi_model(self):
         """PI_MODEL/PI_PROVIDER/PI_REASONING_LEVEL 注入 → models.md 预填
@@ -177,8 +231,11 @@ class TestSpecModels(unittest.TestCase):
             with mock.patch.dict(os.environ, env):
                 with mock.patch("start_discussion._default_model",
                                 return_value=None):
-                    with mock.patch("start_discussion.os.path.isdir",
-                                    return_value=False):
+                    # 探测入口直接归零（比 mock 文件系统更精确：被测的是
+                    # "探测不到时兜底"，不是 session 查找本身——后者由
+                    # TestCurrentSessionFile 覆盖）
+                    with mock.patch("start_discussion.current_session_file",
+                                    return_value=""):
                         d = os.path.join(tmp, "spec")
                         gen_spec_skeleton(d, ["a", "b", "c"])
                         with open(os.path.join(d, "models.md")) as f:
@@ -412,6 +469,22 @@ class TestResolveSpec(unittest.TestCase):
             self.assertEqual(parts, ["林然", "苏晚"])
             self.assertEqual(briefs["林然"], "性格视角")
             self.assertEqual(briefs["苏晚"], "命运视角")
+
+    def test_hidden_agent_md_excluded(self):
+        """R1：列举规则单点化——隐藏文件（.draft.md）不得成为参与者
+        （名为 .draft 的点号名不在名字规则的禁止集内，会静默混入）。"""
+        with tempfile.TemporaryDirectory() as d:
+            ad = os.path.join(d, "agents")
+            os.makedirs(ad)
+            for n in ("a", "b", ".draft"):
+                with open(os.path.join(ad, f"{n}.md"), "w") as f:
+                    f.write(f"{n} 视角内容")
+            with open(os.path.join(d, "question.md"), "w") as f:
+                f.write("# 分析主题：T\n\n任务正文\n")
+            sd, parts, briefs, err = _resolve_spec(
+                d, None, None, None, None, None, None)
+            self.assertIsNone(err)
+            self.assertEqual(parts, ["a", "b"])
 
     def test_viewers_empty_brief_rejected(self):
         """空视角任务书 → 报错（无 lenses 的 agent 会让多视角退化成

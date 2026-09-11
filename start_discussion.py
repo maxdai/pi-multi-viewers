@@ -119,16 +119,10 @@ def _detect_pi_model_thinking():
     model = _join_model_ref(provider, model)
     if model and thinking:
         return model, thinking
-    # session 文件兜底
+    # session 文件兜底（查找规则单点：current_session_file）
     try:
-        sf = os.environ.get("PI_SESSION_FILE") or ""
-        if not (sf and os.path.isfile(sf)):
-            sd = pi_sessions_dir(os.getcwd())
-            cands = sorted(
-                f for f in os.listdir(sd) if f.endswith(".jsonl")
-            ) if os.path.isdir(sd) else []
-            sf = os.path.join(sd, cands[-1]) if cands else ""
-        if sf and os.path.isfile(sf):
+        sf = current_session_file()
+        if sf:
             sm = st = sp = ""
             with open(sf, encoding="utf-8") as f:
                 for line in f:
@@ -442,6 +436,34 @@ def pi_sessions_dir(cwd):
     return os.path.join(PI_AGENT_DIR, "sessions", enc)
 
 
+def current_session_file():
+    """当前主 pi 的 session 文件路径（解析不到 → 空串）。
+
+    **查找规则的唯一实现**（此前两处各写一遍：resolve_fork_source 按
+    PI_SESSION_ID 匹配文件名、_detect_pi_model_thinking 兜底取目录内
+    **字典序最后**——同一概念两套规则，兜底可能选到别的 session）。
+    规则：PI_SESSION_FILE（pi 直接给的路径，最精确）→ PI_SESSION_ID
+    匹配文件名 → 目录内字典序最后（都无法确认时只能如此，调用方自决
+    是否接受）。
+    """
+    sf = os.environ.get("PI_SESSION_FILE") or ""
+    if sf and os.path.isfile(sf):
+        return sf
+    sdir = pi_sessions_dir(os.getcwd())
+    try:
+        cands = sorted(f for f in os.listdir(sdir) if f.endswith(".jsonl"))
+    except OSError:
+        cands = []
+    if not cands:
+        return ""
+    sid = os.environ.get("PI_SESSION_ID") or ""
+    if sid:
+        hits = [f for f in cands if sid in f]
+        if hits:
+            return os.path.join(sdir, hits[-1])
+    return os.path.join(sdir, cands[-1])
+
+
 def check_agent_name(name):
     """单个 agent/视角名合法性（T4 收归，e2e7 评审）：唯一实现。
 
@@ -460,8 +482,24 @@ def check_agent_name(name):
     return None
 
 
+def list_agent_md(d):
+    """列出目录下的 agent 定义文件名（去 `.md`、**排除隐藏文件**、排序）。
+
+    **列举规则的唯一实现**——viewers/ 与 spec/agents/ 两条来源共用。
+    为什么排除隐藏文件：`.draft.md` 之类会被当成参与者（名为 `.draft`，
+    点号不在名字规则的禁止集内）静默进入讨论。此前只有 viewers 分支
+    排除、spec/agents 的两处列举没排除（实测缺口）。
+    """
+    return sorted(f[:-3] for f in os.listdir(d)
+                  if f.endswith(".md") and not f.startswith("."))
+
+
 def validate_participants(participants):
-    """整组名字校验（唯一文案）。返回错误或 None。"""
+    """整组名字校验（**名字规则的唯一入口**）。返回错误或 None。
+
+    覆盖：非空 / 无路径分隔符与空白 / ≤32 / 非 human 保留名。
+    CLI（--agents）与 spec/viewers（文件名）三条来源路径都经此。
+    """
     for p in participants:
         err = check_agent_name(p)
         if err:
@@ -469,11 +507,23 @@ def validate_participants(participants):
     return None
 
 
-def _check_reserved(participants):
-    """human 保留名校验（薄包装，调用点兼容）。"""
-    for p in participants:
-        if p == "human":
-            return f"错误: {check_agent_name('human')}"
+def viewer_set_error(names, empty, where="viewers/"):
+    """viewers 集合级校验（**唯一实现**）：空正文视角 + 至少 2 个。
+
+    where: 报错时指路的目录前缀（"viewers/" 或 "spec/agents/"）。
+    返回错误文本或 None。为什么单点：同一套规则曾在 prepare 快照路径与
+    spec 解析路径各写一遍，文案与检查项已经漂移（实测：非法名文案带不带
+    文件名后缀不一致、≥2 检查一处列参与者一处不列）。
+    """
+    if empty:
+        # 空视角 = 没有 lenses 的 agent：行为由模型自由发挥，多视角退化成
+        # "同名随机视角"——静默退化，与无静默铁律相悖（占位文件忘写是常见成因）
+        detail = "、".join(f"{where}{n}.md（{why}）" for n, why in empty)
+        return (f"错误: {detail}——视角任务书不能为空"
+                f"（写清该视角用什么 lenses 看分析对象）")
+    if len(names) < 2:
+        return (f"错误: {where} 下仅发现 {len(names)} 个视角"
+                f"（{', '.join(names)}）——多视角分析至少需要 2 个")
     return None
 
 
@@ -488,9 +538,7 @@ def _discover_viewers(viewers_dir):
     """
     if not os.path.isdir(viewers_dir):
         return None, None, []
-    names = sorted(
-        f[:-3] for f in os.listdir(viewers_dir)
-        if f.endswith(".md") and not f.startswith("."))
+    names = list_agent_md(viewers_dir)
     if not names:
         return None, None, []
     briefs, errors = {}, []
@@ -516,18 +564,18 @@ def resolve_fork_source():
     sid = os.environ.get("PI_SESSION_ID") or ""
     if not sid:
         return None, ("错误: PI_SESSION_ID 未注入——多视角分析必须在主 pi "
-                      "session 内经 wrapper 启动（见 README 环境要求）")
-    sdir = pi_sessions_dir(os.getcwd())
-    enc = os.path.basename(sdir)
-    try:
-        cands = sorted(f for f in os.listdir(sdir) if f.endswith(".jsonl"))
-    except OSError:
-        cands = []
-    hits = [f for f in cands if sid in f]
-    if not hits:
+                      "session 内经 wrapper 启动。若确实在 session 内，"
+                      "检查是否有扩展接管了 bash 工具（如 AFT 的 "
+                      "`~/.config/cortexkit/aft.jsonc` 未设 \"bash\": false）"
+                      "——接管后 pi 的环境变量不会传入 bash")
+    # 委托 current_session_file（查找规则单点）；这里只管错误语义
+    path = current_session_file()
+    if not path or sid not in os.path.basename(path):
+        sdir = pi_sessions_dir(os.getcwd())
+        enc = os.path.basename(sdir)
         return None, (f"错误: 未找到主 session 文件（{enc}/*_{sid}.jsonl）"
                       "——fork-only 模式必须挂载主 session")
-    return os.path.join(sdir, hits[-1]), None
+    return path, None
 
 
 def _snapshot_viewers(spec_dir, viewers_dir):
@@ -546,19 +594,9 @@ def _snapshot_viewers(spec_dir, viewers_dir):
     if names is None:
         return None, ("错误: 未找到 viewers/ 目录——多视角分析的视角资产"
                       "必须先建好（项目 cwd 下 viewers/<视角名>.md，至少 2 个）")
-    if empty:
-        # 空视角 = 没有 lenses 的 agent：行为由模型自由发挥，多视角退化成
-        # "同名随机视角"——静默退化，与无静默铁律相悖（占位文件忘写是常见成因）
-        detail = "、".join(f"viewers/{n}.md（{why}）" for n, why in empty)
-        return None, (f"错误: {detail}——视角任务书不能为空"
-                      f"（写清该视角用什么 lenses 看分析对象）")
-    for n in names:
-        err = check_agent_name(n)
-        if err:
-            return None, f"错误: 非法 agent 名（{err}）：{n}（viewers/{n}.md）"
-    if len(names) < 2:
-        return None, (f"错误: viewers/ 下仅发现 {len(names)} 个视角"
-                      f"——多视角分析至少需要 2 个")
+    err = validate_participants(names) or viewer_set_error(names, empty)
+    if err:
+        return None, err
     agents_dir = os.path.join(spec_dir, "agents")
     os.makedirs(agents_dir, exist_ok=True)
     for n in names:
@@ -622,13 +660,11 @@ def _resolve_spec(spec, agents, topic, background, stances, questions, models,
             listed = [p for p in order
                       if os.path.isfile(os.path.join(agents_dir, f"{p}.md"))]
             listed_set = set(listed)
-            extra = sorted(
-                f[:-3] for f in os.listdir(agents_dir)
-                if f.endswith(".md") and f[:-3] not in listed_set)
+            extra = sorted(n for n in list_agent_md(agents_dir)
+                           if n not in listed_set)
             participants = listed + extra
         else:
-            participants = sorted(
-                f[:-3] for f in os.listdir(agents_dir) if f.endswith(".md"))
+            participants = list_agent_md(agents_dir)
         if not participants:
             return None, None, None, "错误: spec/agents/ 下没有 agent 定义文件"
     else:
@@ -638,20 +674,11 @@ def _resolve_spec(spec, agents, topic, background, stances, questions, models,
             return None, None, None, (
                 "错误: spec 缺少 agents/ 且未找到 viewers/ 目录"
                 "（项目 cwd 下建 viewers/<视角名>.md，或 --spec-gen --agents 生成）")
-        if empty:
-            # 同 _snapshot_viewers：空视角 = 无 lenses 的 agent（静默退化）
-            detail = "、".join(f"viewers/{n}.md（{why}）" for n, why in empty)
-            return None, None, None, (
-                f"错误: {detail}——视角任务书不能为空"
-                f"（写清该视角用什么 lenses 看分析对象）")
-        err_names = validate_participants(participants)
-        if err_names:
-            return None, None, None, err_names
-        # meeting 至少两个 LLM agents（用户 2026-09-09）：1 个视角无对话可言
-        if len(participants) < 2:
-            return None, None, None, (
-                f"错误: viewers/ 下仅发现 {len(participants)} 个视角"
-                f"（{', '.join(participants)}）——多视角分析至少需要 2 个")
+        # 集合级校验（空正文 / ≥2）——名字规则由 main 的中心闸门统一把
+        # （同一实现；此处只管 viewers 特有的集合级规则）
+        err = viewer_set_error(participants, empty)
+        if err:
+            return None, None, None, err
     # spec 必须有 question.md（讨论起点不可缺）
     if not os.path.isfile(os.path.join(spec_dir, "question.md")):
         return None, None, None, "错误: spec 缺少 question.md（讨论起点，先 --spec-gen 生成）"
@@ -948,9 +975,83 @@ def _parse_agents(agents_arg):
             return None, "错误: agents 数量最多 26（a..z）"
         return [chr(97 + i) for i in range(n)], None
     participants = [a.strip() for a in agents_arg.split(",") if a.strip()]
-    if "human" in participants:
-        return None, _check_reserved(participants)
+    # 完整名字规则（非空/无空白与路径分隔符/非 human/≤32）——单实现。
+    # 此前只查 human，非法名（如 "a/b"）会一路走到 spec-gen 才炸：
+    # FileNotFoundError traceback + spec 半成品落盘（实测）
+    err = validate_participants(participants)
+    if err:
+        return None, err
     return participants, None
+
+
+def wait_for_completion(base):
+    """`--wait`：阻塞展示进展直到收尾或终态。返回退出码（0 完成 / 1 终止）。
+
+    从 main 内联抽出（main 里最大单块；项目方法论把 main/CLI 分发
+    列为独立测试盲区）。**纯结构变换**：调用序列与 sleep 序列逐字
+    不变——helper 只做机械动作（状态判定 → 打印 → 增量展示 → sleep），
+    不吸收"何时进入分支"的阶段判断。
+
+    终止语义（四种终态，各有明确文案）：stalled / not-exists /
+    stopped（按 loop-*.log 分叉成因）/ done（含固定位 result.md 提示）。
+    """
+    # T1 收归（e2e7 评审）：进展展示复用 human_viewer.incremental
+    # （原内联 65 行自行 git log 全量 + 手工解析 frontmatter——与
+    # viewer 两套输出格式、非增量、概念丢失）。incremental 走
+    # since..HEAD 增量 + 统一 format_message。
+    import human_viewer
+    sys.stdout.reconfigure(line_buffering=True)
+    print(f"[wait] 等待讨论完成: {base}")
+    bare = os.path.join(base, "repo.git")
+    agents = human_viewer.participants_from_bare(bare) or []
+    since = ""   # 首次全量（--wait 一次性观察，无游标持久需求）
+    first = True
+    while True:
+        state = check_status(base)
+        if state == "stalled":
+            print("[wait] 收尾中断（result.md 已提交、concluded 缺失、"
+                  "无 loop 存活）——停止等待；可读 result.md 或 --cleanup")
+            return 1
+        if state == "not-exists":
+            print(f"[wait] 讨论不存在: {base}")
+            return 1
+        if state == "stopped":
+            # 终态：无 result.md 且无 loop 存活——此前落入 10s 轮询无上界
+            # （与"loop 死后观察者不收敛"同族）。
+            # 成因按 loop-*.log 是否存在分叉：log 由 --start 在 spawn 前
+            # 创建，而 status-*.json 要等首唤完成才写——用后者会把
+            # "已启动、首唤中崩溃"误判为"尚未启动"。
+            if glob.glob(os.path.join(base, "loop-*.log")):
+                print("[wait] 已启动，但 loop 均不存活且无 result.md"
+                      "（启动后崩溃/被中断）——查 loop-*.log 与"
+                      " status-*.json，必要时 --cleanup")
+            else:
+                print(f"[wait] 尚未启动（{base} 存在但无 loop 日志）"
+                      "——先 --start")
+            return 1
+        _mode, lines, head, done = human_viewer.incremental(
+            bare, agents, since)
+        if done:
+            for line in lines:
+                print(line)
+                print()
+            print("[wait] 讨论完成 ✅")
+            # 固定位（与 prompt 收尾指引一致）：resultWriter 的 loop
+            # 退出时保存、cleanup 兜底再存一次——调用方无需推 rw 是谁
+            print(f"[wait] result.md: {base}-result.md")
+            return 0
+        for line in lines:
+            print(f"[wait] {time.strftime('%H:%M:%S')} 新进展:")
+            print(line)
+            print()
+        since = head or since
+        if first:
+            first = False
+        # 观察刷新节奏（消费端常量——与 loop 的空闲重试节奏有意独立，
+        # 见 human_viewer.OBSERVER_POLL_INTERVAL 注释）。原硬编码 10s
+        # 会让结束观察延迟最长 10s（e2e13 时间流分析：唯一 >10s 的
+        # 非必要等待点）。
+        time.sleep(human_viewer.OBSERVER_POLL_INTERVAL)
 
 
 def main():
@@ -1045,63 +1146,7 @@ def main():
         print(f"[status] {check_status(base)}")
         return
     if args.wait:
-        # T1 收归（e2e7 评审）：进展展示复用 human_viewer.incremental
-        # （原内联 65 行自行 git log 全量 + 手工解析 frontmatter——与
-        # viewer 两套输出格式、非增量、概念丢失）。incremental 走
-        # since..HEAD 增量 + 统一 format_message。
-        import human_viewer
-        sys.stdout.reconfigure(line_buffering=True)
-        print(f"[wait] 等待讨论完成: {base}")
-        bare = os.path.join(base, "repo.git")
-        agents = human_viewer.participants_from_bare(bare) or []
-        since = ""   # 首次全量（--wait 一次性观察，无游标持久需求）
-        first = True
-        while True:
-            state = check_status(base)
-            if state == "stalled":
-                print("[wait] 收尾中断（result.md 已提交、concluded 缺失、"
-                      "无 loop 存活）——停止等待；可读 result.md 或 --cleanup")
-                return 1
-            if state == "not-exists":
-                print(f"[wait] 讨论不存在: {base}")
-                return 1
-            if state == "stopped":
-                # 终态：无 result.md 且无 loop 存活——此前落入 10s 轮询无上界
-                # （与"loop 死后观察者不收敛"同族）。
-                # 成因按 loop-*.log 是否存在分叉：log 由 --start 在 spawn 前
-                # 创建，而 status-*.json 要等首唤完成才写——用后者会把
-                # "已启动、首唤中崩溃"误判为"尚未启动"。
-                if glob.glob(os.path.join(base, "loop-*.log")):
-                    print("[wait] 已启动，但 loop 均不存活且无 result.md"
-                          "（启动后崩溃/被中断）——查 loop-*.log 与"
-                          " status-*.json，必要时 --cleanup")
-                else:
-                    print(f"[wait] 尚未启动（{base} 存在但无 loop 日志）"
-                          "——先 --start")
-                return 1
-            _mode, lines, head, done = human_viewer.incremental(
-                bare, agents, since)
-            if done:
-                for line in lines:
-                    print(line)
-                    print()
-                print("[wait] 讨论完成 ✅")
-                # 固定位（与 prompt 收尾指引一致）：resultWriter 的 loop
-                # 退出时保存、cleanup 兜底再存一次——调用方无需推 rw 是谁
-                print(f"[wait] result.md: {base}-result.md")
-                return 0
-            for line in lines:
-                print(f"[wait] {time.strftime('%H:%M:%S')} 新进展:")
-                print(line)
-                print()
-            since = head or since
-            if first:
-                first = False
-            # 观察刷新节奏（消费端常量——与 loop 的空闲重试节奏有意独立，
-            # 见 human_viewer.OBSERVER_POLL_INTERVAL 注释）。原硬编码 10s
-            # 会让结束观察延迟最长 10s（e2e13 时间流分析：唯一 >10s 的
-            # 非必要等待点）。
-            time.sleep(human_viewer.OBSERVER_POLL_INTERVAL)
+        return wait_for_completion(base)
     # 创建（--start 总是 setup；--skip-setup = 跳过创建，只启动已有环境）
     if args.skip_setup:
         if not os.path.exists(base):
