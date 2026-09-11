@@ -17,6 +17,25 @@ MEETING_TYPES = {"message", "freezing", "all-freezing", "pass", "concluded"}
 """meeting 模式合法 type 集合（校验器白名单）"""
 
 # ---------------------------------------------------------------
+# 状态机词汇（**字面量的家**）——消息 type / 全局 mode 的合法值。
+# 谁消费：core（全部判定）、engine（信号写点 + 分支）、loop（fatal 文案）、
+# viewer（展示）、fake_agent（responder 决策池）。
+# 为什么建家：这些字符串是**状态机的词表**，任何一处拼写漂移 = 判定静默
+# 失效。曾是 46 处字面量散在 6 个文件（e2e15 自审 S3）。
+# 注意：**不要**为了用常量而替换注释/日志文案里的词（那是给人读的）——
+# 只替换"参与判定的值"。
+# ---------------------------------------------------------------
+T_MESSAGE = "message"
+T_FREEZING = "freezing"
+T_ALL_FREEZING = "all-freezing"
+T_PASS = "pass"
+T_CONCLUDED = "concluded"
+M_MEETING = "meeting"
+M_ROUND_ROBIN = "round-robin"
+M_ALL_FREEZING = T_ALL_FREEZING          # mode 值与 type 值同形（af 复用）
+M_CONCLUDED = T_CONCLUDED
+
+# ---------------------------------------------------------------
 # 1. 冻结判定（阶段 1.1）
 # ---------------------------------------------------------------
 
@@ -187,7 +206,7 @@ def meeting_speak_count(messages, agent):
     "meeting 6/2" 的超限假象——6 是消息总数、2 是配额上限）。
     """
     return sum(1 for fm in messages.get(agent, [])
-               if fm.get("mode") == "meeting" and fm.get("type") == "message")
+               if fm.get("mode") == M_MEETING and fm.get("type") == T_MESSAGE)
 
 
 def frozen_agents(agents, all_last_types):
@@ -229,7 +248,7 @@ def can_start_rr(all_last_types):
         return False
     if any(t is None for t in all_last_types.values()):
         return False
-    return all(t == "all-freezing" for t in all_last_types.values())
+    return all(t == T_ALL_FREEZING for t in all_last_types.values())
 
 
 def aggregate_mode(all_last):
@@ -243,13 +262,13 @@ def aggregate_mode(all_last):
     4. 否则 → meeting
     """
     if not all_last:
-        return "meeting"   # 空 → 无任何 agent → 无冻结无 RR（review5 F3）
+        return M_MEETING   # 空 → 无任何 agent → 无冻结无 RR（review5 F3）
     types = {a: (v["type"] if v else None) for a, v in all_last.items()}
     modes = {a: (v["mode"] if v else None) for a, v in all_last.items()}
-    if any(t == "concluded" for t in types.values()):
-        return "concluded"
-    if any(m == "round-robin" for m in modes.values()):
-        return "round-robin"
-    if all(t in ("freezing", "all-freezing") for t in types.values()):
-        return "all-freezing"
+    if any(t == T_CONCLUDED for t in types.values()):
+        return T_CONCLUDED
+    if any(m == M_ROUND_ROBIN for m in modes.values()):
+        return M_ROUND_ROBIN
+    if all(t in (T_FREEZING, T_ALL_FREEZING) for t in types.values()):
+        return T_ALL_FREEZING
     return "meeting"

@@ -31,6 +31,10 @@ RESULT_MD = "result.md"
 # 写空文件/仅 frontmatter——只查存在性会退化为空提交，审核 A2）。
 RESULT_MD_MIN_BYTES = 50
 
+# 无进展超时兜底（秒）——协议参数的默认值（gen_protocol 固化进
+# protocol.json；engine/fake_agent 的签名默认与 CLI default 同源于此）。
+DEFAULT_STALL_TIMEOUT = 600
+
 # ---------------------------------------------------------------
 # git 基础操作
 # ---------------------------------------------------------------

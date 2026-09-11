@@ -28,6 +28,7 @@ import os
 import sys
 import time
 
+import meeting_core
 import meeting_fs
 from meeting_fs import (run_git, git_show, git_head, is_message_file,
                         parse_log_nameonly, extract_body, parse_frontmatter)
@@ -104,10 +105,10 @@ def is_finished(bare, agents, mode=None):
         # ——缺字段补 None）；直接传原始 frontmatter 会在 core 里 KeyError
         # （core 用 v["mode"] 按契约取值，不猜缺字段）
         mode = core_aggregate_mode(each_agent_last(bare, agents))
-    if mode != "concluded":
+    if mode != meeting_core.M_CONCLUDED:
         return False
     content = git_show(bare, "HEAD", meeting_fs.RESULT_MD)
-    return bool(content) and len(content) > 50
+    return bool(content) and len(content) > meeting_fs.RESULT_MD_MIN_BYTES
 
 
 def incremental(bare, agents, since, max_meeting=None):
@@ -169,7 +170,7 @@ def progress_text(bare, agents, msgs, lasts, mode, max_meeting=None):
     frozen = frozen_agents(agents, types)
     parts.append(f"freezing {len(frozen)}/{len(agents)}"
                  + (f"（{'、'.join(frozen)}）" if frozen else ""))
-    if mode == "round-robin":
+    if mode == meeting_core.M_ROUND_ROBIN:
         parts.append(f"rr → {rr_next_speaker(bare, agents) or '（未定）'}")
     return " ｜ ".join(parts)
 

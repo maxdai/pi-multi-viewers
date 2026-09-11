@@ -21,6 +21,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import meeting_core
 import meeting_fs
 from meeting_fs import next_msg_id, write_message
 from meeting_engine import agent_loop
@@ -82,13 +83,14 @@ def make_responder(min_sleep, max_sleep, crash_rate):
             return True
         if retry:
             # 被重试（上次没产出）：无静默铁律，强制表态
-            decision = "freezing" if not rr_turn else "pass"
+            decision = meeting_core.T_FREEZING if not rr_turn else meeting_core.T_PASS
         elif rr_turn:
             # RR 阶段：单向流，只写 pass（无异议回退，留待以后）
-            decision = "pass"
+            decision = meeting_core.T_PASS
         else:
             # meeting 阶段：有内容 → message；无话可说 → freezing
-            decision = "message" if random.random() < 0.65 else "freezing"
+            decision = meeting_core.T_MESSAGE if random.random() < 0.65 \
+                else meeting_core.T_FREEZING
 
         time.sleep(random.uniform(min_sleep, max_sleep))
         if random.random() < crash_rate:
@@ -120,7 +122,7 @@ if __name__ == "__main__":
     # stall 超时：与生产（meeting_loop.__main__）同款——protocol 优先
     # （装置对齐生产：此前 fake_agent 恒用默认 600s，stall 路径在测试中
     # 永不可达——P2 的接管分支零覆盖正是这个原因）
-    stall_timeout = 600
+    stall_timeout = meeting_fs.DEFAULT_STALL_TIMEOUT
     proto = meeting_fs.read_protocol(meeting_fs.bare_of_workdir(workdir))
     if proto.get("stallTimeoutSeconds"):
         stall_timeout = proto["stallTimeoutSeconds"]

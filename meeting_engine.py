@@ -35,7 +35,7 @@ from meeting_fs import (
     git_show, is_message_file, parse_log_nameonly,
     read_protocol, cat_batch, remove_message, write_text, file_size,
     bare_of_base, bare_of_workdir, log,
-    RESULT_MD, RESULT_MD_MIN_BYTES,
+    RESULT_MD, RESULT_MD_MIN_BYTES, DEFAULT_STALL_TIMEOUT,
 )
 from meeting_core import (
     meeting_speak_count as core_meeting_speak_count,
@@ -43,6 +43,8 @@ from meeting_core import (
     should_write_af, can_start_rr, validate_and_fix, is_all_last_in,
     aggregate_mode as core_aggregate_mode,
     has_new_messages_for_me,
+    T_MESSAGE, T_FREEZING, T_ALL_FREEZING, T_PASS, T_CONCLUDED,
+    M_MEETING, M_ROUND_ROBIN, M_ALL_FREEZING, M_CONCLUDED,
 )
 POLL_INTERVAL = 2.0
 JITTER = 0.3
@@ -210,7 +212,7 @@ def rr_active_count(messages, agents):
     """
     starter = agents[0]
     return sum(1 for fm in messages.get(starter, [])
-               if fm.get("mode") == "round-robin")
+               if fm.get("mode") == M_ROUND_ROBIN)
 
 
 def human_msg_count(bare):
@@ -256,11 +258,12 @@ def write_af_if_no_rr(bare, workdir, agent, agents):
     head = git_head(workdir)
     # 重检：bare 是否有 RR 已启动（任一 agent 最后一条 mode==round-robin）
     lasts = each_agent_last(bare, agents)
-    if any(v is not None and v.get("mode") == "round-robin" for v in lasts.values()):
+    if any(v is not None and v.get("mode") == M_ROUND_ROBIN
+           for v in lasts.values()):
         log(agent, "bare 已有 RR 启动——放弃补写 af")
         return
     # 无 RR → 正常写 af
-    write_protocol_signal(workdir, agent, "all-freezing", "all-freezing")
+    write_protocol_signal(workdir, agent, T_ALL_FREEZING, M_ALL_FREEZING)
 
 
 def write_protocol_signal(workdir, agent, type_, mode, next_=None):
@@ -332,11 +335,11 @@ def respond_with_fallback(workdir, agent, responder, head, meta, is_first,
     if rr_turn:
         nxt_a = core_next(agents, agent)
         log(agent, f"responder 无法产出——loop 代写 pass（无静默铁律最后执行）")
-        write_protocol_signal(workdir, agent, "pass", "round-robin",
+        write_protocol_signal(workdir, agent, T_PASS, M_ROUND_ROBIN,
                               nxt_a)
     else:
         log(agent, f"responder 无法产出——loop 代写 freezing")
-        write_protocol_signal(workdir, agent, "freezing", "meeting")
+        write_protocol_signal(workdir, agent, T_FREEZING, M_MEETING)
     # 代写 = 无产出（设计 11.1：只数 responder 成功产出的轮，
     # 代写不耗配额）——返回 False（审核#1：原先 return True 让 C' 修复失效）
     return False
@@ -392,7 +395,7 @@ def commit_new_files(workdir, agent, head, mode):
         # review5 A6：next 无条件覆盖为顺序下一位（与 mode 无条件覆盖对称）。
         # 只补缺省会让 LLM 写错的 next 保留 → 轮转顺序混乱。单向流下
         # RR 只有 pass（无异议），next 是轮转顺序（协议状态），LLM 不知道。
-        if mode == "round-robin" and fixed.get("type") in ("pass", "message"):
+        if mode == M_ROUND_ROBIN and fixed.get("type") in (T_PASS, T_MESSAGE):
             fixed["next"] = core_next(
                 participants(bare_of_workdir(workdir)), agent)
         new_content = serialize_message(fixed, content)
@@ -480,7 +483,7 @@ def finalize_discussion(workdir, agent, responder, head, reason="consensus"):
                    "# 讨论结论\n\n（resultWriter 未能生成有效 result.md，"
                    f"由本地循环兜底代写。收尾原因：{reason}）\n")
         _commit_result_md(workdir, agent, "discuss: result.md (loop fallback)")
-    write_protocol_signal(workdir, agent, "concluded", "concluded")
+    write_protocol_signal(workdir, agent, T_CONCLUDED, M_CONCLUDED)
     return True
 
 
@@ -501,7 +504,8 @@ def _commit_result_md(workdir, agent, subject):
 
 
 def agent_loop(workdir, agent, responder, max_meeting=10, max_rr=7,
-               poll_interval=POLL_INTERVAL, stall_timeout=600):
+               poll_interval=POLL_INTERVAL,
+               stall_timeout=DEFAULT_STALL_TIMEOUT):
     """主状态机（v2）。responder 注入：响应一轮并返回是否产出。
 
     stall_timeout: 无进展超时兜底（秒，默认 600=10 分钟）。任何 agent
@@ -543,7 +547,7 @@ def agent_loop(workdir, agent, responder, max_meeting=10, max_rr=7,
             mode = core_aggregate_mode(lasts)
 
             # ===== ① concluded → 退出 =====
-            if mode == "concluded":
+            if mode == M_CONCLUDED:
                 log(agent, "讨论已收尾，退出")
                 return
 
@@ -582,7 +586,7 @@ def agent_loop(workdir, agent, responder, max_meeting=10, max_rr=7,
                 # **真正的兜底是 push 容错 + 下一轮 concluded 退出这两层**；
                 # 声明只降低并发概率，不构成互斥保证（勿读成"天然唯一"）。
                 git_pull(workdir)
-                if aggregate_mode(bare, agents) == "concluded":
+                if aggregate_mode(bare, agents) == M_CONCLUDED:
                     log(agent, "收尾已完成（他人接管）——让位")
                     continue
                 r = run_git(bare, "show", "HEAD:result.md", check=False)
@@ -591,8 +595,9 @@ def agent_loop(workdir, agent, responder, max_meeting=10, max_rr=7,
                     continue
                 # 写接管声明（freezing——推进 HEAD + 不破坏流程）
                 log(agent, "rw 未收尾——声明接管（推进 HEAD 天然唯一接管者）")
-                write_protocol_signal(workdir, agent, "freezing",
-                                      aggregate_mode(bare, agents) or "meeting")
+                write_protocol_signal(workdir, agent, T_FREEZING,
+                                      aggregate_mode(bare, agents)
+                                      or M_MEETING)
                 finalize_discussion(workdir, agent, responder, head,
                                     reason="stall")
                 continue
@@ -605,7 +610,7 @@ def agent_loop(workdir, agent, responder, max_meeting=10, max_rr=7,
                 continue
 
             # ===== ③ all-freezing 阶段：starter 启动 RR =====
-            if mode == "all-freezing":
+            if mode == M_ALL_FREEZING:
                 # starter 严格条件：全员 af → 启动 RR（用户 10084/10089：
                 # 唤醒目的 = 有新的文件可提交给 LLM 处理。starter 冻结期间
                 # 别人可能发了 message（读取点后），必须唤醒读完再 pass；
@@ -623,14 +628,14 @@ def agent_loop(workdir, agent, responder, max_meeting=10, max_rr=7,
                     else:
                         # 无新消息 → 确定性写 pass（启动 RR，带 next 轮转链）
                         nxt_a = core_next(agents, agent)
-                        write_protocol_signal(workdir, agent, "pass",
-                                              "round-robin", nxt_a)
+                        write_protocol_signal(workdir, agent, T_PASS,
+                                              M_ROUND_ROBIN, nxt_a)
                     continue
                 time.sleep(poll_interval)
                 continue
 
             # ===== ④ round-robin 阶段（发言锁已解）=====
-            if mode == "round-robin":
+            if mode == M_ROUND_ROBIN:
                 # 全员 pass → resultWriter 收尾（写 result.md + concluded）
                 # 判定收敛到 core（审核 D：判定只此一份——core 吃完整消息列表，
                 # 引擎只做 bare 组装）
@@ -663,8 +668,8 @@ def agent_loop(workdir, agent, responder, max_meeting=10, max_rr=7,
                 meta = new_messages_with_meta(workdir, rp, agent)
                 if not has_new_messages_for_me(meta, agent):
                     nxt_a = core_next(agents, agent)
-                    write_protocol_signal(workdir, agent, "pass",
-                                          "round-robin", nxt_a)
+                    write_protocol_signal(workdir, agent, T_PASS,
+                                          M_ROUND_ROBIN, nxt_a)
                     continue
                 before = len(list_my_messages(workdir, agent))
                 respond_with_fallback(workdir, agent, responder, head, meta,
@@ -705,7 +710,7 @@ def agent_loop(workdir, agent, responder, max_meeting=10, max_rr=7,
                     and all_last.get(agent) != "freezing"):
                 log(agent, f"meeting 配额耗尽（{quota} 轮，含 human 增量"
                            f"{quota - max_meeting}）——确定性 freezing")
-                write_protocol_signal(workdir, agent, "freezing", "meeting")
+                write_protocol_signal(workdir, agent, T_FREEZING, M_MEETING)
                 continue
 
             # ⑤.3 触发判断
@@ -719,7 +724,7 @@ def agent_loop(workdir, agent, responder, max_meeting=10, max_rr=7,
             # 唯一未冻结者（无新消息）→ 确定性 freezing（不经 responder）
             if others_frozen and not triggered and all_last.get(agent) != "freezing":
                 log(agent, "其他人都已冻结且无新消息——确定性 freezing")
-                write_protocol_signal(workdir, agent, "freezing", "meeting")
+                write_protocol_signal(workdir, agent, T_FREEZING, M_MEETING)
                 continue
             # 无新消息（非唯一未冻结者）→ 等待（L2：化简，先 freezing 后 sleep）
             if not triggered:
@@ -727,7 +732,7 @@ def agent_loop(workdir, agent, responder, max_meeting=10, max_rr=7,
                 continue
 
             # ⑤.4 发言锁：我最后是 freezing → 锁（不发 message，等 RR）
-            if all_last.get(agent) == "freezing":
+            if all_last.get(agent) == T_FREEZING:
                 time.sleep(poll_interval)
                 continue
 

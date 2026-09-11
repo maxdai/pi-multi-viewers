@@ -392,7 +392,8 @@ def gen_question(topic, stances, background, questions):
 
 
 def gen_protocol(topic, participants, max_meeting, max_rr, pure=False,
-                 result_writer=None, stall_timeout=600,
+                 result_writer=None,
+                 stall_timeout=meeting_fs.DEFAULT_STALL_TIMEOUT,
                  fork_source=None, fork_cwd=None,
                  fork_mode=meeting_fs.DEFAULT_FORK_MODE):
     """protocol.json（meeting 模式）。"""
@@ -1154,7 +1155,7 @@ def build_report(base):
     mode_now = meeting_core.aggregate_mode(
         {a: ({"type": fm.get("type"), "mode": fm.get("mode")} if fm else None)
          for a, fm in lasts.items()})
-    if mode_now == "round-robin":
+    if mode_now == meeting_core.M_ROUND_ROBIN:
         out.append(f"RR：轮到 "
                    f"{meeting_engine.rr_next_speaker(bare, agents) or '（未定）'}")
     else:
@@ -1305,7 +1306,8 @@ def main():
     parser.add_argument("--result-writer", default=None, help="resultWriter（默认最后一位参与者）")
     parser.add_argument("--max-meeting", type=int, default=10, help="meeting 阶段发言配额（每 agent）")
     parser.add_argument("--max-rr", type=int, default=7, help="RR 阶段轮次配额（starter）")
-    parser.add_argument("--stall-timeout", type=int, default=600,
+    parser.add_argument("--stall-timeout", type=int,
+                        default=meeting_fs.DEFAULT_STALL_TIMEOUT,
                         help="无进展超时兜底（秒，默认 600；防 provider API 慢）")
     parser.add_argument("--spec-gen", metavar="DIR", default=None,
                         help="生成 spec 骨架到 DIR（如 --spec-gen myspec/；不需 --dir）")
