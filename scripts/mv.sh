@@ -17,6 +17,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
 PYTHON="${PYTHON:-python3}"
 START_DISCUSSION="$ROOT_DIR/start_discussion.py"
+OBSERVABILITY="$ROOT_DIR/observability.py"
 HUMAN_VIEWER="$ROOT_DIR/human_viewer.py"
 HUMAN_SAYER="$ROOT_DIR/human_sayer.py"
 
@@ -26,12 +27,15 @@ usage() {
 用法:
   $0 --prepare "<问题>" [--background "<背景>"] [--agents "a,b,c"|4]
   $0 --start <spec目录> [--fork-mode compaction|budget|full]
-  $0 --status <dir>
-  $0 --report <dir>
-  $0 --wait <dir>
-  $0 --cleanup <dir>
-  $0 --view <dir> [--since <ref>]
-  $0 --say <dir> "<文本>"
+  $0 --status  [dir]
+  $0 --report  [dir]
+  $0 --wait    [dir]
+  $0 --cleanup [dir]
+  $0 --view    [dir] [--since <ref>]
+  $0 --say     [dir] "<文本>"
+
+消费命令的 <dir> 可省略（自动发现本 session 当前分析——按 cwd 下
+mv-<PI_SESSION_ID>-* 最新；找不到则取最新 mv-* 并警告）
 
 默认参数:
   agents=a,b,c  max-meeting=10  max-rr=7   # 配额默认值的权威在 python argparse（wrapper 不传）
@@ -58,6 +62,20 @@ require_dir() {
     [ -d "$dir" ] || fail "目录不存在: $dir"
 }
 
+# 目录解析：显式参数优先；**省略则自动发现**（python observability
+# --find-dir——单一实现，extension 同一入口）。为什么允许省略：唯一知道
+# 路径的是 --start 的输出，此前消费命令都要求把它传给每个命令，等于让
+# 调用方（主 pi）把长绝对路径记在 LLM 上下文里再复用——改错/截断/相对
+# 路径都出过（参数形态标准化就是为此）。发现逻辑下沉后路径不经 LLM 记忆。
+resolve_dir() {
+    local dir="${1:-}"
+    if [ -z "$dir" ]; then
+        dir="$("$PYTHON" "$OBSERVABILITY" --find-dir)" || fail \
+            "未指定目录且未找到当前分析（本目录无 mv-* 分析环境）"
+    fi
+    normalize_dir "$dir"
+}
+
 # 目录参数规范化：裸名（无路径符）会被 start_discussion 加 discussion-
 # 前缀导致找错目录（实测 2026-09-03）——所有消费命令入口统一转绝对路径
 normalize_dir() {
@@ -66,36 +84,39 @@ normalize_dir() {
 
 cmd_status() {
     local dir
-    dir="$(normalize_dir "$1")"
+    dir="$(resolve_dir "${1:-}")"
     require_dir "$dir"
     "$PYTHON" "$START_DISCUSSION" --dir "$dir" --status
 }
 
 cmd_report() {
     local dir
-    dir="$(normalize_dir "$1")"
+    dir="$(resolve_dir "${1:-}")"
     require_dir "$dir"
     "$PYTHON" "$START_DISCUSSION" --dir "$dir" --report
 }
 
 cmd_wait() {
     local dir
-    dir="$(normalize_dir "$1")"
+    dir="$(resolve_dir "${1:-}")"
     require_dir "$dir"
     "$PYTHON" "$START_DISCUSSION" --dir "$dir" --wait
 }
 
 cmd_cleanup() {
     local dir
-    dir="$(normalize_dir "$1")"
+    dir="$(resolve_dir "${1:-}")"
     require_dir "$dir"
     "$PYTHON" "$START_DISCUSSION" --dir "$dir" --cleanup
 }
 
 cmd_view() {
     local dir since=""
-    dir="$(normalize_dir "$1")"
-    shift
+    # 目录可省略：有参数时先吃掉（可能是目录，也可能是 --since 起始）
+    if [ "${1:-}" != "--since" ] && [ "$#" -ge 1 ]; then
+        shift
+    fi
+    dir="$(resolve_dir "")"
     while [ "$#" -gt 0 ]; do
         case "$1" in
             --since)
@@ -121,8 +142,17 @@ cmd_view() {
 }
 
 cmd_say() {
-    local dir text="${2:-}"
-    dir="$(normalize_dir "$1")"
+    # 两种形态（**按参数个数区分，不是按值猜语义**）：
+    #   --say <dir> "<文本>"   显式目录（兼容原有调用）
+    #   --say "<文本>"         目录自动发现（本 session 当前分析）
+    local dir text
+    if [ "$#" -ge 2 ]; then
+        dir="$(resolve_dir "$1")"
+        text="$2"
+    else
+        dir="$(resolve_dir "")"
+        text="${1:-}"
+    fi
     require_dir "$dir"
     [ -d "$dir/work-human" ] || fail "分析缺少 work-human: $dir"
     [ -n "$text" ] || fail "插话文本不能为空"
@@ -284,34 +314,33 @@ if [ "$#" -ge 1 ]; then
             exit $?
             ;;
         --status)
-            [ "$#" -ge 2 ] || fail "--status 需要分析目录参数"
-            cmd_status "$2"
+            shift
+            cmd_status "${1:-}"
             exit $?
             ;;
         --report)
-            [ "$#" -ge 2 ] || fail "--report 需要分析目录参数"
-            cmd_report "$2"
+            shift
+            cmd_report "${1:-}"
             exit $?
             ;;
         --wait)
-            [ "$#" -ge 2 ] || fail "--wait 需要分析目录参数"
-            cmd_wait "$2"
+            shift
+            cmd_wait "${1:-}"
             exit $?
             ;;
         --cleanup)
-            [ "$#" -ge 2 ] || fail "--cleanup 需要分析目录参数"
-            cmd_cleanup "$2"
+            shift
+            cmd_cleanup "${1:-}"
             exit $?
             ;;
         --view)
-            [ "$#" -ge 2 ] || fail "--view 需要分析目录参数"
             shift
             cmd_view "$@"
             exit $?
             ;;
         --say)
-            [ "$#" -ge 3 ] || fail "--say 需要分析目录和文本参数"
-            cmd_say "$2" "$3"
+            shift
+            cmd_say "$@"
             exit $?
             ;;
         -h|--help)

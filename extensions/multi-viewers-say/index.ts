@@ -6,14 +6,12 @@
  * 不经过 LLM——命令 handler 直接 spawn human_sayer.py（一次调用一次返回），
  * 结果用 ctx.ui.notify 反馈。
  *
- * 讨论目录发现（零状态文件）：
- *   wrapper --start 的目录名 = mv-<PI_SESSION_ID>-<时间戳>
- *   （aft 不再替换 bash 后 PI_SESSION_ID 注入可用）；
- *   handler 用 ctx.sessionManager.getSessionId() 取本 session id，
- *   glob ctx.cwd/mv-<sid>-* 取最新目录——session 隔离（同目录多
- *   session 并发分析也互不干扰），无状态文件、无 cleanup 比对。
- *   兜底：无 sid 目录（PI 环境变量未注入时 wrapper 拿不到 sid）→ 项目下
- *   最新的 mv-*，并警告降级（宁可提示也不要静默插错分析）。
+ * 讨论目录发现（零状态文件）：目录名 = mv-<sid>-<时间戳>；
+ *   handler 取 ctx.sessionManager.getSessionId() + ctx.cwd，**调用
+ *   observability.py --find-dir**（python 单一实现——wrapper 的消费命令
+ *   走同一入口；本扩展不再自持一份发现逻辑，两边口径不会漂移）。
+ *   session 隔离（同目录多 session 并发分析互不干扰）；兜底为项目下最新
+ *   mv-*，并警告降级（宁可提示也不要静默插错分析）。
  *
  * 前缀 mv- 与 pi-agents-helper 的 discuss-* 命名空间隔离（两个系统的
  * 插话命令都按"同 sid 最新目录"发现目标，共用前缀会互相插错）。
@@ -55,43 +53,40 @@ const PACKAGE_ROOT = findPackageRoot(__dirname, PKG_NAME);
 const SAYER = PACKAGE_ROOT
   ? path.join(PACKAGE_ROOT, "human_sayer.py")
   : "/root/pi-multi-viewers/human_sayer.py"; // 复制安装退化（开发机）
+const OBSERVABILITY = PACKAGE_ROOT
+  ? path.join(PACKAGE_ROOT, "observability.py")
+  : "/root/pi-multi-viewers/observability.py"; // 复制安装退化（开发机）
 
-/** 按 (cwd, sessionId) 推导当前分析目录：优先 mv-<sid>-<stamp>
- *  （session 隔离），找不到回退 mv-<stamp>（无 sid 目录——PI 环境
- *  变量缺失时 wrapper 拿不到 sid，降级为项目下最新分析，警告提示）。 */
+/** 定位当前分析目录：调用 observability.py --find-dir（**python 单一实现**
+ *  ——wrapper 消费命令同一入口）。session 隔离与降级规则见该函数 docstring。 */
 function findCurrentDir(
   cwd: string,
   sid: string,
-): { dir: string | null; degraded: boolean } {
-  try {
-    const names = fs.readdirSync(cwd, { withFileTypes: true });
-    const bySid = names
-      .filter((e) => e.isDirectory() && e.name.startsWith(`mv-${sid}-`))
-      .map((e) => e.name)
-      .sort();
-    if (bySid.length > 0) {
-      const dir = path.join(cwd, bySid[bySid.length - 1]);
-      return { dir: fs.existsSync(dir) ? dir : null, degraded: false };
+): Promise<{ dir: string | null; degraded: boolean }> {
+  return new Promise((resolve) => {
+    if (!OBSERVABILITY) {
+      resolve({ dir: null, degraded: false });
+      return;
     }
-    const any = names
-      .filter(
-        (e) =>
-          e.isDirectory() &&
-          e.name.startsWith("mv-") &&
-          // 排除 mv-spec-*：那是尚未被 --start 消费的 spec 目录，不是分析
-          // 目录（否则会选中它并报出误导性的"分析不存在"）
-          !e.name.startsWith("mv-spec-"),
-      )
-      .map((e) => e.name)
-      .sort();
-    if (any.length > 0) {
-      const dir = path.join(cwd, any[any.length - 1]);
-      return { dir: fs.existsSync(dir) ? dir : null, degraded: true };
-    }
-    return { dir: null, degraded: false };
-  } catch {
-    return { dir: null, degraded: false };
-  }
+    const proc = spawn("python3", [OBSERVABILITY, "--find-dir"], {
+      cwd,
+      env: { ...process.env, PI_SESSION_ID: sid },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let out = "";
+    let err = "";
+    proc.stdout.on("data", (d) => (out += d.toString()));
+    proc.stderr.on("data", (d) => (err += d.toString()));
+    proc.on("close", (code) => {
+      const dir = out.trim();
+      resolve({
+        dir: code === 0 && dir ? dir : null,
+        // 降级提示由 python 打到 stderr（"警告: 未找到本 session 的分析…"）
+        degraded: code === 0 && dir !== "" && err.includes("警告"),
+      });
+    });
+    proc.on("error", () => resolve({ dir: null, degraded: false }));
+  });
 }
 
 /** 执行 human_sayer.py 一次插话。返回 { ok, output }。 */
@@ -126,7 +121,7 @@ export default function register(pi: any) {
         return;
       }
       const sid = ctx.sessionManager.getSessionId();
-      const found = findCurrentDir(ctx.cwd, sid);
+      const found = await findCurrentDir(ctx.cwd, sid);
       const dir = found.dir;
       if (!dir) {
         ctx.ui.notify(

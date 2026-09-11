@@ -55,6 +55,49 @@ def _loops_alive(base):
     return bool(_loop_pids(base))
 
 
+def find_current_dir(cwd=None, sid=None):
+    """发现"本 session 当前的分析目录"——**单一实现**（wrapper 与 extension
+    共用；此前只有 extension 里一份 TS 实现，wrapper 侧完全没有）。
+
+    为什么需要：消费命令（--status/--cleanup/--view/--say…）此前都要求调用方
+    传绝对路径，而唯一知道路径的是 `--start` 的输出——主 pi 得把它记在
+    LLM 上下文里再原样复用（改错/截断/相对路径都出过）。发现逻辑下沉后，
+    命令可以不带目录，**路径不需要经过任何 LLM 记忆**。
+
+    优先级：
+      1. `mv-<sid>-*` 中的最新（session 隔离——同项目多 session 并发不串台）
+      2. 找不到 → `mv-*` 中的最新（**排除 `mv-spec-*`**：那是尚未被 --start
+         消费的 spec 目录，不是分析目录），标记 `degraded`（调用方应提示）
+      3. 都没有 → (None, False)
+
+    判别 = 目录含 `repo.git`（同 engine："bare 是讨论存在的唯一标志"——
+    光看名字会命中残留/无关目录）。
+
+    返回 (绝对路径 | None, degraded: bool)。
+    """
+    cwd = cwd or os.getcwd()
+    sid = sid if sid is not None else os.environ.get("PI_SESSION_ID", "")
+    try:
+        names = sorted(os.listdir(cwd))
+    except OSError:
+        return None, False
+
+    def _is_analysis_dir(name):
+        return not name.startswith("mv-spec-") and os.path.isdir(
+            os.path.join(cwd, name, "repo.git"))
+
+    if sid:
+        by_sid = [n for n in names
+                  if n.startswith(f"mv-{sid}-") and _is_analysis_dir(n)]
+        if by_sid:
+            return os.path.join(cwd, by_sid[-1]), False
+    any_mv = [n for n in names
+              if n.startswith("mv-") and _is_analysis_dir(n)]
+    if any_mv:
+        return os.path.join(cwd, any_mv[-1]), True   # 降级：无 sid 匹配
+    return None, False
+
+
 def check_status(base):
     """讨论状态（单值；状态全集显式于此，T3/#7 修复 e2e7 评审）：
 
@@ -395,3 +438,38 @@ def _num(n):
     if n >= 1_000:
         return f"{n / 1_000:.1f}k"
     return str(n)
+
+
+def _main(argv=None):
+    """观测层 CLI——目前只有一个子命令：`--find-dir`（供 wrapper 与
+    extension 在"不带目录"时定位当前分析；逻辑单点，两个调用方不各写一份）。
+
+    输出契约：
+      stdout = 绝对路径（找到时）；stderr = 提示（降级/未找到）；
+      退出码 0 = 找到，1 = 未找到。
+    """
+    import argparse
+    ap = argparse.ArgumentParser(description="多视角分析：观测层工具")
+    ap.add_argument("--find-dir", action="store_true",
+                    help="定位当前分析目录（按 cwd + PI_SESSION_ID）")
+    ap.add_argument("--cwd", default=None, help="项目目录（默认 $PWD）")
+    ap.add_argument("--sid", default=None,
+                    help="session id（默认 $PI_SESSION_ID）")
+    args = ap.parse_args(argv)
+    if not args.find_dir:
+        ap.print_help()
+        return 2
+    d, degraded = find_current_dir(args.cwd, args.sid)
+    if not d:
+        print("错误: 未找到当前分析目录（本目录下没有 mv-* 分析环境）",
+              file=sys.stderr)
+        return 1
+    if degraded:
+        print(f"警告: 未找到本 session 的分析（无 mv-<sid>-*）——"
+              f"取本目录最新: {os.path.basename(d)}", file=sys.stderr)
+    print(d)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(_main())

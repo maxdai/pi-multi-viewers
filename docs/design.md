@@ -282,7 +282,26 @@ commit 是溯源记录、本节是长期引用点——不并存两份权威值�
     流程依赖 LLM（会漏、不可验收），正是本项目一贯要消除的形态；报告既然
     是给用户的，就该长在用户直接看的通道上。`--view --since` 不附（主 pi
     通道，进 context 且对模型无用）。
-15. **git 守卫范围 = 从讨论 workdir 发起的操作**（`GIT_CEILING_DIRECTORIES`
+15. **消费命令的目录可省略（自动发现）**：`--view/--say/--status/--report/
+    --wait/--cleanup` 不带目录 → 按 cwd + `PI_SESSION_ID` 发现当前分析
+    （`mv-<sid>-*` 最新；兜底最新 `mv-*` 并警告；判据 = 含 `repo.git`，
+    同 engine"bare 是分析存在的唯一标志"；排除 `mv-spec-*`）。
+    **动机**：唯一知道路径的是 `--start` 的输出，此前每个消费命令都要求
+    传它 → 主 pi 必须把长绝对路径记在 LLM 上下文里复用（改错/截断/相对
+    路径都出过）。发现逻辑下沉后**路径不经过 LLM**。
+    实现单点 = `observability.find_current_dir`（wrapper 的 `resolve_dir`
+    与 extension 同走 `observability.py --find-dir`——此前只有 extension
+    里一份 TS 实现，wrapper 侧完全没有，两份口径会漂移）。
+    `--say` 两形态**按参数个数区分**（1 个 = 文本+自动发现；2 个 = 目录+
+    文本）——不是按值猜语义。
+    配套：`--status` 在 done 时打印 `[result] <路径>`（目录可省略后调用方
+    无法自己拼 `<目录>-result.md`，路径必须由机制给出）。
+16. **prompt 里的失败判据用退出码，不用报错文本匹配**：原 prompt 要求
+    "若报错含'未找到 viewers/ 目录'…" —— 匹配 stderr 文案，wrapper 文案
+    一改就静默失配（LLM 会以为没报错而继续）。改为"命令非零退出 → 停下来
+    读报错原文问用户"：判据降为退出码（wrapper 的 `fail()` 保证 `exit 1`），
+    原因解释交还给输出原文。
+17. **git 守卫范围 = 从讨论 workdir 发起的操作**（`GIT_CEILING_DIRECTORIES`
    注入于 spawn）；主项目仓库不在守卫范围（agent 的 cwd 就是主项目，其
    约束归指令层 + 主项目 `.gitignore`）。要拦主仓库需换机制类（沙箱/钩子），
    经评估收益不支撑扩面。

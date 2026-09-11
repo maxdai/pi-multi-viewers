@@ -458,6 +458,33 @@ class TestStartDiscussionMain(unittest.TestCase):
                     sd.main()
                     cs.assert_called_once_with("/x")
 
+    def test_main_status_done_prints_result_path(self):
+        """done → 额外打印 [result] 路径（目录可省略后，调用方**无法**自己
+        拼 `<目录>-result.md`——路径必须由机制给出）。"""
+        import start_discussion as sd
+        out = []
+        with mock.patch("sys.argv", ["start_discussion.py", "--dir", "/x",
+                                     "--status"]):
+            with mock.patch("start_discussion.check_status",
+                            return_value="done"):
+                with mock.patch("builtins.print",
+                                side_effect=lambda *a, **k: out.append(a[0])):
+                    sd.main()
+        self.assertIn("[status] done", out)
+        self.assertIn("[result] /x-result.md", out)
+
+    def test_main_status_running_no_result_path(self):
+        import start_discussion as sd
+        out = []
+        with mock.patch("sys.argv", ["start_discussion.py", "--dir", "/x",
+                                     "--status"]):
+            with mock.patch("start_discussion.check_status",
+                            return_value="running"):
+                with mock.patch("builtins.print",
+                                side_effect=lambda *a, **k: out.append(a[0])):
+                    sd.main()
+        self.assertFalse([l for l in out if l.startswith("[result]")])
+
     def _wait_with_state(self, tmp, state):
         """--wait 在给定 check_status 下的终态输出（真实 subprocess 太重，
         仅驱动 main 的等待分支）。"""
@@ -594,6 +621,90 @@ class TestHumanSayerMain(unittest.TestCase):
                         say.assert_called_once_with(
                             os.path.join(base, "work-human"),
                             "stdin 内容\n第二行")
+
+
+class TestFindCurrentDir(unittest.TestCase):
+    """目录自动发现（observability.find_current_dir）——wrapper/extension 的
+    共同入口（单一实现）。"""
+
+    def _env(self, tmp, names):
+        """造若干 mv-* 目录；含 repo.git 的才算分析环境。"""
+        for name, has_bare in names:
+            d = os.path.join(tmp, name)
+            os.makedirs(d, exist_ok=True)
+            if has_bare:
+                subprocess.run(["git", "init", "-q", "--bare",
+                                os.path.join(d, "repo.git")], check=True)
+        return tmp
+
+    def test_sid_match_wins(self):
+        import observability as ob
+        with tempfile.TemporaryDirectory() as tmp:
+            self._env(tmp, [("mv-sidA-20260101-000000", True),
+                            ("mv-sidB-20260101-000001", True)])
+            d, degraded = ob.find_current_dir(tmp, "sidA")
+            self.assertTrue(d.endswith("mv-sidA-20260101-000000"))
+            self.assertFalse(degraded)
+
+    def test_latest_when_same_sid(self):
+        import observability as ob
+        with tempfile.TemporaryDirectory() as tmp:
+            self._env(tmp, [("mv-s-20260101-000000", True),
+                            ("mv-s-20260101-000100", True)])
+            d, _ = ob.find_current_dir(tmp, "s")
+            self.assertTrue(d.endswith("mv-s-20260101-000100"))
+
+    def test_fallback_degraded(self):
+        import observability as ob
+        with tempfile.TemporaryDirectory() as tmp:
+            self._env(tmp, [("mv-other-20260101-000000", True)])
+            d, degraded = ob.find_current_dir(tmp, "sidX")
+            self.assertIsNotNone(d)
+            self.assertTrue(degraded, "无 sid 匹配时应标记降级")
+
+    def test_skip_spec_dirs(self):
+        """mv-spec-* 不是分析目录（未被 --start 消费）——必须排除。"""
+        import observability as ob
+        with tempfile.TemporaryDirectory() as tmp:
+            self._env(tmp, [("mv-spec-20260101-000000", True)])
+            d, degraded = ob.find_current_dir(tmp, "s")
+            self.assertIsNone(d)
+            self.assertFalse(degraded)
+
+    def test_requires_repo_git(self):
+        """含 repo.git 才算分析环境——光看名字会命中残留/无关目录。"""
+        import observability as ob
+        with tempfile.TemporaryDirectory() as tmp:
+            self._env(tmp, [("mv-s-20260101-000000", False)])
+            d, _ = ob.find_current_dir(tmp, "s")
+            self.assertIsNone(d)
+
+    def test_none_found(self):
+        import observability as ob
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(ob.find_current_dir(tmp, "s"), (None, False))
+
+    def test_cli_find_dir(self):
+        """CLI 契约：找到打印路径 + rc 0；未找到 rc 1。"""
+        import observability as ob
+        with tempfile.TemporaryDirectory() as tmp:
+            self._env(tmp, [("mv-s-20260101-000000", True)])
+            with mock.patch("builtins.print") as mp:
+                rc = ob._main(["--find-dir", "--cwd", tmp, "--sid", "s"])
+            self.assertEqual(rc, 0)
+            self.assertIn("mv-s-20260101-000000",
+                          str(mp.call_args_list[0].args[0]))
+            # 未找到（空目录）→ rc 1
+            empty = os.path.join(tmp, "empty")
+            os.makedirs(empty)
+            with mock.patch("builtins.print"):
+                rc2 = ob._main(["--find-dir", "--cwd", empty, "--sid", "s"])
+            self.assertEqual(rc2, 1)
+            # sid 不匹配但目录存在 → 降级（rc 仍 0，提示在 stderr）
+            with mock.patch("builtins.print"), \
+                    mock.patch("sys.stderr"):
+                rc3 = ob._main(["--find-dir", "--cwd", tmp, "--sid", "none"])
+            self.assertEqual(rc3, 0)
 
 
 if __name__ == "__main__":

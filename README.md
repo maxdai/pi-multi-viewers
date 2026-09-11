@@ -74,6 +74,12 @@ ls ~/.pi/agent/npm/node_modules/pi-multi-viewers/scripts/mv.sh
 两个 pi 命令入口（视角/主题走 prompt，插话走 extension——插话是"本地命令
 执行"，不需要经过 LLM）。
 
+**目录可以省略**：`--view`/`--say`/`--status`/`--report`/`--wait`/`--cleanup`
+不带目录时自动定位"本 session 当前分析"（`mv-<sessionId>-*` 最新；找不到
+则取最新 `mv-*` 并警告；判据 = 含 `repo.git`）。传目录仍支持（显式优先）。
+这样路径不需要经过任何 LLM 记忆——此前命令都要求绝对路径，等于让主 pi
+把长路径记在上下文里复用。
+
 或命令行：
 
 ```bash
@@ -88,15 +94,16 @@ scripts/mv.sh --start <spec目录>              # 启动（自动挂载主 sessi
 #  高级：--agents "a,b" 起一次性视角（不建 viewers/ 时用；prompt 入口不传它）
 
 # 观看：--start 会输出可直接执行的 !! 流式观看命令（复制执行）
-scripts/mv.sh --view <dir>                    # 或一次性增量查看（主 pi 记录 HEAD 作下轮 --since）
+scripts/mv.sh --view                          # 一次性增量查看（主 pi 记录 HEAD 作下轮 --since）
 #  --follow 会打印【状态】(meeting/all-freezing/round-robin/concluded)
 #         与【进度】(meeting 消耗/上限 ｜ freezing 集合 ｜ rr → 下一位)
+#         结束时自动附【分析报告】（消息/墙钟/配额/进程跨度/LLM 用量）
 
-# 插话 / 状态 / 收尾
-scripts/mv.sh --say <dir> "<文本>"             # 插话（命令行形态；pi 内用 /multi-viewers-say）
-scripts/mv.sh --status <dir>                  # running / done / stalled / stopped
-scripts/mv.sh --report <dir>                  # 只读报告（流程/配额/进程/LLM；冷路径，不持久化）
-scripts/mv.sh --cleanup <dir>                 # 收尾（result.md 自动留存到 <dir>-result.md）
+# 插话 / 状态 / 收尾（目录可省略——自动定位本 session 当前分析）
+scripts/mv.sh --say "<文本>"                   # 插话（命令行形态；pi 内用 /multi-viewers-say）
+scripts/mv.sh --status                        # running / done / stalled / stopped（done 时附 [result] 路径）
+scripts/mv.sh --report                        # 只读报告（流程/配额/进程/LLM；冷路径，不持久化）
+scripts/mv.sh --cleanup                       # 收尾（result.md 自动留存到 <dir>-result.md）
 ```
 
 ## 视角文件写什么（`viewers/<视角名>.md`）

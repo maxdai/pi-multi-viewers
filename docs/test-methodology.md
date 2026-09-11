@@ -279,3 +279,22 @@ python 时被"顺手改写"为含斜杠则不拼——**移植不是重写**：�
 
 **成本视角**：冗余测试不只是耗时——它稀释了"全绿"的信号价值（每次发版都全绿
 时，人不再区分"这次真的验了代码"与"这次只 bump 了版本号"）。
+
+### 20. `mv.sh --start` 会真实启动分析（spawn loop + pi）——冒烟别用它
+
+**背景**：`cmd_start` 做两件事：创建环境 + **启动 loop**。后者会立刻 spawn
+`meeting_loop.py`，而 loop 首轮就 spawn `pi --mode json --print`——**真实 LLM
+请求**。在 pi session 内跑（`PI_SESSION_ID`/`PI_SESSION_FILE` 都在）时没有任何
+保护会阻止它。
+
+**实测代价**（2026-09-11 两次，同一坑）：
+- ① 验证"目录名构造"时跑 `mv.sh --start` → 真起了 2 个 loop + 2 个 pi 进程；
+- ② 验证"目录可省略"时同样跑 `--start` → 同样起来（20 秒后 cleanup 删目录，
+  loop 因 repo.git 消失自退出，但 pi 进程已 spawn → 请求可能已发出）。
+
+**方法**：
+1. **只创建不启动** → 用 python 侧 `start_discussion.py --dir <d> --spec <s>`
+   （不带 `--start`）；wrapper 无此形态（`--start` 永远启动）。
+2. 需要走 wrapper 链路时，验证完**立即**：停 loop（`pkill` 按目录精确匹配）
+   → `--cleanup` → `check-residue.sh` 复核。
+3. 判据："这次验证会不会 spawn pi/loop？"——会，就必须先想好怎么停。

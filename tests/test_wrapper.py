@@ -211,16 +211,98 @@ class TestErrorPaths(unittest.TestCase):
 class TestReportDispatch(unittest.TestCase):
     """--report 是消费命令（归一化目录 + 透传到 python；与 --status 同形）。"""
 
-    def test_report_requires_dir(self):
+    def test_report_without_dir_no_analysis(self):
+        """目录可省略后：省略 = 自动发现；无分析环境 → 明确报错（非静默）。"""
         with tempfile.TemporaryDirectory() as tmp:
             r = run_wrapper(["--report"], cwd=tmp)
             self.assertNotEqual(r.returncode, 0)
-            self.assertIn("--report", r.stderr + r.stdout)
+            self.assertIn("未找到当前分析", r.stderr)
 
     def test_report_missing_dir_fails(self):
         with tempfile.TemporaryDirectory() as tmp:
             r = run_wrapper(["--report", os.path.join(tmp, "nope")], cwd=tmp)
             self.assertNotEqual(r.returncode, 0)
+
+
+class TestDirOptional(unittest.TestCase):
+    """消费命令的目录可省略（自动发现——python 单一实现）。
+
+    真实 subprocess 跑 wrapper：构造一个 mv-<sid>-* 环境，不传目录应能
+    定位到它（此前每个消费命令都 require_dir，路径必须由调用方记住）。
+    """
+
+    def _env(self, tmp, name):
+        base = os.path.join(tmp, name)
+        os.makedirs(base)
+        subprocess.run(["git", "init", "-q", "--bare",
+                        os.path.join(base, "repo.git")], check=True)
+        w = os.path.join(base, "work-a")
+        subprocess.run(["git", "clone", "-q",
+                        os.path.join(base, "repo.git"), w], check=True)
+        for k, v in (("user.name", "t"), ("user.email", "t@t")):
+            subprocess.run(["git", "config", k, v], cwd=w, check=True)
+        import json as _json
+        with open(os.path.join(w, "protocol.json"), "w") as f:
+            _json.dump({"participants": ["a", "b"], "resultWriter": "b"}, f)
+        subprocess.run(["git", "add", "-A"], cwd=w, check=True,
+                       capture_output=True)
+        subprocess.run(["git", "commit", "-qm", "discuss: setup"], cwd=w,
+                       check=True, capture_output=True)
+        subprocess.run(["git", "push", "-q", "origin", "HEAD"], cwd=w,
+                       check=True, capture_output=True)
+        return base
+
+    def _run(self, args, cwd, env_extra=None):
+        env = {**os.environ, **(env_extra or {})}
+        env.pop("PI_SESSION_ID", None)
+        if env_extra:
+            env.update(env_extra)
+        r = subprocess.run(["bash", WRAPPER] + args, cwd=cwd, env=env,
+                           capture_output=True, text=True)
+        return r
+
+    def test_status_without_dir(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._env(tmp, "mv-sidZ-20260101-000000")
+            r = self._run(["--status"], tmp,
+                          {"PI_SESSION_ID": "sidZ"})
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn("[status]", r.stdout)
+
+    def test_status_degrades_and_warns(self):
+        """sid 不匹配 → 取最新 mv-*，警告打 stderr（不静默插错分析）。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            self._env(tmp, "mv-other-20260101-000000")
+            r = self._run(["--status"], tmp, {"PI_SESSION_ID": "sidZ"})
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn("警告", r.stderr)
+
+    def test_status_no_dir_found(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            r = self._run(["--status"], tmp, {"PI_SESSION_ID": "sidZ"})
+            self.assertNotEqual(r.returncode, 0)
+            self.assertIn("未找到当前分析", r.stderr)
+
+    def test_say_single_arg_is_text(self):
+        """--say "<文本>"（1 参数）= 自动发现 + 文本；
+        --say <dir> "<文本>"（2 参数）= 显式目录。按参数个数区分。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            base = self._env(tmp, "mv-sidZ-20260101-000000")
+            subprocess.run(["git", "clone", "-q",
+                            os.path.join(base, "repo.git"),
+                            os.path.join(base, "work-human")], check=True)
+            wh = os.path.join(base, "work-human")
+            for k, v in (("user.name", "t"), ("user.email", "t@t")):
+                subprocess.run(["git", "config", k, v], cwd=wh, check=True)
+            r = self._run(["--say", "自动发现的插话"], tmp,
+                          {"PI_SESSION_ID": "sidZ"})
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn("human/0001", r.stdout)
+            # 显式目录形态仍工作
+            r2 = self._run(["--say", base, "显式目录"], tmp,
+                           {"PI_SESSION_ID": "sidZ"})
+            self.assertEqual(r2.returncode, 0, r2.stderr)
+            self.assertIn("human/0002", r2.stdout)
 
 
 if __name__ == "__main__":

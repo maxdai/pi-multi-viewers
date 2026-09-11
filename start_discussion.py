@@ -33,6 +33,7 @@ import subprocess
 import sys
 import time
 
+import human_viewer
 import meeting_fs
 import observability
 import spec_gen
@@ -601,7 +602,12 @@ def main():
         cleanup_discussion(base)
         return
     if args.status:
-        print(f"[status] {check_status(base)}")
+        st = check_status(base)
+        print(f"[status] {st}")
+        if st == "done":
+            # 产物路径一并给出：目录可省略后（自动发现），调用方**无法**
+            # 自己拼出 `<目录>-result.md`——路径由机制提供，不经 LLM 记忆
+            print(f"[result] {human_viewer.result_path(base)}")
         return
     if args.report:
         for line in build_report(base):
