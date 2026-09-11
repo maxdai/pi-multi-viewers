@@ -633,7 +633,7 @@ class TestMiscLoop(unittest.TestCase):
             meeting_loop._lock_git(work)
             self.assertFalse(os.path.exists(os.path.join(work, ".git")))
             self.assertTrue(os.path.exists(os.path.join(work, ".git.locked")))
-            meeting_loop._unlock_git(work)
+            meeting_loop.restore_git_lock(work)
             self.assertTrue(os.path.exists(os.path.join(work, ".git")))
             self.assertFalse(os.path.exists(os.path.join(work, ".git.locked")))
 

@@ -24,7 +24,8 @@ import fcntl
 import os
 import sys
 
-from meeting_fs import (git_head, git_pull, git_commit, git_push,
+from meeting_fs import (
+    bare_of_base, bare_of_workdir, git_head, git_pull, git_commit, git_push,
                         next_msg_id, write_message, commit_message)
 from meeting_engine import aggregate_mode, participants
 
@@ -45,14 +46,14 @@ def say(workdir, body):
     body: 正文（多行）
     返回: (path, summary)——消息文件路径与摘要
     """
-    bare = os.path.join(os.path.dirname(workdir), "repo.git")
+    bare = bare_of_workdir(workdir)
     lock_path = os.path.join(workdir, ".human.lock")
     with open(lock_path, "w") as lf:
         fcntl.flock(lf, fcntl.LOCK_EX)
         # 写前同步（对齐生产 commit_new_files：pull 后再写，防序号/HEAD 落后）
         git_pull(workdir)
         head = git_head(bare)
-        agents = participants(workdir)
+        agents = participants(bare)
         mode = aggregate_mode(bare, agents) if agents else "meeting"
         mid = next_msg_id(workdir, HUMAN)
         path = f"{HUMAN}/{mid}.md"
@@ -114,7 +115,7 @@ def main():
 
     base = os.path.abspath(os.path.expanduser(args.base))
     workdir = os.path.join(base, "work-human")
-    bare = os.path.join(base, "repo.git")
+    bare = bare_of_base(base)
     if not os.path.isdir(bare):
         print(f"错误: 讨论不存在: {base}", file=sys.stderr)
         return 1

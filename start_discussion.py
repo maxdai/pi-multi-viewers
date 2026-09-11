@@ -695,7 +695,7 @@ def _clone_work(base, p):
     git 身份在此统一配置（调用方不再重复 config——e2e7 评审 T6）。
     """
     workdir = os.path.join(base, f"work-{p}")
-    run_cmd(["git", "clone", os.path.join(base, "repo.git"), workdir])
+    run_cmd(["git", "clone", meeting_fs.bare_of_base(base), workdir])
     run_cmd(["git", "config", "user.name", GIT_USER], cwd=workdir)
     run_cmd(["git", "config", "user.email", GIT_EMAIL], cwd=workdir)
     for sub in [".pi/agent", p]:   # L9：只建自己的目录（读走 bare，写有 makedirs 兜底）
@@ -771,7 +771,7 @@ def setup_environment(args, participants, base, spec_dir=None,
                    else {p: "" for p in participants})
 
     os.makedirs(base, exist_ok=True)
-    run_cmd(["git", "init", "--bare", os.path.join(base, "repo.git")])
+    run_cmd(["git", "init", "--bare", meeting_fs.bare_of_base(base)])
 
     # T6 重构（e2e7 评审）：原流程 = 全部 clone → 写共享 → commit → 再
     # rmtree+clone 重建 others + 回写本地文件（2N-1 次 clone，~40% 冗余；
@@ -811,7 +811,7 @@ def setup_environment(args, participants, base, spec_dir=None,
     # 分支 → 环境损坏。审核 C2。）
     branch = run_cmd(["git", "branch", "--show-current"], cwd=wa,
                  check=False).stdout.strip()
-    run_cmd(["git", "push", os.path.join(base, "repo.git"),
+    run_cmd(["git", "push", meeting_fs.bare_of_base(base),
          branch or "master"], cwd=wa)
 
     # others clone（直接拿到 setup commit；work-a 已在上方创建）
@@ -932,7 +932,7 @@ def check_status(base):
     无限轮询（无终止上界）。现 stalled 使 --wait 有界退出。
     移除恒 None 第二返回值（#7 装饰性契约）——信息由状态本身表达。
     """
-    bare = os.path.join(base, "repo.git")
+    bare = meeting_fs.bare_of_base(base)
     if not os.path.isdir(bare):
         return "not-exists"
     # 读路径统一走 fs.run_git（quotepath 加固单点；run_cmd 只做一次性
@@ -1002,7 +1002,7 @@ def wait_for_completion(base):
     import human_viewer
     sys.stdout.reconfigure(line_buffering=True)
     print(f"[wait] 等待讨论完成: {base}")
-    bare = os.path.join(base, "repo.git")
+    bare = meeting_fs.bare_of_base(base)
     agents = human_viewer.participants_from_bare(bare) or []
     since = ""   # 首次全量（--wait 一次性观察，无游标持久需求）
     first = True
@@ -1156,7 +1156,7 @@ def main():
         # 参与者从已有环境的 protocol.json 读（单一事实源 = bare HEAD，
         # 不依赖 CLI；读不到 → 明确报错，不静默）
         participants = meeting_fs.read_protocol(
-            os.path.join(base, "repo.git")).get("participants", [])
+            meeting_fs.bare_of_base(base)).get("participants", [])
         if not participants:
             print("[error] 无法读取已有环境 protocol.json")
             sys.exit(1)

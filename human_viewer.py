@@ -161,7 +161,7 @@ def main():
     args = parser.parse_args()
 
     base = os.path.abspath(os.path.expanduser(args.base))
-    bare = os.path.join(base, "repo.git")
+    bare = meeting_fs.bare_of_base(base)
     if not os.path.isdir(bare):
         print(f"错误: 讨论不存在: {base}", file=sys.stderr)
         return 1

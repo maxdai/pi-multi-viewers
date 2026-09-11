@@ -162,6 +162,18 @@ def has_new_messages_for_me(new_messages, me):
 # ---------------------------------------------------------------
 
 
+def next_in_order(order, agent):
+    """轮转顺序的下一位（无 I/O 纯表达式）。
+
+    RR（round-robin）阶段的 next 字段来源：**协议状态**（LLM 不知道，
+    由 loop 确定性补写）。同一表达式此前在 engine 出现 4 处（starter 首轮、
+    消息修复路径、RR 表态 ×2）——收成一处便于单测与语义统一。
+    边界：agent 不在 order 中 → ValueError（那是调用方的编程错误，
+    不静默返回首位——静默会打乱轮转链）。
+    """
+    return order[(order.index(agent) + 1) % len(order)]
+
+
 def should_write_af(all_last_types):
     """我是否应写 all-freezing：所有参与者最后一条都是 freezing（或 af）。
 

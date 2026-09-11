@@ -448,5 +448,30 @@ class TestFreezeCascade(unittest.TestCase):
              "b": {"type": "pass", "mode": "round-robin"}}), "concluded")
 
 
+
+class TestNextInOrder(unittest.TestCase):
+    """轮转顺序下一位（RR 的 next 来源；表达式此前在 engine 重复 4 处）。"""
+
+    def test_basic(self):
+        from meeting_core import next_in_order
+        self.assertEqual(next_in_order(["a", "b", "c"], "a"), "b")
+        self.assertEqual(next_in_order(["a", "b", "c"], "b"), "c")
+
+    def test_wraps_around(self):
+        from meeting_core import next_in_order
+        self.assertEqual(next_in_order(["a", "b", "c"], "c"), "a")
+
+    def test_single_participant_self(self):
+        from meeting_core import next_in_order
+        self.assertEqual(next_in_order(["a"], "a"), "a")
+
+    def test_unknown_agent_raises(self):
+        """不在 order 中 = 调用方编程错误——响亮失败，不静默返回首位
+        （静默会打乱轮转链）。"""
+        from meeting_core import next_in_order
+        with self.assertRaises(ValueError):
+            next_in_order(["a", "b"], "x")
+
+
 if __name__ == "__main__":
     unittest.main()

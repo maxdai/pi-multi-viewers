@@ -201,8 +201,8 @@ def _lock_git(workdir):
     `git add -A` 提交进主仓库）。要真正拦住主仓库需换机制类（沙箱/钩子），
     经评估收益不支撑扩面（评审 A1 裁决记录）。
 
-    归属说明（L4，e2e7 评审）：**刻意不搬到 meeting_fs**——_lock_git 与
-    finally 里的 _unlock_git 同函数内配对出现（"加锁必有解锁"可就地验证，
+    归属说明：**刻意不搬到 meeting_fs**——_lock_git 与 finally 里的
+    restore_git_lock（解锁）在调用点就近配对（"加锁必有解锁"可就地验证，
     异常路径一目了然）；搬去 fs 层会使该验证跨文件，收益为负（os.rename
     零成本、无 I/O 封装价值）。
     """
@@ -217,7 +217,7 @@ def restore_git_lock(workdir):
 
     纯函数 + 返回值：**只在确实恢复时**需要打日志（启动路径打、finally
     路径不打——正常每轮都恢复不是事件，日志会变噪音）；调用方各自决定。
-    两个调用点：`_unlock_git`（finally，正常路径）与启动时的
+    两个调用点：`wake_llm` 的 finally（正常路径）与启动时的
     `recover_git_lock`（崩溃残留路径）。
     """
     git_dir = os.path.join(workdir, ".git")
@@ -226,15 +226,6 @@ def restore_git_lock(workdir):
         os.rename(locked, git_dir)
         return True
     return False
-
-
-def _unlock_git(workdir):
-    """LLM 对话完成后恢复本地 git：.git.locked 改回 .git。
-
-    finally 中调用——任何异常/超时路径都恢复（崩溃残留由下次启动时的
-    recover_git_lock 兜底）。正常恢复不打日志（每轮都发生）。
-    """
-    restore_git_lock(workdir)
 
 
 def recover_git_lock(workdir, agent):
@@ -384,7 +375,7 @@ def _run_wake_proc(cmd, spawn_cwd, workdir, agent):
                 normal = True
                 break  # 正常结束
             except subprocess.TimeoutExpired:
-                if not os.path.isdir(os.path.join(base, "repo.git")):
+                if not os.path.isdir(meeting_fs.bare_of_base(base)):
                     log(agent, "讨论目录已清理——终止唤醒中的 pi")
                     _kill_proc(proc)
                     raise SystemExit(0)  # 干净退出（不被 except 捕获）
@@ -436,7 +427,7 @@ def wake_llm(workdir, agent, prompt, pure=False, fork_source=None, fork_cwd=None
     try:
         r = _run_wake_proc(cmd, spawn_cwd, workdir, agent)
     finally:
-        _unlock_git(workdir)
+        restore_git_lock(workdir)
 
     new_sid = parse_session(r.stdout) or sid
     if new_sid:
@@ -550,7 +541,7 @@ if __name__ == "__main__":
     mm, mr, st = 10, 7, 600
     # 协议从 **bare HEAD** 读（单一来源 = 共享事实；本地副本 LLM 可改）——
     # 与 engine participants()/check_status 同一原语
-    bare = os.path.join(os.path.dirname(workdir), "repo.git")
+    bare = meeting_fs.bare_of_workdir(workdir)
     proto = meeting_fs.read_protocol(bare)
     if not proto:
         print(f"[fatal] protocol.json 读取失败（bare HEAD 无有效内容）: {bare}",

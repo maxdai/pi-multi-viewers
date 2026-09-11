@@ -914,6 +914,23 @@ class TestActiveForkSource(unittest.TestCase):
             self.assertIn("读取失败", err)
 
 
+
+class TestBareOf(unittest.TestCase):
+    """bare 路径推导的两个具名入口（不合并成"按形状猜"的单一函数）。"""
+
+    def test_bare_of_base(self):
+        from meeting_fs import bare_of_base
+        self.assertEqual(bare_of_base("/tmp/disc"), "/tmp/disc/repo.git")
+
+    def test_bare_of_workdir(self):
+        from meeting_fs import bare_of_workdir
+        self.assertEqual(bare_of_workdir("/tmp/disc/work-a"),
+                         "/tmp/disc/repo.git")
+        # 中文视角名同样成立（路径拼接不含名字语义）
+        self.assertEqual(bare_of_workdir("/tmp/disc/work-性能"),
+                         "/tmp/disc/repo.git")
+
+
 if __name__ == "__main__":
     unittest.main()
 

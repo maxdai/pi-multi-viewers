@@ -17,7 +17,7 @@ from unittest import mock
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from meeting_engine import (
-    participants, result_writer, _each_agent_messages, _cat_batch,
+    participants, result_writer, _each_agent_messages,
     each_agent_last, aggregate_mode, rr_next_speaker, rr_active_count,
     _meeting_speak_count, human_msg_count, _produced, write_af_if_no_rr,
     write_protocol_signal, respond_with_fallback, commit_new_files,
@@ -27,7 +27,8 @@ from meeting_engine import (
     new_messages_with_meta,
     read_point,
 )
-from meeting_fs import git_head, git_pull, git_commit, write_message, next_msg_id
+from meeting_fs import (git_head, git_pull, git_commit, write_message,
+                        next_msg_id, cat_batch)
 
 
 def make_env(participants_=("a", "b"), rw="b"):
@@ -140,12 +141,12 @@ class TestBareRead(unittest.TestCase):
             write_and_commit(works["a"], "a", 1, body="中文正文内容测试\n第二行")
             write_and_commit(works["b"], "b", 1, body="hello ascii")
             paths = ["a/0001.md", "b/0001.md"]
-            contents = _cat_batch(bare, paths)
+            contents = cat_batch(bare, paths)
             self.assertIn("中文正文内容测试", contents["a/0001.md"])
             self.assertIn("hello ascii", contents["b/0001.md"])
             # missing 路径跳过
-            self.assertEqual(_cat_batch(bare, ["a/9999.md"]), {})
-            self.assertEqual(_cat_batch(bare, []), {})
+            self.assertEqual(cat_batch(bare, ["a/9999.md"]), {})
+            self.assertEqual(cat_batch(bare, []), {})
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 

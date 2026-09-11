@@ -2,7 +2,7 @@
 
 另含两个历史 bug 回归类：
 - TestParseFrontmatter（review5 A1）：frontmatter 块完整性（无开/缺闭合/正文不吞）
-- TestCatBatch（用户 9343）：_cat_batch 二进制读中文不挂起
+- TestCatBatch（用户 9343）：cat_batch 二进制读中文不挂起
 """
 
 import os
@@ -131,7 +131,7 @@ class TestParseFrontmatter(unittest.TestCase):
 
 
 class TestCatBatch(unittest.TestCase):
-    """_cat_batch 二进制读取（用户 9343 现场死锁修复）。
+    """cat_batch 二进制读取（用户 9343 现场死锁修复）。
 
     根因：text=True 模式 read(size) 读字符数，cat-file 的 size 是字节数——
     中文 UTF-8 3 字节/字符 → 错位 → readline 阻塞挂起（真实讨论中文，
@@ -162,13 +162,13 @@ class TestCatBatch(unittest.TestCase):
 
     def test_cn_content_and_missing(self):
         import shutil
-        from meeting_engine import _cat_batch
+        from meeting_fs import cat_batch
         d = self._mk()
         try:
-            r = _cat_batch(d + "/repo.git", ["a/0001.md"])
+            r = cat_batch(d + "/repo.git", ["a/0001.md"])
             self.assertIn("这是中文内容测试消息", r["a/0001.md"])
             # missing path 跳过不异常
-            r2 = _cat_batch(d + "/repo.git", ["a/0001.md", "x/no.md"])
+            r2 = cat_batch(d + "/repo.git", ["a/0001.md", "x/no.md"])
             self.assertNotIn("x/no.md", r2)
         finally:
             shutil.rmtree(d, ignore_errors=True)

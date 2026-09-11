@@ -22,6 +22,23 @@ from datetime import datetime, timezone
 # git 基础操作
 # ---------------------------------------------------------------
 
+def bare_of_base(base):
+    """讨论根目录 → bare 仓库路径（`<base>/repo.git`）。
+
+    **bare 路径推导的唯一入口（按持有物分两个具名函数）**：持有讨论根目录
+    的调用方用本函数；持有某个 agent 工作目录的用 `bare_of_workdir`。
+    为什么不合成一个"接受 workdir 或 base"的函数：那要靠值的形状猜语义
+    （哪个是 base 哪个是 workdir 无法从字符串判断）——与本项目已立的
+    "外部契约按字段拼接、不按值形状猜"同一禁令（见 `_join_model_ref`）。
+    """
+    return os.path.join(base, "repo.git")
+
+
+def bare_of_workdir(workdir):
+    """agent 工作目录 → bare 仓库路径（`dirname(workdir)/repo.git`）。"""
+    return bare_of_base(os.path.dirname(workdir))
+
+
 def run_git(workdir, *args, check=True, timeout=30):
     """执行 git 命令。
 
@@ -935,7 +952,7 @@ def preserve_result_md(base):
     result.md 权威位置 = bare git 历史；无 result.md → 跳过（不报错）。
     返回保存路径或 None。
     """
-    bare = os.path.join(base, "repo.git")
+    bare = bare_of_base(base)
     if not os.path.isdir(bare):
         return None
     r = run_git(bare, "show", "HEAD:result.md", check=False)

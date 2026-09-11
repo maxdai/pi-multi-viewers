@@ -34,8 +34,10 @@ from meeting_fs import (
     run_git, parse_frontmatter, serialize_message,
     git_show, is_message_file, parse_log_nameonly,
     read_protocol, cat_batch, remove_message, write_text, file_size,
+    bare_of_base, bare_of_workdir,
 )
 from meeting_core import (
+    next_in_order as core_next,
     should_write_af, can_start_rr, validate_and_fix, is_all_last_in,
     aggregate_mode as core_aggregate_mode,
     has_new_messages_for_me,
@@ -53,25 +55,24 @@ def log(agent, msg):
 # 判定辅助（集中于此，fake/loop 不重复实现）
 # ---------------------------------------------------------------
 
-def participants(workdir):
+def participants(bare):
     """参与者列表（order）——单一来源 = bare HEAD 的 protocol.json。
 
-    保留 workdir 签名（调用点零改动）：函数体内自推 `bare =
-    dirname(workdir)/repo.git`。读**bare**而非本地副本的理由见
-    meeting_fs.read_protocol docstring（LLM 有 bash，可改本地副本）。
+    **收 bare 而非 workdir**（调用方用 `meeting_fs.bare_of_workdir` 推）：
+    统一契约，避免"函数体内自推路径"成为第三种约定（另两种：调用方推、
+    按值形状猜）。读 bare 而非本地副本的理由见 meeting_fs.read_protocol
+    docstring（LLM 有 bash，可改本地副本）。
     """
-    bare = os.path.join(os.path.dirname(workdir), "repo.git")
     return list(read_protocol(bare).get("participants", []))
 
 
-def result_writer(workdir):
+def result_writer(bare):
     """resultWriter（收尾写者）；未配置 → 参与者末位。
 
-    注意默认值必须**惰性求值**：`dict.get(k, participants(workdir)[-1])`
+    注意默认值必须**惰性求值**：`dict.get(k, participants(bare)[-1])`
     的第二参数总会被求值——既多读一次协议，又会在 participants 为空时
     抛 IndexError（即使 resultWriter 已配置）。
     """
-    bare = os.path.join(os.path.dirname(workdir), "repo.git")
     proto = read_protocol(bare)
     rw = proto.get("resultWriter")
     if rw:
@@ -95,7 +96,7 @@ def _each_agent_messages(bare, agents):
     if not msg_files:
         return {a: [] for a in agents}
     # 批量读内容（git cat-file --batch：一次进程读全部消息文件）
-    contents = _cat_batch(bare, msg_files)
+    contents = cat_batch(bare, msg_files)
     by_agent = {}
     for f in msg_files:
         ag, name = f.split("/")
@@ -113,15 +114,6 @@ def _each_agent_messages(bare, agents):
                 msgs.append(fm)
         result[a] = msgs
     return result
-
-
-def _cat_batch(bare, paths):
-    """批量读消息内容（薄包装 → meeting_fs.cat_batch；IO 归 fs）。
-
-    docstring 与二进制读的完整说明见 fs 原语；性能理由（批量 vs 逐条
-    O(n) subprocess）随函数迁移至此：调用方每轮循环顶都读全部消息。
-    """
-    return cat_batch(bare, paths)
 
 
 def each_agent_last(bare, agents):
@@ -352,8 +344,7 @@ def respond_with_fallback(workdir, agent, responder, head, meta, is_first,
             return True
     # ③ responder 始终无法产出 → loop 代写（保证流程完整）
     if rr_turn:
-        order = agents
-        nxt_a = order[(order.index(agent) + 1) % len(order)]
+        nxt_a = core_next(agents, agent)
         log(agent, f"responder 无法产出——loop 代写 pass（无静默铁律最后执行）")
         write_protocol_signal(workdir, agent, "pass", "round-robin",
                               nxt_a)
@@ -416,8 +407,8 @@ def commit_new_files(workdir, agent, head, mode):
         # 只补缺省会让 LLM 写错的 next 保留 → 轮转顺序混乱。单向流下
         # RR 只有 pass（无异议），next 是轮转顺序（协议状态），LLM 不知道。
         if mode == "round-robin" and fixed.get("type") in ("pass", "message"):
-            order = participants(workdir)
-            fixed["next"] = order[(order.index(agent) + 1) % len(order)]
+            fixed["next"] = core_next(
+                participants(bare_of_workdir(workdir)), agent)
         new_content = serialize_message(fixed, content)
         if new_content and new_content != content:
             write_text(workdir, f"{agent}/{f}", new_content)
@@ -533,9 +524,8 @@ def agent_loop(workdir, agent, responder, max_meeting=10, max_rr=7,
     """
     log(agent, f"meeting engine v2 启动 (meeting配额={max_meeting}, "
                f"rr配额={max_rr})")
-    agents = participants(workdir)
-    order = agents
-    rw = result_writer(workdir)
+    agents = participants(bare_of_workdir(workdir))
+    rw = result_writer(bare_of_workdir(workdir))
     # meeting 发言轮数不存 RAM——每轮从 bare 重算（_meeting_speak_count）：
     # loop 崩溃/重启不丢配额（审核#1，状态从共享事实推导）
     # stall 无进展累计：本地墙钟 + HEAD 观测（review5 M1，无 %ct 依赖）
@@ -546,13 +536,14 @@ def agent_loop(workdir, agent, responder, max_meeting=10, max_rr=7,
         # 对象，不依赖 cleanup 杀进程（职责边界，用户 2026-08-31 定）。
         # repo.git 是讨论存在的唯一标志（workdir 被删后进程 cwd 仍可用，
         # 但 bare 消失 = 讨论不存在）。
-        if not os.path.isdir(os.path.join(os.path.dirname(workdir), "repo.git")):
+        bare = bare_of_workdir(workdir)
+        if not os.path.isdir(bare):
             log(agent, "讨论目录已移除（cleanup）——退出")
             return
         try:
             git_pull(workdir)
             head = git_head(workdir)
-            bare = os.path.join(os.path.dirname(workdir), "repo.git")
+            bare = bare_of_workdir(workdir)
             # 循环顶一次全量 bare 读取（L-M2：消除每轮 3-4 次重复 subprocess
             # 重读——同一轮内无写入、数据稳定）。**消息列表类**判定由此派生
             # （lasts/mode/冻结集合等）；**计数与时序类**判定（human_msg_count /
@@ -620,7 +611,7 @@ def agent_loop(workdir, agent, responder, max_meeting=10, max_rr=7,
                 # 唤醒目的 = 有新的文件可提交给 LLM 处理。starter 冻结期间
                 # 别人可能发了 message（读取点后），必须唤醒读完再 pass；
                 # 无新消息才确定性写 pass）
-                if can_start_rr(all_last) and agent == order[0]:
+                if can_start_rr(all_last) and agent == agents[0]:
                     rp = read_point(workdir, agent)
                     meta = new_messages_with_meta(workdir, rp, agent)
                     if has_new_messages_for_me(meta, agent):
@@ -632,7 +623,7 @@ def agent_loop(workdir, agent, responder, max_meeting=10, max_rr=7,
                             False, True, before, agents)
                     else:
                         # 无新消息 → 确定性写 pass（启动 RR，带 next 轮转链）
-                        nxt_a = order[(order.index(agent) + 1) % len(order)]
+                        nxt_a = core_next(agents, agent)
                         write_protocol_signal(workdir, agent, "pass",
                                               "round-robin", nxt_a)
                     continue
@@ -672,7 +663,7 @@ def agent_loop(workdir, agent, responder, max_meeting=10, max_rr=7,
                 rp = read_point(workdir, agent)
                 meta = new_messages_with_meta(workdir, rp, agent)
                 if not has_new_messages_for_me(meta, agent):
-                    nxt_a = order[(order.index(agent) + 1) % len(order)]
+                    nxt_a = core_next(agents, agent)
                     write_protocol_signal(workdir, agent, "pass",
                                           "round-robin", nxt_a)
                     continue
