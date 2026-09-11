@@ -1086,9 +1086,9 @@ def main():
                     print(line)
                     print()
                 print("[wait] 讨论完成 ✅")
-                rw = meeting_fs.read_protocol(bare).get("resultWriter", "")
-                rp = os.path.join(base, f"work-{rw}", "result.md") if rw else ""
-                print(f"[wait] result.md: {rp}")
+                # 固定位（与 prompt 收尾指引一致）：resultWriter 的 loop
+                # 退出时保存、cleanup 兜底再存一次——调用方无需推 rw 是谁
+                print(f"[wait] result.md: {base}-result.md")
                 return 0
             for line in lines:
                 print(f"[wait] {time.strftime('%H:%M:%S')} 新进展:")
@@ -1097,7 +1097,11 @@ def main():
             since = head or since
             if first:
                 first = False
-            time.sleep(10)
+            # 观察刷新节奏（消费端常量——与 loop 的空闲重试节奏有意独立，
+            # 见 human_viewer.OBSERVER_POLL_INTERVAL 注释）。原硬编码 10s
+            # 会让结束观察延迟最长 10s（e2e13 时间流分析：唯一 >10s 的
+            # 非必要等待点）。
+            time.sleep(human_viewer.OBSERVER_POLL_INTERVAL)
     # 创建（--start 总是 setup；--skip-setup = 跳过创建，只启动已有环境）
     if args.skip_setup:
         if not os.path.exists(base):

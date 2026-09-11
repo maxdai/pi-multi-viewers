@@ -9,7 +9,7 @@
 #   1. 主 pi 侧 session：~/.pi/agent/sessions/<编码目录>/*.jsonl 中
 #      近 24h 创建且 cwd 不在白名单（真实项目）的——测试引导 session
 #      散落形态（--tmp-xxx-- 等）
-#   2. 讨论进程：meeting_loop / pi --mode json 子进程
+#   2. 讨论进程：meeting_loop（argv 判据）/ pi（comm + PPID 判据）
 #   3. 讨论环境目录：$PWD 下 discuss-* 残留（另有 gitignore 兜底不入库）
 #      + 结构识别（2026-09-10 补）：含 repo.git/ 与 pi-sessions/ 的目录
 #      ——测试脚手架常用 /tmp/mv-*/disc 等非 discuss-* 命名，纯命名匹配
@@ -95,13 +95,23 @@ except Exception:
 done
 
 # --- 2. 讨论/pi 进程 ---
-# 判据 = **argv 逐项精确匹配**（读 /proc/<pid>/cmdline，NUL 分隔的原始 argv），
-# 不是命令行文本匹配：文本匹配会把"命令行里恰好提到 meeting_loop.py"的
-# 调用者自身也算进来（bash -c / grep 都在此列），过度依赖 grep -v 白名单
-# 过滤又会漏检（任何命令行含 "bash -c" 的真实进程）。
-# argv 精确匹配无此二难：`python3 .../meeting_loop.py <work> <agent>` 的
-# argv[1] 恰等于脚本路径；调用者的 -c 脚本只是**一个** argv 元素，不等。
-# 与 start_discussion._loop_pids 同一判据（python 侧用于存活检测）。
+# 两种进程用**两种判据**（它们的可观测形态不同）：
+#
+# (a) meeting_loop：**argv 逐项精确匹配**（读 /proc/<pid>/cmdline）。文本匹配
+#     会把"命令行里恰好提到 meeting_loop.py"的调用者自身算进来（bash -c / grep
+#     都在此列），再靠 grep -v 白名单过滤又会漏检（任何命令行含 "bash -c" 的
+#     真实进程）。argv 精确匹配无此二难：`python3 .../meeting_loop.py <work>
+#     <agent>` 的 argv[1] 恰是脚本路径；调用者的 -c 脚本只是**一个** argv 元素。
+#     与 start_discussion._loop_pids 同一技术（判据范围不同：这里查任意讨论的
+#     loop——残留检查语义；python 侧查指定 base——存活语义）。
+#
+# (b) pi：**名称 + PPID 双判据**——pi 启动后**重写进程标题**（`/proc/<pid>/cmdline`
+#     变成单个 "pi" + NUL 填充，2026-09-11 实测：2255 字节里只有开头 "pi"），
+#     所以按 argv 找 pi（含旧的 `grep "pi --mode json"`）**从来找不到**。
+#     可用信号是 /proc/<pid>/comm（node 改写的进程名 = "pi"）与其 PPID（父进程
+#     必是 meeting_loop——由 loop 直接 spawn）。名称单独用会误认用户自己开的
+#     pi TUI；PPID 单独用会在 loop 已死（pi 被 init 收养）时漏检——两者并用
+#     并对"未关联"单独标注，既不误报也不漏报。
 _proc_argv_has() {   # $1=pid 目录，$2=精确参数
     local d="$1" arg
     while IFS= read -r -d '' arg; do
@@ -109,24 +119,40 @@ _proc_argv_has() {   # $1=pid 目录，$2=精确参数
     done < "$d/cmdline" 2>/dev/null
     return 1
 }
+LOOP_PIDS=""          # 第一遍收集，供第二遍做 PPID 关联
 for d in /proc/[0-9]*; do
     [ -r "$d/cmdline" ] || continue
     pid="${d#/proc/}"
-    # meeting_loop：argv 里出现以 meeting_loop.py 结尾的**独立参数**
     while IFS= read -r -d '' arg; do
         case "$arg" in
             */meeting_loop.py)
                 echo "[残留-2] meeting_loop 进程 PID=$pid: $(ps -p "$pid" -o cmd= 2>/dev/null)"
                 RESIDUE=1
+                LOOP_PIDS="$LOOP_PIDS $pid"
                 break
                 ;;
         esac
     done < "$d/cmdline" 2>/dev/null
-    # pi 进程：argv 里同时有 --mode 与 json 两个独立参数（fork 模式唤醒形态）
-    if _proc_argv_has "$d" "--mode" && _proc_argv_has "$d" "json"; then
-        echo "[残留-2] pi 进程 PID=$pid"
+done
+for d in /proc/[0-9]*; do
+    [ -r "$d/comm" ] || continue
+    pid="${d#/proc/}"
+    [ "$(cat "$d/comm" 2>/dev/null)" = "pi" ] || continue
+    ppid="$(awk '{print $4}' "$d/stat" 2>/dev/null)"
+    if [ "$ppid" = "1" ]; then
+        # loop 已退出、pi 被 init 收养（PPID=1）——孤儿残留
+        echo "[残留-2] pi 进程 PID=$pid（孤儿：PPID=1，其 loop 已退出）"
         RESIDUE=1
+        continue
     fi
+    case " $LOOP_PIDS " in
+        *" $ppid "*)
+            echo "[残留-2] pi 进程 PID=$pid（父 meeting_loop PID=$ppid）"
+            RESIDUE=1
+            ;;
+        # 其余 comm=pi 的进程不报：用户自己正在用的 pi 会话（PPID 是
+        # pi-web/shell 等）不是残留——"名称 + PPID"两个条件同时成立才判定
+    esac
 done
 
 # --- 3. 讨论环境目录残留 ---

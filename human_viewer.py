@@ -31,7 +31,7 @@ import time
 import meeting_fs
 from meeting_fs import (run_git, git_show, git_head, is_message_file,
                         parse_log_nameonly, extract_body, parse_frontmatter)
-from meeting_engine import aggregate_mode, POLL_INTERVAL
+from meeting_engine import aggregate_mode
 
 
 def participants_from_bare(bare):
@@ -39,10 +39,14 @@ def participants_from_bare(bare):
     return meeting_fs.read_protocol(bare).get("participants") or None
 
 
-def result_path(base, bare):
-    """result.md 实际位置（work-<resultWriter>/result.md，与 --wait 一致）。"""
-    rw = meeting_fs.read_protocol(bare).get("resultWriter", "")
-    return os.path.join(base, f"work-{rw}", "result.md") if rw else ""
+def result_path(base):
+    """result.md 的固定位（`<讨论目录>-result.md`，与 --wait / prompt 一致）。
+
+    resultWriter 的 loop 退出（concluded）时保存到该位置，cleanup 兜底再存
+    一次；权威单一事实源是 bare 的 `HEAD:result.md`。调用方**无需**推
+    resultWriter 是谁、也不必进 work 子目录——讨论目录删除后该文件仍在。
+    """
+    return f"{base}-result.md"
 
 
 def new_messages(bare, since):
@@ -118,7 +122,17 @@ def _write_cursor(base, ref):
         f.write(ref + "\n")
 
 
-def follow(base, bare, agents, poll_interval=POLL_INTERVAL):
+# 观察端刷新节奏（**有意独立于状态机的空闲重试节奏**）：
+# meeting_engine.POLL_INTERVAL 是 loop 的空闲轮询（与 API/CPU 成本相关），
+# 这里是"观察者多久看一眼"（与 UX 延迟相关）——共享值 ≠ 共享概念。
+# 若直接绑定 engine 的常量，将来调 loop 节奏会**静默改变观察契约**
+# （动作-远距离耦合）。两者当前同为 2.0s 只是巧合，改一个不影响另一个。
+# 下界 ≥1s：每次刷新 ≈3 个 git 子进程 + /proc 扫描；调到 0.1s 会变成
+# ~30% 单核的无谓开销。
+OBSERVER_POLL_INTERVAL = 2.0
+
+
+def follow(base, bare, agents, poll_interval=OBSERVER_POLL_INTERVAL):
     """--follow：循环展示（tail -f 式）直到讨论结束。"""
     since = _read_cursor(base)
     last_mode = None
@@ -133,7 +147,7 @@ def follow(base, bare, agents, poll_interval=POLL_INTERVAL):
             _write_cursor(base, head)
             since = head
         if done:
-            print(f"【讨论已结束】result.md: {result_path(base, bare)}",
+            print(f"【讨论已结束】result.md: {result_path(base)}",
                   flush=True)
             return
         time.sleep(poll_interval)
@@ -167,7 +181,7 @@ def main():
         for s in lines:
             print(s, flush=True)
         if done:
-            print(f"【讨论已结束】result.md: {result_path(base, bare)}",
+            print(f"【讨论已结束】result.md: {result_path(base)}",
                   flush=True)
     return 0
 

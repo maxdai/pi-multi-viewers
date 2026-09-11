@@ -1,7 +1,7 @@
 """human_viewer 单元测试——V1-V9 补缺（API 清单基准，2026-09-01）。
 
 TestViewer（test_human.py）已覆盖 format_message/incremental/follow，
-本文件补：_protocol/participants_from_bare/result_path 边界 + main 入口。
+本文件补：read_protocol/participants_from_bare/result_path 边界 + main 入口。
 """
 
 import json
@@ -15,6 +15,7 @@ from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import human_viewer
 import meeting_fs
 from human_viewer import (participants_from_bare, result_path,
                           new_messages, format_message, incremental, main)
@@ -52,7 +53,7 @@ class TestProtocol(unittest.TestCase):
         try:
             self.assertEqual(meeting_fs.read_protocol(bare)["participants"], ["a", "b"])
             self.assertEqual(participants_from_bare(bare), ["a", "b"])
-            self.assertTrue(result_path(base, bare).endswith("work-b/result.md"))
+            self.assertEqual(result_path(base), f"{base}-result.md")
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
@@ -69,7 +70,8 @@ class TestProtocol(unittest.TestCase):
                            check=True, capture_output=True)
             self.assertEqual(meeting_fs.read_protocol(bare), {})
             self.assertIsNone(participants_from_bare(bare))
-            self.assertEqual(result_path(base, bare), "")
+            # result_path 是固定位（不依赖 protocol）——路径本身恒定
+            self.assertEqual(result_path(base), f"{base}-result.md")
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
@@ -175,6 +177,32 @@ class TestMain(unittest.TestCase):
             self.assertEqual(cm.exception.code, 0)
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
+
+
+
+class TestObserverPollInterval(unittest.TestCase):
+    """观察端刷新节奏：消费端常量（不绑定状态机的节奏）。"""
+
+    def test_value_and_lower_bound(self):
+        """当前 2.0s；下界 ≥1s（更低会变成无谓 CPU 开销）。"""
+        self.assertEqual(human_viewer.OBSERVER_POLL_INTERVAL, 2.0)
+        self.assertGreaterEqual(human_viewer.OBSERVER_POLL_INTERVAL, 1.0)
+
+    def test_independent_from_engine_interval(self):
+        """有意独立：`follow` 的默认参数**不是** meeting_engine.POLL_INTERVAL
+        对象——改 loop 节奏不得静默改变观察契约（共享值 ≠ 共享概念）。"""
+        import inspect
+        import meeting_engine
+        sig = inspect.signature(human_viewer.follow)
+        default = sig.parameters["poll_interval"].default
+        self.assertEqual(default, human_viewer.OBSERVER_POLL_INTERVAL)
+        # 值当前相等（巧合），但改了 engine 的值不该影响 viewer 的默认值
+        orig = meeting_engine.POLL_INTERVAL
+        try:
+            meeting_engine.POLL_INTERVAL = 99.0
+            self.assertEqual(sig.parameters["poll_interval"].default, 2.0)
+        finally:
+            meeting_engine.POLL_INTERVAL = orig
 
 
 if __name__ == "__main__":
