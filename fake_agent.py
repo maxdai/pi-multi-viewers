@@ -117,5 +117,13 @@ if __name__ == "__main__":
     workdir, agent = sys.argv[1], sys.argv[2]
     responder = make_responder(float(sys.argv[3]), float(sys.argv[4]),
                                float(sys.argv[5]))
+    # stall 超时：与生产（meeting_loop.__main__）同款——protocol 优先
+    # （装置对齐生产：此前 fake_agent 恒用默认 600s，stall 路径在测试中
+    # 永不可达——P2 的接管分支零覆盖正是这个原因）
+    stall_timeout = 600
+    proto = meeting_fs.read_protocol(meeting_fs.bare_of_workdir(workdir))
+    if proto.get("stallTimeoutSeconds"):
+        stall_timeout = proto["stallTimeoutSeconds"]
     agent_loop(workdir, agent, responder,
-               max_meeting=int(sys.argv[6]), max_rr=int(sys.argv[7]))
+               max_meeting=int(sys.argv[6]), max_rr=int(sys.argv[7]),
+               stall_timeout=stall_timeout)

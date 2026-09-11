@@ -24,7 +24,7 @@ BASE = "/tmp/meeting-test"
 SCRIPT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "fake_agent.py")
 
 
-def setup_env(test_dir, agents):
+def setup_env(test_dir, agents, stall_timeout=600):
     """创建 bare + work-* clones + 初始提交。返回 (bare_dir, work_dirs)。
 
     work_dirs 含固定 `human` 键 = work-human（helper 设计 §2.1：human 是
@@ -56,7 +56,8 @@ def setup_env(test_dir, agents):
             # 配额固化/stall 等字段读取接线零测试）
             import json
             from start_discussion import gen_protocol
-            proto = gen_protocol("test", agents, 4, 5)
+            proto = gen_protocol("test", agents, 4, 5,
+                                 stall_timeout=stall_timeout)
             with open(os.path.join(w, "protocol.json"), "w") as f:
                 json.dump(proto, f)
                 f.write("\n")
@@ -348,6 +349,62 @@ class TestConcurrency(unittest.TestCase):
                       f"（含 fake-*.log；调试完手动清理）", flush=True)
             else:
                 shutil.rmtree(base, ignore_errors=True)
+
+
+class TestStallTakeover(unittest.TestCase):
+    """无进展超时兜底：resultWriter 离线 → 非 rw 接管收尾（P2）。
+
+    这条路径跨三代继承（agents-meeting-discuss → pi-agents-helper → 本项目，
+    逐字相同），**从未有过测试**——现有测试只断言 `stall_timeout` 参数存在，
+    没有任何行为测试走过这条分支（装置原因：fake_agent 恒用默认 600s，stall
+    在测试里不可达；本轮让 fake_agent 读 protocol 的 stallTimeoutSeconds，
+    与生产 meeting_loop.__main__ 同款）。
+
+    验证目标（协议层，无 LLM）：
+    1. **无死锁**：rw 永远不启动，讨论仍能收尾（这正是该分支存在的理由）；
+    2. **产物唯一且有效**：bare HEAD 只有一个 result.md，状态终态 = done；
+    3. **产物确由接管方写**：rw（c）自始至终零 commit。
+
+    不验证"并发接管不双写"——那是毫秒级同轮竞态，确定性测试无法稳定构造
+    （真发生时的兜底见 meeting_engine 该分支注释：push 容错 + 下轮 concluded）。
+
+    **实测观察（本测试首次运行，2026-09-11）**：a 在 15:14:10.675 进入接管
+    分支 → .691 写声明（commit `a/0003`）→ .727 收尾 → .770 concluded →
+    .787 退出；b 晚 1.4 秒（15:14:12.132）只看到 concluded 便退出，
+    **从未进入接管分支**——即"心跳式软仲裁"在正常时序下确实生效
+    （声明推进 HEAD → 对方 stall 累计归零）。bare 历史可见三层分离：
+    `a/0003`（声明）/ `result.md`（产物）/ `a/0004`（concluded 信号）。
+    """
+
+    def test_rw_offline_takeover_converges(self):
+        agents = ["a", "b", "c"]        # rw = 末位 = c（离线）
+        base, bare, wd = setup_env("stall-takeover", agents, stall_timeout=3)
+        self.addCleanup(shutil.rmtree, base, ignore_errors=True)
+        # 只启动 a、b：c 的 loop 从不启动
+        procs, logs = spawn_agents(wd, ["a", "b"],
+                                   sleep_map={"a": (0.1, 0.4),
+                                              "b": (0.1, 0.4)},
+                                   crash_map={}, max_meeting=1, max_rr=1)
+        ok, alive = wait_all(procs, timeout=120)
+        self.assertTrue(ok, f"接管未发生——讨论死锁（存活: {alive}）")
+        # 产物唯一 + 状态终态
+        from start_discussion import check_status
+        self.assertEqual(check_status(base), "done")
+        r = run_git(bare, "show", "HEAD:result.md", check=False)
+        self.assertEqual(r.returncode, 0, "result.md 未进 bare")
+        # 产物确由接管方写：c（rw）自始至终零 commit
+        r2 = run_git(bare, "ls-tree", "-r", "--name-only", "HEAD")
+        c_files = [f for f in r2.stdout.splitlines()
+                   if f.startswith("c/")]
+        self.assertEqual(c_files, [],
+                         f"离线的 rw 竟然有 commit: {c_files}")
+        # 日志里留下了接管痕迹（可审计）
+        with open(logs["a"]) as f:
+            la = f.read()
+        with open(logs["b"]) as f:
+            lb = f.read()
+        self.assertTrue("接管" in la or "接管" in lb,
+                        "接管路径未被走到（stall 未触发？）")
 
 
 if __name__ == "__main__":

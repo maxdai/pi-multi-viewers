@@ -327,6 +327,9 @@ def cat_batch(bare, paths):
     finally:
         proc.stdin.close()
         proc.wait()
+        # 关输出管道：Popen 的 pipe 是文件对象，不关会留 ResourceWarning
+        # （wait() 之后 close 安全——进程已退出，无未读数据风险）
+        proc.stdout.close()
     return result
 
 

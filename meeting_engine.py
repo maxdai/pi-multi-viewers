@@ -560,14 +560,27 @@ def agent_loop(workdir, agent, responder, max_meeting=10, max_rr=7,
                     finalize_discussion(workdir, agent, responder, head,
                                         reason="stall")
                     continue
-                # 非 rw：rw 可能离线（崩溃/未启动）——接管收尾（审核#2，
-                # 主协议 7.6"任一 agent 可接管"，meeting 收紧成仅 rw 是缺口）。
-                # 接管仲裁（review5 A3）：两个非 rw 同时接管 → 各自 finalize
-                # → 双写 result.md → rebase 冲突真死锁。仲裁：
-                # ① 先 pull 重检 bare 是否已收尾（result.md 已提交 → 让位）
-                # ② 写接管声明消息（推进 HEAD → 其他 agent 的 stall 判定被
-                #    重置 → 天然唯一接管者；push 冲突由现有容错重试仲裁，
-                #    先到者赢）③ finalize。
+                # 非 rw：rw 可能离线（崩溃/未启动）——接管收尾（主协议
+                # 7.6"任一 agent 可接管"；meeting 收紧成仅 rw 是缺口）。
+                #
+                # 仲裁 = **心跳式软仲裁**（不是互斥锁）：
+                # ① 先 pull + 重检两个"是否已收尾"的共享事实（concluded /
+                #    result.md 已提交）——已收尾则让位；
+                # ② 写一条接管声明 commit，作用是**推进 HEAD**：其他 agent
+                #    下一轮 `_stall_elapsed` 看到 HEAD 变化 → 累计归零 →
+                #    退出接管分支（先到者成为事实上的唯一收尾者）；
+                # ③ finalize。
+                #
+                # **残余窗口（诚实边界）**：声明落地前，另一方若已走完本轮
+                # 的 git_head + stall 判定，则同样进入本分支（窗口≈毫秒级，
+                # 同一轮竞态）。此时双方各自唤醒 LLM 写 result.md——结果
+                # **不是死锁**：先 push 者成功；后者 push 走 git_push 的
+                # pull --rebase 重试，内容冲突则耗尽重试抛错 → loop 顶层
+                # 异常边界接住 → 下一轮看到 concluded 退出。
+                # 代价 = 偶尔多一次 LLM 调用（约 30–60s）；产物始终唯一
+                # （bare 只有一个 result.md 版本）。
+                # **真正的兜底是 push 容错 + 下一轮 concluded 退出这两层**；
+                # 声明只降低并发概率，不构成互斥保证（勿读成"天然唯一"）。
                 git_pull(workdir)
                 if aggregate_mode(bare, agents) == "concluded":
                     log(agent, "收尾已完成（他人接管）——让位")
