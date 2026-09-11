@@ -6,11 +6,15 @@
   "private": false,
   "license": "MIT",
   "pi": {
+    "extensions": [
+      "./extensions"
+    ],
     "prompts": [
       "./prompts"
     ]
   },
   "files": [
+    "extensions",
     "scripts",
     "*.py",
     "templates",

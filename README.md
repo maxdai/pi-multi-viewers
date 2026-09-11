@@ -68,7 +68,11 @@ ls ~/.pi/agent/npm/node_modules/pi-multi-viewers/scripts/mv.sh
 
 ```
 /multi-viewers "<主题>"        # prompt 入口（推荐；视角来自 viewers/）
+/multi-viewers-say "<文本>"    # 插话（extension：零 LLM 直接写入 human 消息）
 ```
+
+两个 pi 命令入口（视角/主题走 prompt，插话走 extension——插话是"本地命令
+执行"，不需要经过 LLM）。
 
 或命令行：
 
@@ -87,7 +91,7 @@ scripts/mv.sh --start <spec目录>              # 启动（自动挂载主 sessi
 scripts/mv.sh --view <dir>                    # 或一次性增量查看（主 pi 记录 HEAD 作下轮 --since）
 
 # 插话 / 状态 / 收尾
-scripts/mv.sh --say <dir> "<文本>"             # 插话（agents 可见并可回应）
+scripts/mv.sh --say <dir> "<文本>"             # 插话（命令行形态；pi 内用 /multi-viewers-say）
 scripts/mv.sh --status <dir>                  # running / done / stalled / stopped
 scripts/mv.sh --cleanup <dir>                 # 收尾（result.md 自动留存到 <dir>-result.md）
 ```

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""human_viewer.py —— 只读展示讨论进展（pi-agents-helper 阶段 1）。
+"""human_viewer.py —— 只读展示分析进展。
 
 human 通道的展示进程（docs/pi-helper-design.md §5.2）：纯 bare 只读，
 无写路径。增量输出 `--since <ref>` 之后的新消息 + 状态变化（mode 切换）。
@@ -7,7 +7,7 @@ human 通道的展示进程（docs/pi-helper-design.md §5.2）：纯 bare 只�
 用法:
   python3 human_viewer.py <base>                  # 当前状态 + 全部消息
   python3 human_viewer.py <base> --since <ref>    # 增量（ref 之后）
-  python3 human_viewer.py <base> --follow         # 循环展示直到讨论结束
+  python3 human_viewer.py <base> --follow         # 循环展示直到分析结束
 
 输出契约（稳定文本，供壳/主 pi 消费）：
   【状态】<mode>
@@ -16,7 +16,7 @@ human 通道的展示进程（docs/pi-helper-design.md §5.2）：纯 bare 只�
   ---
 
 --follow 模式：游标持久化 <base>/.viewer-cursor（记录的 ref），重启不丢；
-讨论 done（mode == concluded）→ 打印 result.md 路径后退出。
+分析 done（mode == concluded）→ 打印 result.md 路径后退出。
 
 复用边界：frontmatter 解析/正文提取/消息文件判定/git log 输出解析全部
 来自 meeting_fs（单一实现）；本模块只做 bare 只读组装与展示格式。
@@ -40,11 +40,11 @@ def participants_from_bare(bare):
 
 
 def result_path(base):
-    """result.md 的固定位（`<讨论目录>-result.md`，与 --wait / prompt 一致）。
+    """result.md 的固定位（`<分析目录>-result.md`，与 --wait / prompt 一致）。
 
     resultWriter 的 loop 退出（concluded）时保存到该位置，cleanup 兜底再存
     一次；权威单一事实源是 bare 的 `HEAD:result.md`。调用方**无需**推
-    resultWriter 是谁、也不必进 work 子目录——讨论目录删除后该文件仍在。
+    resultWriter 是谁、也不必进 work 子目录——分析目录删除后该文件仍在。
     """
     return f"{base}-result.md"
 
@@ -90,7 +90,7 @@ def incremental(bare, agents, since):
     - mode: 当前聚合 mode（meeting/all-freezing/round-robin/concluded）
     - lines: 新消息展示行（旧→新）
     - head: 当前 HEAD
-    - done: 讨论是否已收尾（mode == concluded）
+    - done: 分析是否已收尾（mode == concluded）
     """
     mode = aggregate_mode(bare, agents)
     lines = []
@@ -133,7 +133,7 @@ OBSERVER_POLL_INTERVAL = 2.0
 
 
 def follow(base, bare, agents, poll_interval=OBSERVER_POLL_INTERVAL):
-    """--follow：循环展示（tail -f 式）直到讨论结束。"""
+    """--follow：循环展示（tail -f 式）直到分析结束。"""
     since = _read_cursor(base)
     last_mode = None
     while True:
@@ -147,15 +147,15 @@ def follow(base, bare, agents, poll_interval=OBSERVER_POLL_INTERVAL):
             _write_cursor(base, head)
             since = head
         if done:
-            print(f"【讨论已结束】result.md: {result_path(base)}",
+            print(f"【分析已结束】result.md: {result_path(base)}",
                   flush=True)
             return
         time.sleep(poll_interval)
 
 
 def main():
-    parser = argparse.ArgumentParser(description="human 讨论展示（只读）")
-    parser.add_argument("base", help="讨论目录（含 repo.git）")
+    parser = argparse.ArgumentParser(description="human 分析展示（只读）")
+    parser.add_argument("base", help="分析目录（含 repo.git）")
     parser.add_argument("--since", default=None, help="增量起点 ref（git ref）")
     parser.add_argument("--follow", action="store_true", help="循环展示直到结束")
     args = parser.parse_args()
@@ -163,12 +163,12 @@ def main():
     base = os.path.abspath(os.path.expanduser(args.base))
     bare = meeting_fs.bare_of_base(base)
     if not os.path.isdir(bare):
-        print(f"错误: 讨论不存在: {base}", file=sys.stderr)
+        print(f"错误: 分析不存在: {base}", file=sys.stderr)
         return 1
 
     agents = participants_from_bare(bare)
     if not agents:
-        print(f"错误: 无法读取 protocol.json（讨论未初始化?）: {base}",
+        print(f"错误: 无法读取 protocol.json（分析未初始化?）: {base}",
               file=sys.stderr)
         return 1
 
@@ -181,7 +181,7 @@ def main():
         for s in lines:
             print(s, flush=True)
         if done:
-            print(f"【讨论已结束】result.md: {result_path(base)}",
+            print(f"【分析已结束】result.md: {result_path(base)}",
                   flush=True)
     return 0
 

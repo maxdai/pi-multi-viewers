@@ -142,7 +142,15 @@ commit 是溯源记录、本节是长期引用点——不并存两份权威值�
    `meeting_engine.aggregate_mode`（core 单一判定），**不用 `git grep` 全文
    匹配**——行文本匹配会被 result.md / 消息正文里的 `type: concluded`
    误触发（实测误报 done → `--wait` 落无上界轮询）。
-9. **git 守卫范围 = 从讨论 workdir 发起的操作**（`GIT_CEILING_DIRECTORIES`
+9. **插话走 extension（零 LLM）**：`/multi-viewers-say <文本>` =
+   `registerCommand` handler 直接 spawn `human_sayer.py`（一次调用一次返回），
+   结果经 `ctx.ui.notify` 反馈——**不经过 LLM**（插话本质是本地命令执行；
+   经 LLM 会引入不确定性与额外延迟）。目录发现零状态文件：
+   `ctx.cwd` + `sessionManager.getSessionId()` → `discuss-<sid>-*` 最新
+   （session 隔离）；无 sid 目录时兜底项目下最新 `discuss-*` 并**警告降级**
+   （宁可提示也不静默插错分析）。观看仍用 `!!` 流式（命令 API 无原生流式
+   通道，bash 流式是平台原生能力）。
+10. **git 守卫范围 = 从讨论 workdir 发起的操作**（`GIT_CEILING_DIRECTORIES`
    注入于 spawn）；主项目仓库不在守卫范围（agent 的 cwd 就是主项目，其
    约束归指令层 + 主项目 `.gitignore`）。要拦主仓库需换机制类（沙箱/钩子），
    经评估收益不支撑扩面。

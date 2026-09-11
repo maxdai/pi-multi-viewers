@@ -106,7 +106,7 @@ def interactive(workdir):
 
 def main():
     parser = argparse.ArgumentParser(description="human 插话（写一条消息）")
-    parser.add_argument("base", help="讨论目录（含 repo.git 与 work-human）")
+    parser.add_argument("base", help="分析目录（含 repo.git 与 work-human）")
     parser.add_argument("text", nargs="?", default=None,
                         help="插话文本（可多行；不传则读 stdin）")
     parser.add_argument("-i", "--interactive", action="store_true",
@@ -117,10 +117,10 @@ def main():
     workdir = os.path.join(base, "work-human")
     bare = bare_of_base(base)
     if not os.path.isdir(bare):
-        print(f"错误: 讨论不存在: {base}", file=sys.stderr)
+        print(f"错误: 分析不存在: {base}", file=sys.stderr)
         return 1
     if not os.path.isdir(workdir):
-        print(f"错误: work-human 不存在: {workdir}（讨论创建于 human 功能之前?）",
+        print(f"错误: work-human 不存在: {workdir}（分析创建于 human 功能之前?）",
               file=sys.stderr)
         return 1
 

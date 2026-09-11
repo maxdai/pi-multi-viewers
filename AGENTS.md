@@ -23,6 +23,7 @@ human_viewer.py      【human 通道】只读展示（增量/--follow/游标）
 human_sayer.py       【human 通道】插话命令（单次/stdin/交互 -i）
 scripts/mv.sh        wrapper（prepare/start/status/wait/cleanup/view/say）
 prompts/multi-viewers.md  /multi-viewers 入口（视角设计三原则 + 审核闸门）
+extensions/multi-viewers-say/  /multi-viewers-say 插话（registerCommand，零 LLM）
 docs/design.md       设计文档（fork 源模式与规模口径 + 决策记录）
 package.json         npm 包 pi-multi-viewers（pi.prompts 注册；发版待办）
 templates/           AGENTS.md.tpl / agent.md.tpl / gitignore.tpl / spec-readme.md.tpl
@@ -169,8 +170,10 @@ loop、状态从 git 共享事实推导、单一事实源 = protocol.json、无�
 
 ## 安装/发版状态（2026-09-10）
 
-- **当前形态**：prompt × 1（multi-viewers，开发机已注册可用）+ wrapper。
-  extension（如 `/multi-viewers-say`）与 npm 发版 0.1.0 均为待办。
+- **当前形态**：prompt × 1（multi-viewers，开发机已注册可用）+
+  extension × 1（multi-viewers-say 插话：零 LLM，直接 spawn human_sayer.py；
+  目录发现 = `<cwd>/discuss-<sessionId>-*` 最新，兜底 `discuss-*` 并警告）
+  + wrapper。npm 发版 0.1.0 待办。
 - **开发机安装（两步，缺一不可；2026-09-10 实测）**：
   ① `pi install /root/pi-multi-viewers`——**注册包**（写
   `~/.pi/agent/settings.json` 的 `packages` 数组）；pi 不是"扫 node_modules
