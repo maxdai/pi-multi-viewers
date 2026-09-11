@@ -252,6 +252,87 @@ class TestMeetingLoopMain(unittest.TestCase):
             shutil.rmtree(tmp, ignore_errors=True)
 
 
+class TestBuildReport(unittest.TestCase):
+    """--report（观测面唯一机器消费出口）：各段取数 + fail-open。"""
+
+    def _env(self, tmp, with_loop_log=True, with_session=True, commits=()):
+        base = os.path.join(tmp, "mv-x-1")
+        bare = os.path.join(base, "repo.git")
+        os.makedirs(base)
+        subprocess.run(["git", "init", "-q", "--bare", bare], check=True)
+        w = os.path.join(base, "work-a")
+        subprocess.run(["git", "clone", "-q", bare, w], check=True,
+                       capture_output=True)
+        for k, v in (("user.name", "t"), ("user.email", "t@t")):
+            subprocess.run(["git", "config", k, v], cwd=w, check=True)
+        with open(os.path.join(w, "protocol.json"), "w") as f:
+            json.dump({"participants": ["a", "b"], "resultWriter": "b",
+                       "maxMeetingRounds": 10}, f)
+        subprocess.run(["git", "add", "-A"], cwd=w, check=True,
+                       capture_output=True)
+        subprocess.run(["git", "commit", "-qm", "discuss: setup"], cwd=w,
+                       check=True, capture_output=True)
+        for subj in commits:      # 追加消息 commit（subject = discuss: x/N）
+            with open(os.path.join(w, "dummy"), "w") as f:
+                f.write(subj)
+            subprocess.run(["git", "add", "-A"], cwd=w, check=True,
+                           capture_output=True)
+            subprocess.run(["git", "commit", "-qm", subj], cwd=w, check=True,
+                           capture_output=True)
+        subprocess.run(["git", "push", "-q", "origin", "HEAD"], cwd=w,
+                       check=True, capture_output=True)
+        if with_loop_log:
+            with open(os.path.join(base, "loop-a.log"), "w") as f:
+                f.write("[2026-09-11T12:00:00.000] a: 唤醒 pi (session=s1)\n")
+                f.write("[2026-09-11T12:00:42.100] a: pi 完成"
+                        "（session=s1 elapsed_ms=42100 rc=0）\n")
+        if with_session:
+            with open(os.path.join(base, "status-a.json"), "w") as f:
+                json.dump({"sessionID": "sid-a"}, f)
+            os.makedirs(os.path.join(base, "pi-sessions"))
+            with open(os.path.join(base, "pi-sessions/fork-src-sid-a.jsonl"),
+                      "w") as f:
+                f.write(json.dumps({"type": "message", "message": {
+                    "role": "assistant", "stopReason": "toolUse",
+                    "usage": {"input": 274, "cacheRead": 183552,
+                              "output": 1200}}}) + "\n")
+        return base
+
+    def test_sections(self):
+        """四段齐备：流程/配额/进程（登记字段）/LLM（session 字段）。"""
+        import start_discussion as sd
+        with tempfile.TemporaryDirectory() as tmp:
+            base = self._env(tmp, commits=["discuss: a/0001",
+                                           "discuss: b/0001",
+                                           "discuss: human/0001"])
+            txt = "\n".join(sd.build_report(base))
+            self.assertIn("流程：2 agents | 消息 2", txt)
+            self.assertIn("a 1 / b 1", txt)
+            self.assertIn("human 插话 1 条", txt)
+            # 登记字段 elapsed_ms=42100 → 人类可读"进程跨度 总 42s"
+            self.assertIn("进程跨度 总 42s", txt)
+            self.assertIn("rc≠0 0 次", txt)
+            self.assertIn("cacheRead 183.6k", txt)
+            self.assertIn("三者不可互替", txt)     # 跨度分标
+
+    def test_fail_open_missing_dir(self):
+        """目录不存在 → n/a（不抛异常、不报错）。"""
+        import start_discussion as sd
+        with tempfile.TemporaryDirectory() as tmp:
+            txt = "\n".join(sd.build_report(os.path.join(tmp, "nope")))
+            self.assertIn("n/a", txt)
+
+    def test_fail_open_missing_logs_and_sessions(self):
+        """缺 loop log / session → 对应段 n/a，其余段仍输出（段级隔离）。"""
+        import start_discussion as sd
+        with tempfile.TemporaryDirectory() as tmp:
+            base = self._env(tmp, with_loop_log=False, with_session=False)
+            txt = "\n".join(sd.build_report(base))
+            self.assertIn("进程（loop log 登记字段）", txt)
+            self.assertIn("n/a", txt)
+            self.assertIn("LLM（session 文档化字段）", txt)
+
+
 class TestStartDiscussionMain(unittest.TestCase):
     """start_discussion.main：命令分发。"""
 
@@ -277,16 +358,13 @@ class TestStartDiscussionMain(unittest.TestCase):
                     sd.main()
                     cs.assert_called_once_with("/x")
 
-    def _wait_with_state(self, tmp, state, with_loop_log):
+    def _wait_with_state(self, tmp, state):
         """--wait 在给定 check_status 下的终态输出（真实 subprocess 太重，
         仅驱动 main 的等待分支）。"""
         import start_discussion as sd
         import human_viewer
         base = os.path.join(tmp, "disc-x")
         os.makedirs(base, exist_ok=True)
-        if with_loop_log:
-            with open(os.path.join(base, "loop-a.log"), "w") as f:
-                f.write("x")
         out = []
         with mock.patch("sys.argv", ["start_discussion.py", "--dir", base,
                                      "--wait"]):
@@ -302,22 +380,24 @@ class TestStartDiscussionMain(unittest.TestCase):
                         rc = sd.main()
         return rc, "\n".join(out), base
 
-    def test_wait_stopped_not_started(self):
-        """--wait：无 loop-*.log → 报"尚未启动"（status-*.json 要等首唤
-        完成才写，用它判断会把"已启动、首唤中崩溃"误判为未启动）。"""
-        with tempfile.TemporaryDirectory() as tmp:
-            rc, txt, _ = self._wait_with_state(tmp, "stopped", False)
-            self.assertEqual(rc, 1)
-            self.assertIn("尚未启动", txt)
-            self.assertNotIn("崩溃", txt)
+    def test_wait_stopped_single_message(self):
+        """--wait 在 stopped 态：一条动作完整的提示（§3.4-P4）。
 
-    def test_wait_stopped_started_then_crashed(self):
-        """--wait：有 loop-*.log → 报"已启动但 loop 均不存活"。"""
+        此前按 `glob(loop-*.log)` 存在性分叉成两条文案——那是拿日志当判定
+        输入（唯一实例），且两条给出的动作都不可执行。现在**不看日志**，
+        只给一条含可执行动作（`--skip-setup --start` / `--cleanup`）的提示。
+        """
         with tempfile.TemporaryDirectory() as tmp:
-            rc, txt, _ = self._wait_with_state(tmp, "stopped", True)
+            rc, txt, base = self._wait_with_state(tmp, "stopped")
             self.assertEqual(rc, 1)
-            self.assertIn("已启动", txt)
-            self.assertIn("崩溃", txt)
+            self.assertIn("未在运行且未收尾", txt)
+            self.assertIn("--skip-setup --start", txt)
+            self.assertIn("--cleanup", txt)
+            # loop-*.log 存在与否不改变输出（零判定输入）
+            with open(os.path.join(base, "loop-a.log"), "w") as f:
+                f.write("x")
+            rc2, txt2, _ = self._wait_with_state(tmp, "stopped")
+            self.assertEqual(txt2, txt)
 
     def test_main_cleanup_dispatches(self):
         import start_discussion as sd

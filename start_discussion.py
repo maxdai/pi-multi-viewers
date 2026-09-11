@@ -20,6 +20,7 @@ import glob
 import json
 import os
 import meeting_fs
+import human_viewer
 import meeting_engine
 import re
 import shutil
@@ -937,24 +938,22 @@ def check_status(base):
         return "not-exists"
     # 读路径统一走 fs.run_git（quotepath 加固单点；run_cmd 只做一次性
     # 环境命令——init/clone/config/push）
+    # 读路径统一走 fs.run_git（quotepath 加固单点；run_cmd 只做一次性
+    # 环境命令——init/clone/config/push）
+    agents = meeting_fs.read_protocol(bare).get("participants", [])
+    # "收尾完成"判据**单源** = human_viewer.is_finished（concluded 且
+    # HEAD:result.md 有效）——与 viewer 的 done 同一判据（§3.5-P5：此前
+    # viewer 认 concluded、这里还额外认 result.md 存在，分叉会让 viewer
+    # 在产物落盘前先报"已结束"并打印尚不存在的路径）。
+    # 不用 git grep 全文：行文本匹配会被 result.md/消息正文里的
+    # `type: concluded` 误触发（实测）；human 消息天然排除（aggregate_mode
+    # 只按 participants 取末条）。
+    if human_viewer.is_finished(bare, agents):
+        return "done"
+    # 未完成：有 result.md 但未收尾 → 看 loop 存活区分收尾中/收尾中断
     r = meeting_fs.run_git(bare, "log", "--all", "--format=%H", "--",
                            "result.md", check=False)
     if r.stdout.strip():
-        # done 需 concluded 存在（review5 A5）——rw 写 result.md 后、
-        # concluded 前崩溃 → 只保存报告但未收尾，误报完成会丢流程语义。
-        #
-        # concluded 判定复用**状态机同一定义**（engine.aggregate_mode →
-        # core：任一 agent 末条 type==concluded）。**不用 git grep 全文**：
-        # 那是行文本匹配、扫 HEAD 全树——result.md 正文或消息正文里出现的
-        # `type: concluded` 会误报 done（实测），随后 --wait 落回
-        # incremental 轮询（无上界）。grep 的"任一消息含 concluded"宽语义
-        # 也没有消费方（唯一写者是协议信号，写后 agent 随即退出 →
-        # "信号存在"与"末条==concluded"在可达状态下等价，宽语义只有假阳性）。
-        # human 消息天然排除（aggregate_mode 只按 participants 取末条）。
-        agents = meeting_fs.read_protocol(bare).get("participants", [])
-        if meeting_engine.aggregate_mode(bare, agents) == "concluded":
-            return "done"
-        # 有 result.md 无 concluded：看 loop 存活区分收尾中/收尾中断
         return "running" if _loops_alive(base) else "stalled"
     return "running" if _loops_alive(base) else "stopped"
 
@@ -1016,18 +1015,18 @@ def wait_for_completion(base):
             print(f"[wait] 讨论不存在: {base}")
             return 1
         if state == "stopped":
-            # 终态：无 result.md 且无 loop 存活——此前落入 10s 轮询无上界
-            # （与"loop 死后观察者不收敛"同族）。
-            # 成因按 loop-*.log 是否存在分叉：log 由 --start 在 spawn 前
-            # 创建，而 status-*.json 要等首唤完成才写——用后者会把
-            # "已启动、首唤中崩溃"误判为"尚未启动"。
-            if glob.glob(os.path.join(base, "loop-*.log")):
-                print("[wait] 已启动，但 loop 均不存活且无 result.md"
-                      "（启动后崩溃/被中断）——查 loop-*.log 与"
-                      " status-*.json，必要时 --cleanup")
-            else:
-                print(f"[wait] 尚未启动（{base} 存在但无 loop 日志）"
-                      "——先 --start")
+            # 终态：无 result.md 且无 loop 存活。
+            #
+            # **不用 loop-*.log 存在性分叉成因**（§3.4-P4）：那是拿日志当
+            # 判定输入（唯一实例，与"日志零判定输入"不变量冲突），且两个
+            # 分支给出的动作此前都不可执行（`--start` 对已存在目录报"请先
+            # --cleanup"；裸 `--start <base>` 又因缺 question.md 失败）。
+            # 合并为一条动作完整的提示——真正可执行的是 `--skip-setup
+            # --start`（环境不完整则先 --cleanup 重建）。
+            print(f"[wait] 未在运行且未收尾（{base}：无 loop 存活、无 "
+                  "result.md）——查 loop-*.log / status-*.json 判断原因；"
+                  "重跑：--skip-setup --start（protocol 缺失则先 --cleanup "
+                  "后重建）")
             return 1
         _mode, lines, head, done = human_viewer.incremental(
             bare, agents, since)
@@ -1052,6 +1051,209 @@ def wait_for_completion(base):
         # 会让结束观察延迟最长 10s（e2e13 时间流分析：唯一 >10s 的
         # 非必要等待点）。
         time.sleep(human_viewer.OBSERVER_POLL_INTERVAL)
+
+
+def build_report(base):
+    """只读报告（`--report`）——观测面的**唯一机器消费出口**。
+
+    契约（design.md 观测面契约节）：
+    - **冷路径一次性**：不常驻、不被轮询；调用方（人/主 pi）按需触发。
+    - **不持久化**：视图不占"数字的家"——数字的家是 bare（判定域）、
+      loop log 的登记字段、pi session 的文档化字段；报告只是它们的一次投影。
+    - **fail-open**：任何一段读不出（缺目录/缺文件/格式变）→ 该段显示 n/a，
+      不报错、不改判定、不阻塞。
+    - **跨度分标**：进程跨度（elapsed_ms）≠ per-response 跨度（session
+      时间戳差）≠ 墙钟跨度（commit 时间差）——各自标名，不混算。
+    - **不得升级为验收 gate**：有效期判断留给人 + result.md（本轮 §4 明确
+      不做运行期评分）。
+
+    返回输出行列表（调用方 print）。
+    """
+    out = []
+    out.append(f"[报告] {base}")
+    bare = meeting_fs.bare_of_base(base)
+    if not os.path.isdir(bare):
+        out.append("  分析目录不存在（已 cleanup？）——n/a")
+        return out
+    agents = meeting_fs.read_protocol(bare).get("participants", [])
+    if not agents:
+        out.append("  协议不可读（participants 空）——n/a")
+        return out
+    proto = meeting_fs.read_protocol(bare)
+
+    # ---- 流程时间线（bare = 判定域，现场派生） ----
+    r = meeting_fs.run_git(bare, "log", "--reverse", "--format=%ct%x09%s",
+                           "HEAD", check=False)
+    rows = []
+    for line in r.stdout.splitlines():
+        if "\t" not in line:
+            continue
+        ts, subj = line.split("\t", 1)
+        rows.append((int(ts), subj))
+    per_agent = {a: 0 for a in agents}
+    human_n = 0
+    for _, subj in rows:
+        m = re.match(r"discuss:\s*(.+?)/(\d+)$", subj)
+        if not m:
+            continue
+        who = m.group(1)
+        if who == "human" or who not in per_agent:
+            human_n += 1
+        else:
+            per_agent[who] += 1
+    if rows:
+        span = rows[-1][0] - rows[0][0]
+        out.append(f"流程：{len(agents)} agents | 消息 "
+                   f"{sum(per_agent.values())}（"
+                   + " / ".join(f"{a} {n}" for a, n in per_agent.items())
+                   + f"）| 墙钟跨度 {_dur(span)}（首末 commit 差）")
+    # 最长无进展间隔（相邻 commit 间隔的最大值）
+    gaps = [(rows[i + 1][0] - rows[i][0], rows[i][0], rows[i + 1][0])
+            for i in range(len(rows) - 1)]
+    if gaps:
+        g, t1, t2 = max(gaps)
+        out.append(f"节奏：最长无进展 interval {_dur(g)}"
+                   f"（{_hhmm(t1)} → {_hhmm(t2)}，commit 间隔）")
+
+    # ---- 配额与 human 插话（bare 派生，无状态） ----
+    quota_meeting = proto.get("maxMeetingRounds", 10)
+    out.append(f"配额：meeting {max(per_agent.values()) if per_agent else 0}"
+               f"/{quota_meeting}（各 agent 消息数上限）| human 插话 {human_n} 条"
+               "（不占配额，各 agent 上限 +human 条数）")
+
+    # ---- 进程事实（登记字段；日志的唯一机器消费点） ----
+    proc = _report_wake_fields(base)
+    out.append("进程（loop log 登记字段）：")
+    if not proc:
+        out.append("  n/a（无完成行——尚未唤醒或日志缺失）")
+    for a in agents:
+        d = proc.get(a)
+        if not d:
+            out.append(f"  {a}: n/a")
+            continue
+        out.append(f"  {a}: 唤醒 {d['wakes']} 次 | 进程跨度 总 "
+                   f"{_dur(d['total_ms'] // 1000)} / 最大 "
+                   f"{_dur(d['max_ms'] // 1000)} | rc≠0 {d['fails']} 次")
+
+    # ---- LLM 运行事实（session 文档化字段；流式预过滤，不整文件解析） ----
+    out.append("LLM（session 文档化字段）：")
+    any_usage = False
+    for a in agents:
+        u = _report_session_usage(base, a)
+        if not u:
+            out.append(f"  {a}: n/a")
+            continue
+        any_usage = True
+        out.append(f"  {a}: input {u['input']} | cacheRead "
+                   f"{u['cache_read']} | output {u['output']} | 响应 "
+                   f"{u['responses']} 次 | error {u['errors']} 次")
+    if not any_usage:
+        out.append("  n/a（无 session 文件——已 cleanup 或首唤未完成）")
+    out.append("（口径：进程跨度=pi 进程生命周期；输出=prompt 分段合计；"
+               "墙钟=commit 时间差——三者不可互替）")
+    return out
+
+
+def _dur(sec):
+    """人类可读时长（口径由调用方标注）。"""
+    sec = int(sec)
+    if sec < 60:
+        return f"{sec}s"
+    if sec < 3600:
+        return f"{sec // 60}m{sec % 60:02d}s"
+    return f"{sec // 3600}h{(sec % 3600) // 60:02d}m"
+
+
+def _hhmm(ts):
+    return time.strftime("%H:%M:%S", time.localtime(ts))
+
+
+def _report_wake_fields(base):
+    """解析 loop-*.log 的登记字段（`elapsed_ms` / `rc`）。
+
+    **日志的唯一机器消费点**（观测面契约：日志零判定输入，报告只读已登记
+    字段——不解析自由文本、不做启发式猜测）。fail-open：读不到 → 跳过。
+    """
+    out = {}
+    for f in sorted(glob.glob(os.path.join(base, "loop-*.log"))):
+        agent = os.path.basename(f)[len("loop-"):-len(".log")]
+        d = {"wakes": 0, "total_ms": 0, "max_ms": 0, "fails": 0}
+        try:
+            with open(f, encoding="utf-8", errors="replace") as fh:
+                for line in fh:
+                    m = re.search(r"elapsed_ms=(\d+) rc=(-?\d+)", line)
+                    if not m:
+                        continue
+                    d["wakes"] += 1
+                    ms, rc = int(m.group(1)), int(m.group(2))
+                    d["total_ms"] += ms
+                    d["max_ms"] = max(d["max_ms"], ms)
+                    if rc != 0:
+                        d["fails"] += 1
+        except OSError:
+            continue
+        if d["wakes"]:
+            out[agent] = d
+    return out
+
+
+def _report_session_usage(base, agent):
+    """从该 agent 的 session 文件取 usage（**单一适配器** + 流式预过滤）。
+
+    字段来源 = pi 的**文档化** session schema（`docs/session-format.md`：
+    `usage` / `stopReason`）。行级预过滤（`"usage" in line` 才 json.loads）
+    ——避免对 MB 级文件整解析（实测 json.loads 3MB ≈27ms，预过滤可省大部分）。
+    fail-open：文件缺失/字段变 → 返回 {}。
+    """
+    try:
+        with open(os.path.join(base, f"status-{agent}.json")) as f:
+            sid = json.load(f).get("sessionID") or ""
+    except (OSError, ValueError):
+        sid = ""
+    if not sid:
+        return {}
+    fp = os.path.join(base, "pi-sessions", f"fork-src-{sid}.jsonl")
+    if not os.path.isfile(fp):
+        return {}
+    u = {"input": 0, "cache_read": 0, "output": 0, "responses": 0, "errors": 0}
+    try:
+        with open(fp, encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                if '"usage"' not in line:
+                    continue
+                try:
+                    ev = json.loads(line)
+                except ValueError:
+                    continue
+                m = ev.get("message") or {}
+                if m.get("role") != "assistant":
+                    continue
+                u["responses"] += 1
+                if m.get("stopReason") == "error":
+                    u["errors"] += 1
+                usage = m.get("usage") or {}
+                for k, key in (("input", "input"), ("cacheRead", "cache_read"),
+                               ("output", "output")):
+                    v = usage.get(k)
+                    if isinstance(v, int):
+                        u[key] += v
+    except OSError:
+        return {}
+    if not u["responses"]:
+        return {}
+    # 数字格式化（人读）：千分位缩写
+    for k in ("input", "cache_read", "output"):
+        u[k] = _num(u[k])
+    return u
+
+
+def _num(n):
+    """人可读数字（k/M 缩写；原值精度对人读报告无意义）。"""
+    if n >= 1_000_000:
+        return f"{n / 1_000_000:.1f}M"
+    if n >= 1_000:
+        return f"{n / 1_000:.1f}k"
+    return str(n)
 
 
 def main():
@@ -1090,6 +1292,9 @@ def main():
                         help="跳过环境生成，只启动已有环境（需 --dir）")
     parser.add_argument("--cleanup", action="store_true", help="清理讨论（目录，含 pi-sessions）")
     parser.add_argument("--status", action="store_true", help="检查讨论状态")
+    parser.add_argument("--report", action="store_true",
+                        help="只读报告（观测面聚合：流程/配额/进程/LLM；"
+                             "冷路径一次性，不持久化）")
     parser.add_argument("--wait", action="store_true", help="阻塞直到讨论完成")
     args = parser.parse_args()
 
@@ -1131,7 +1336,8 @@ def main():
     # 消费模式（--cleanup/--status/--wait/--skip-setup，操作已存在目录）：
     #   裸名按字面解释（cwd 下同名目录），存在就用不存在报错——前缀快捷
     #   只属于创建；操作时套用会找错目录（实测 cleanup 裸名潜伏 bug）
-    consuming = (args.cleanup or args.status or args.wait or args.skip_setup)
+    consuming = (args.cleanup or args.status or args.wait or args.skip_setup
+                 or args.report)
     if any(ch in args.dir for ch in "/~."):
         base = os.path.abspath(os.path.expanduser(args.dir))
     elif consuming:
@@ -1144,6 +1350,10 @@ def main():
         return
     if args.status:
         print(f"[status] {check_status(base)}")
+        return
+    if args.report:
+        for line in build_report(base):
+            print(line)
         return
     if args.wait:
         return wait_for_completion(base)

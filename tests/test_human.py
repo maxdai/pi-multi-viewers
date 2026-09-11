@@ -241,8 +241,22 @@ class TestViewer(unittest.TestCase):
         self.assertEqual(len(lines), 1)
         self.assertIn("[human/0001.md]", lines[0])
 
+    def _write_result(self, workdir, text=None):
+        """写 result.md（有效性阈值 >50 字节）+ 提交推送——与生产
+        resultWriter 的产物落点同构。"""
+        text = text or ("# 结论\n\n" + "实质内容。" * 12)
+        with open(os.path.join(workdir, "result.md"), "w") as f:
+            f.write(text)
+        run_git(workdir, "add", "result.md")
+        run_git(workdir, "commit", "-m", "discuss: result.md")
+        run_git(workdir, "push", "origin", "HEAD")
+
     def test_done_detection(self):
-        """concluded → done=True（viewer 退出条件）。"""
+        """done 判据 = concluded **且** result.md 有效（§3.5-P5 单源）。
+
+        只认 concluded 会在产物落盘前先报"已结束"并打印尚不存在的路径；
+        因此 concluded 但无 result.md → 仍不算完成。
+        """
         from human_viewer import incremental
         base, bare, wd = self._env("viewer-done")
         write_msg(wd["a"], "a/0001.md",
@@ -250,7 +264,11 @@ class TestViewer(unittest.TestCase):
                     "seen_at": "", "to": "all"}, "收尾")
         mode, _, _, done = incremental(bare, ["a", "b"], None)
         self.assertEqual(mode, "concluded")
-        self.assertTrue(done)
+        self.assertFalse(done)          # 产物未落盘 → 未完成
+        self._write_result(wd["a"])     # resultWriter 写产物（+commit/push）
+        mode2, _, _, done2 = incremental(bare, ["a", "b"], None)
+        self.assertEqual(mode2, "concluded")
+        self.assertTrue(done2)          # 两条件齐 → 完成
 
     def test_follow_cursor(self):
         """--follow 游标：增量后写游标，重启从游标继续。"""
@@ -282,6 +300,8 @@ class TestViewer(unittest.TestCase):
         write_msg(wd["a"], "a/0002.md",
                    {"from": "a", "type": "concluded", "mode": "concluded",
                     "seen_at": "", "to": "all"}, "收尾")
+        # done 判据 = concluded 且 result.md 有效（§3.5-P5）——产物也必须落盘
+        self._write_result(wd["a"])
         t.join(timeout=10)
         self.assertFalse(t.is_alive(), "follow 未在 concluded 后退出")
         # 游标已持久化且为最终 HEAD

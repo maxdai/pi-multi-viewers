@@ -208,5 +208,20 @@ class TestErrorPaths(unittest.TestCase):
         self.assertNotEqual(r.returncode, 0)
 
 
+class TestReportDispatch(unittest.TestCase):
+    """--report 是消费命令（归一化目录 + 透传到 python；与 --status 同形）。"""
+
+    def test_report_requires_dir(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            r = run_wrapper(["--report"], cwd=tmp)
+            self.assertNotEqual(r.returncode, 0)
+            self.assertIn("--report", r.stderr + r.stdout)
+
+    def test_report_missing_dir_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            r = run_wrapper(["--report", os.path.join(tmp, "nope")], cwd=tmp)
+            self.assertNotEqual(r.returncode, 0)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -34,7 +34,7 @@ from meeting_fs import (
     run_git, parse_frontmatter, serialize_message,
     git_show, is_message_file, parse_log_nameonly,
     read_protocol, cat_batch, remove_message, write_text, file_size,
-    bare_of_base, bare_of_workdir,
+    bare_of_base, bare_of_workdir, log,
 )
 from meeting_core import (
     next_in_order as core_next,
@@ -45,10 +45,6 @@ from meeting_core import (
 POLL_INTERVAL = 2.0
 JITTER = 0.3
 MAX_RETRY = 3
-
-
-def log(agent, msg):
-    print(f"[{time.strftime('%H:%M:%S')}] {agent}: {msg}", flush=True)
 
 
 # ---------------------------------------------------------------

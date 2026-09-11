@@ -83,6 +83,24 @@ def format_message(path, content):
     return f"{header}\n---"
 
 
+def is_finished(bare, agents, mode=None):
+    """分析是否**收尾完成**（`--wait`/viewer/`--status` 共用的唯一判据）。
+
+    定义 = `concluded`（状态机聚合）**且** result.md 已进 bare 且有效。
+
+    为什么两条件：`concluded` 是协议信号、result.md 是产物——只认 concluded
+    会在产物落盘前先报"已结束"并打印尚不存在的路径（§3.5-P5 实测分叉）；
+    只认 result.md 则无法区分"收尾进行中"与"收尾中断（stalled）"。
+    为什么落 viewer：它是唯一增量实现的持有者，也是观察端判据的家。
+    """
+    if mode is None:
+        mode = aggregate_mode(bare, agents)
+    if mode != "concluded":
+        return False
+    content = git_show(bare, "HEAD", "result.md")
+    return bool(content) and len(content) > 50
+
+
 def incremental(bare, agents, since):
     """单次增量读取。
 
@@ -102,7 +120,7 @@ def incremental(bare, agents, since):
         if s:
             lines.append(s)
     head = git_head(bare)
-    return mode, lines, head, mode == "concluded"
+    return mode, lines, head, is_finished(bare, agents, mode)
 
 
 def _cursor_path(base):

@@ -93,6 +93,7 @@ scripts/mv.sh --view <dir>                    # 或一次性增量查看（主 p
 # 插话 / 状态 / 收尾
 scripts/mv.sh --say <dir> "<文本>"             # 插话（命令行形态；pi 内用 /multi-viewers-say）
 scripts/mv.sh --status <dir>                  # running / done / stalled / stopped
+scripts/mv.sh --report <dir>                  # 只读报告（流程/配额/进程/LLM；冷路径，不持久化）
 scripts/mv.sh --cleanup <dir>                 # 收尾（result.md 自动留存到 <dir>-result.md）
 ```
 

@@ -212,7 +212,10 @@ class TestCheckStatusConcluded(unittest.TestCase):
             # 正文里**含** `type: concluded` 行（代码块/协议片段引用）——
             # 全文 grep 会命中，聚合判定不会
             with open(os.path.join(w, "result.md"), "w") as f:
+                # 正文需 >50 字节（is_finished 的"产物有效"判据——
+                # concluded 且 result.md 有效才算收尾完成）
                 f.write("# 结论\n\n```\ntype: concluded\n```\n"
+                        "本报告正文用于满足有效性阈值，非空且具实质内容。\n"
                         + result_body_extra)
         subprocess.run(["git", "add", "-A"], cwd=w, check=True, capture_output=True)
         subprocess.run(["git", "commit", "-m", "setup"], cwd=w, check=True,

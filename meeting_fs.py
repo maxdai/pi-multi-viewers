@@ -57,6 +57,24 @@ def run_git(workdir, *args, check=True, timeout=30):
     return r
 
 
+def log(agent, msg):
+    """流程事件日志（**唯一实现**，落 fs = IO owner）。
+
+    格式契约：`[YYYY-MM-DDTHH:MM:SS.mmm] <agent>: <msg>`，行尾 flush。
+    写者是 loop 与 engine（各自产生自己的事件），消费者是人（grep/肉眼）
+    ——**格式只有一个实现**，此前 loop 与 engine 各有一份逐字相同的副本
+    （重复即漂移源）。这一行**不参与任何流程判定**（观测面契约见
+    docs/design.md）。
+
+    时间戳含日期与毫秒（§3.5-P10）：秒级 `HH:MM:SS` 无法跨天 join、无法与
+    session/commit 时间对齐，同一秒内的多个事件也无法排序。毫秒是**人类
+    排错的排序精度**；度量精度由登记字段 `elapsed_ms` 承担（两者口径不同，
+    不可互替——见 design.md 的"一个数字一个口径"）。
+    """
+    ts = datetime.now().strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3]
+    print(f"[{ts}] {agent}: {msg}", flush=True)
+
+
 def read_protocol(bare):
     """读取共享协议（`HEAD:protocol.json`）——**协议读取的唯一实现**。
 

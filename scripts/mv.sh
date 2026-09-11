@@ -6,6 +6,7 @@
 #   ./scripts/mv.sh --prepare "<主题>" [--agents "a,b,c"|4]
 #   ./scripts/mv.sh --start <spec目录>   # 可选 --fork-mode compaction|budget|full
 #   ./scripts/mv.sh --status <dir>
+#   ./scripts/mv.sh --report <dir>
 #   ./scripts/mv.sh --wait <dir>
 #   ./scripts/mv.sh --cleanup <dir>
 #   ./scripts/mv.sh --view <dir> [--since <ref>]     # human-viewer 封装
@@ -26,13 +27,14 @@ usage() {
   $0 --prepare "<问题>" [--background "<背景>"] [--agents "a,b,c"|4]
   $0 --start <spec目录> [--fork-mode compaction|budget|full]
   $0 --status <dir>
+  $0 --report <dir>
   $0 --wait <dir>
   $0 --cleanup <dir>
   $0 --view <dir> [--since <ref>]
   $0 --say <dir> "<文本>"
 
 默认参数:
-  agents=a,b,c  max-meeting=10  max-rr=5
+  agents=a,b,c  max-meeting=10  max-rr=7   # 配额默认值的权威在 python argparse（wrapper 不传）
 
 --agents: 逗号分隔名称列表（如 "x,y"）或纯数字（如 4 → 生成 a..d）；
           human 是保留名，不能作为参与者
@@ -67,6 +69,13 @@ cmd_status() {
     dir="$(normalize_dir "$1")"
     require_dir "$dir"
     "$PYTHON" "$START_DISCUSSION" --dir "$dir" --status
+}
+
+cmd_report() {
+    local dir
+    dir="$(normalize_dir "$1")"
+    require_dir "$dir"
+    "$PYTHON" "$START_DISCUSSION" --dir "$dir" --report
 }
 
 cmd_wait() {
@@ -277,6 +286,11 @@ if [ "$#" -ge 1 ]; then
         --status)
             [ "$#" -ge 2 ] || fail "--status 需要分析目录参数"
             cmd_status "$2"
+            exit $?
+            ;;
+        --report)
+            [ "$#" -ge 2 ] || fail "--report 需要分析目录参数"
+            cmd_report "$2"
             exit $?
             ;;
         --wait)

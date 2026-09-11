@@ -11,6 +11,7 @@
 import json
 import os
 import re
+import shlex
 import signal
 import subprocess
 import sys
@@ -19,7 +20,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import meeting_fs
-from meeting_fs import next_msg_id
+from meeting_fs import next_msg_id, log
 from meeting_engine import agent_loop
 
 MIN_MEM_MB = 2000
@@ -66,10 +67,6 @@ def _kill_proc(proc):
 
 
 signal.signal(signal.SIGTERM, _handle_sigterm)
-
-
-def log(agent, msg):
-    print(f"[{time.strftime('%H:%M:%S')}] {agent}: {msg}", flush=True)
 
 
 def mem_available_mb():
@@ -420,8 +417,13 @@ def wake_llm(workdir, agent, prompt, pure=False, fork_source=None, fork_cwd=None
     log_dir = os.path.join(base, "wake-logs")
     os.makedirs(log_dir, exist_ok=True)
     os.makedirs(session_dir, exist_ok=True)
+    # wake-log = 命令行全文（**单一来源**）：prompt 通过 argv（--append-system-prompt
+    # / positional）进入 cmd，故此处不再另写 PROMPT 段——此前两处逐字重复占
+    # 文件 40–43%（§3.5-P8）。shlex.quote 逐元素引用 → CMD 是**可真行级 grep**
+    # 的单行（含空格/换行的 prompt 值不会把记录撕成多行）。
     with open(os.path.join(log_dir, f"{agent}-{int(time.time())}.txt"), "w") as f:
-        f.write("CMD: " + " ".join(cmd) + "\n\nPROMPT:\n" + prompt + "\n")
+        f.write("CMD: " + " ".join(shlex.quote(a) for a in cmd) + "\n")
+    t0 = time.monotonic()
     log(agent, f"唤醒 pi (session={sid})")
     _lock_git(workdir)
     try:
@@ -429,6 +431,11 @@ def wake_llm(workdir, agent, prompt, pure=False, fork_source=None, fork_cwd=None
     finally:
         restore_git_lock(workdir)
 
+    # 进程事实登记（§3.2）：elapsed_ms 与 rc **无家**（session 首个 entry
+    # 之前是黑箱、rc 只有 Popen 知道）→ 在数据已在手处就地捕获，零解析。
+    # rc 总是写（零成本、权威）；elapsed_ms 用 monotonic 差值，跨度 = **pi
+    # 进程生命周期**（spawn → exit，与 wake prompt 跨度/墙钟都不同口径）。
+    _log_wake_done(agent, sid, r, int((time.monotonic() - t0) * 1000))
     new_sid = parse_session(r.stdout) or sid
     if new_sid:
         save_session_id(workdir, agent, new_sid)
@@ -442,6 +449,19 @@ def wake_llm(workdir, agent, prompt, pure=False, fork_source=None, fork_cwd=None
             if os.path.exists(sp):
                 os.remove(sp)
     return new_sid, r.returncode
+
+
+def _log_wake_done(agent, sid, r, elapsed_ms):
+    """唤醒完成行（登记字段 + ISO8601 时间戳）。
+
+    §3.2 契约：`elapsed_ms` = pi 进程生命周期跨度；`rc` = 进程返回值（权威、
+    总是写）。超时/被 kill 路径走异常分支（本函数不执行）——**缺席 ≠ 0**：
+    没有值就不写字段，读侧按 n/a 处理。
+    时间戳升级为 ISO8601（含日期）：秒级 `HH:MM:SS` 无法跨天 join，也无法
+    与 session/commit 时间对齐（§3.5-P10）。
+    """
+    log(agent, f"pi 完成（session={sid} elapsed_ms={elapsed_ms} "
+               f"rc={r.returncode}）")
 
 
 def _read_perspective_brief(workdir, agent):
