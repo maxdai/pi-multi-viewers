@@ -174,6 +174,35 @@ def next_in_order(order, agent):
     return order[(order.index(agent) + 1) % len(order)]
 
 
+def meeting_speak_count(messages, agent):
+    """该 agent 的 meeting 内容发言轮（**配额消耗口径**，单一实现）。
+
+    数 `mode == meeting` 且 `type == message` 的消息——LLM 的内容发言。
+    代写 freezing / all-freezing / pass 等流程信号不计入（设计 11.1）。
+    从共享事实（bare 派生的 messages）推导——loop 崩溃/重启不丢配额。
+
+    messages: {agent: [frontmatter_dict, ...]}（engine.each_agent_messages 的产物）。
+    **这是唯一实现**：此前 engine 私有一份 `_meeting_speak_count`，而
+    `--report` 又按 commit subject 另数一遍（两套口径，实测报告出过
+    "meeting 6/2" 的超限假象——6 是消息总数、2 是配额上限）。
+    """
+    return sum(1 for fm in messages.get(agent, [])
+               if fm.get("mode") == "meeting" and fm.get("type") == "message")
+
+
+def frozen_agents(agents, all_last_types):
+    """已冻结的 agent 列表（按 participants 顺序）——**冻结集合单一实现**。
+
+    all_last_types: {agent: type|None}（aggregate_mode 的入参形态）。
+    冻结 = type ∈ {freezing, all-freezing}（af 是冻结级联的推进态，
+    与 engine 循环里"我已 af 则跳过"的宽松语义一致）。
+    消费者：`--report`（现场算冻结进度）；engine 循环内的 others_frozen
+    判定仍就地写（热路径、语义略有差别——那里是"除我之外全冻结"）。
+    """
+    return [a for a in agents
+            if all_last_types.get(a) in ("freezing", "all-freezing")]
+
+
 def should_write_af(all_last_types):
     """我是否应写 all-freezing：所有参与者最后一条都是 freezing（或 af）。
 

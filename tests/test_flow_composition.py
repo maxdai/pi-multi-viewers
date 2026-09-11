@@ -25,9 +25,10 @@ from meeting_fs import (git_head, git_ls_files, git_show, list_my_messages,
 from meeting_core import (aggregate_mode as core_aggregate_mode,
                           can_start_rr, has_new_messages_for_me,
                           should_write_af, validate_and_fix)
-from meeting_engine import (participants, result_writer, _each_agent_messages,
+from meeting_core import meeting_speak_count
+from meeting_engine import (participants, result_writer, each_agent_messages,
                             each_agent_last, human_msg_count,
-                            _meeting_speak_count, rr_next_speaker,
+                            rr_next_speaker,
                             rr_active_count, write_protocol_signal,
                             commit_new_files, finalize_discussion)
 
@@ -112,7 +113,7 @@ class TestFlowComposition(unittest.TestCase):
         self.assertEqual(rw, "b")  # 缺省 = 最后参与者
 
         # E3/E5：bare 组装（setup commit 后无消息文件）
-        messages = _each_agent_messages(self.bare, ps)
+        messages = each_agent_messages(self.bare, ps)
         self.assertEqual(messages, {"a": [], "b": []})
         lasts = each_agent_last(self.bare, ps)
         self.assertEqual(lasts, {"a": None, "b": None})
@@ -133,7 +134,7 @@ class TestFlowComposition(unittest.TestCase):
         ok = commit_new_files(self.wa, "a", head, "meeting")
         self.assertTrue(ok)
         # bare 可见 + 字段补全
-        messages = _each_agent_messages(self.bare, ["a", "b"])
+        messages = each_agent_messages(self.bare, ["a", "b"])
         self.assertEqual(len(messages["a"]), 1)
         fm = messages["a"][0]
         self.assertEqual(fm["from"], "a")
@@ -153,7 +154,7 @@ class TestFlowComposition(unittest.TestCase):
         resp(self.wb, "b", head, [], False, False, False)
         commit_new_files(self.wb, "b", head, "meeting")
 
-        messages = _each_agent_messages(self.bare, ["a", "b"])
+        messages = each_agent_messages(self.bare, ["a", "b"])
         lasts = each_agent_last(self.bare, ["a", "b"])
         self.assertEqual(core_aggregate_mode(lasts), "meeting")
 
@@ -174,8 +175,8 @@ class TestFlowComposition(unittest.TestCase):
         head = git_head(self.wa)
         resp(self.wa, "a", head, [], True, False, False)
         commit_new_files(self.wa, "a", head, "meeting")
-        messages = _each_agent_messages(self.bare, ["a", "b"])
-        self.assertEqual(_meeting_speak_count(messages, "a"), 1)
+        messages = each_agent_messages(self.bare, ["a", "b"])
+        self.assertEqual(meeting_speak_count(messages, "a"), 1)
         # human 插话 → count = 1
         from human_sayer import say
         wh = os.path.join(self.base, "work-human")
@@ -183,7 +184,7 @@ class TestFlowComposition(unittest.TestCase):
         self.assertEqual(path, "human/0001.md")
         self.assertEqual(human_msg_count(self.bare), 1)
         # 配额上限 = max_meeting + human_count（E21 ⑤.2 的公式）
-        self.assertLess(_meeting_speak_count(messages, "a"),
+        self.assertLess(meeting_speak_count(messages, "a"),
                         self.args.max_meeting + human_msg_count(self.bare))
 
     # ---- 链 5：RR 轮转（C8 → E13 pass → E7 next）----
@@ -213,7 +214,7 @@ class TestFlowComposition(unittest.TestCase):
         write_protocol_signal(self.wb, "b", "pass", "round-robin", "a")
         self.assertEqual(rr_next_speaker(self.bare, ["a", "b"]), "a")
         # rr_active_count：starter 的 RR 消息数
-        messages = _each_agent_messages(self.bare, ["a", "b"])
+        messages = each_agent_messages(self.bare, ["a", "b"])
         self.assertEqual(rr_active_count(messages, ["a", "b"]), 1)
 
     # ---- 链 6：收尾（E19 → concluded → S17 done）----
@@ -230,13 +231,13 @@ class TestFlowComposition(unittest.TestCase):
         resp = FakeResponder()
         head = git_head(self.wa)
         from meeting_core import is_all_last_in
-        messages = _each_agent_messages(self.bare, ["a", "b"])
+        messages = each_agent_messages(self.bare, ["a", "b"])
         self.assertTrue(is_all_last_in(messages, {"pass"}))
         ok = finalize_discussion(self.wb, "b", resp, head, reason="consensus")
         self.assertTrue(ok)
 
         # concluded 落盘 + result.md 提交
-        messages = _each_agent_messages(self.bare, ["a", "b"])
+        messages = each_agent_messages(self.bare, ["a", "b"])
         self.assertEqual(messages["b"][-1]["type"], "concluded")
         r = sd.run_cmd(["git", "show", "HEAD:result.md"], cwd=self.bare,
                    check=False)

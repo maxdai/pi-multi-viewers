@@ -37,6 +37,7 @@ from meeting_fs import (
     bare_of_base, bare_of_workdir, log,
 )
 from meeting_core import (
+    meeting_speak_count as core_meeting_speak_count,
     next_in_order as core_next,
     should_write_af, can_start_rr, validate_and_fix, is_all_last_in,
     aggregate_mode as core_aggregate_mode,
@@ -77,7 +78,7 @@ def result_writer(bare):
     return parts[-1] if parts else ""
 
 
-def _each_agent_messages(bare, agents):
+def each_agent_messages(bare, agents):
     """bare 树中每个 agent 的完整消息列表（frontmatter dict，按序号升序）。
 
     所有 bare 读取的单一入口（审核 D：不搞两套读取——_each_agent_last
@@ -118,7 +119,7 @@ def each_agent_last(bare, agents):
     由 _each_agent_messages（唯一 bare 读取）派生：取每 agent 列表末尾。
     这是状态判定的数据源（设计 11.8）。
     """
-    messages = _each_agent_messages(bare, agents)
+    messages = each_agent_messages(bare, agents)
     result = {}
     for a in agents:
         msgs = messages.get(a, [])
@@ -209,18 +210,6 @@ def rr_active_count(messages, agents):
     starter = agents[0]
     return sum(1 for fm in messages.get(starter, [])
                if fm.get("mode") == "round-robin")
-
-
-def _meeting_speak_count(messages, agent):
-    """该 agent 已产出的 meeting 内容发言轮（从 bare 重算）。
-
-    数 mode==meeting 且 type==message 的消息（LLM 内容发言）。
-    代写 freezing/pass 不计入（设计 11.1）。
-    从共享事实（bare）推导——loop 崩溃/重启后不丢配额（审核#1）。
-    messages: _each_agent_messages 的产物（L-M2 派生）
-    """
-    return sum(1 for fm in messages.get(agent, [])
-               if fm.get("mode") == "meeting" and fm.get("type") == "message")
 
 
 def human_msg_count(bare):
@@ -545,7 +534,7 @@ def agent_loop(workdir, agent, responder, max_meeting=10, max_rr=7,
             # （lasts/mode/冻结集合等）；**计数与时序类**判定（human_msg_count /
             # _stall_elapsed / RR 分支的 rr_next_speaker）各自单独读 bare——
             # 它们无状态、按需调用，不为省 ~3ms/轮 而跨函数传快照。
-            messages = _each_agent_messages(bare, agents)
+            messages = each_agent_messages(bare, agents)
             lasts = {a: (messages[a][-1] if messages[a] else None)
                      for a in agents}
             all_last = {a: (lasts[a].get("type") if lasts[a] else None)
@@ -698,7 +687,7 @@ def agent_loop(workdir, agent, responder, max_meeting=10, max_rr=7,
             # human_msg_count（human 每发言一次所有 agent 配额 +1，
             # 抵消响应消耗——不加快配额耗尽）。
             quota = max_meeting + human_msg_count(bare)
-            if (_meeting_speak_count(messages, agent) >= quota
+            if (core_meeting_speak_count(messages, agent) >= quota
                     and all_last.get(agent) != "freezing"):
                 log(agent, f"meeting 配额耗尽（{quota} 轮，含 human 增量"
                            f"{quota - max_meeting}）——确定性 freezing")

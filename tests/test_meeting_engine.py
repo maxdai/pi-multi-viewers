@@ -16,10 +16,11 @@ from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from meeting_core import meeting_speak_count as core_meeting_speak_count
 from meeting_engine import (
-    participants, result_writer, _each_agent_messages,
+    participants, result_writer, each_agent_messages,
     each_agent_last, aggregate_mode, rr_next_speaker, rr_active_count,
-    _meeting_speak_count, human_msg_count, _produced, write_af_if_no_rr,
+    human_msg_count, _produced, write_af_if_no_rr,
     write_protocol_signal, respond_with_fallback, commit_new_files,
     _is_committed, _stall_elapsed, _result_md_valid, finalize_discussion,
     _commit_result_md,
@@ -112,21 +113,21 @@ class TestProtocolRead(unittest.TestCase):
 class TestBareRead(unittest.TestCase):
     """E3-E6。"""
 
-    def test_each_agent_messages_empty(self):
+    def testeach_agent_messages_empty(self):
         tmp, base, bare, works = make_env()
         try:
-            self.assertEqual(_each_agent_messages(bare, ["a", "b"]),
+            self.assertEqual(each_agent_messages(bare, ["a", "b"]),
                              {"a": [], "b": []})
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
-    def test_each_agent_messages_assembly_and_order(self):
+    def testeach_agent_messages_assembly_and_order(self):
         tmp, base, bare, works = make_env()
         try:
             write_and_commit(works["a"], "a", 1)
             write_and_commit(works["b"], "b", 1)
             write_and_commit(works["a"], "a", 2)
-            msgs = _each_agent_messages(bare, ["a", "b"])
+            msgs = each_agent_messages(bare, ["a", "b"])
             self.assertEqual([m["type"] for m in msgs["a"]],
                              ["message", "message"])
             self.assertEqual(len(msgs["b"]), 1)
@@ -257,7 +258,7 @@ class TestRR(unittest.TestCase):
                              fm_extra={"mode": "round-robin", "type": "pass"})
             write_and_commit(works["a"], "a", 3,
                              fm_extra={"mode": "meeting", "type": "message"})
-            msgs = _each_agent_messages(bare, ["a", "b"])
+            msgs = each_agent_messages(bare, ["a", "b"])
             self.assertEqual(rr_active_count(msgs, ["a", "b"]), 2)
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
@@ -274,9 +275,9 @@ class TestQuota(unittest.TestCase):
                              fm_extra={"type": "freezing", "mode": "meeting"})
             write_and_commit(works["a"], "a", 3,
                              fm_extra={"type": "message", "mode": "round-robin"})
-            msgs = _each_agent_messages(bare, ["a", "b"])
+            msgs = each_agent_messages(bare, ["a", "b"])
             # 只数 mode==meeting 且 type==message
-            self.assertEqual(_meeting_speak_count(msgs, "a"), 1)
+            self.assertEqual(core_meeting_speak_count(msgs, "a"), 1)
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
@@ -318,7 +319,7 @@ class TestProtocolSignal(unittest.TestCase):
         try:
             head = git_head(works["a"])
             write_protocol_signal(works["a"], "a", "freezing", "meeting")
-            msgs = _each_agent_messages(bare, ["a", "b"])
+            msgs = each_agent_messages(bare, ["a", "b"])
             fm = msgs["a"][-1]
             self.assertEqual(fm["type"], "freezing")
             self.assertEqual(fm["mode"], "meeting")
@@ -347,7 +348,7 @@ class TestProtocolSignal(unittest.TestCase):
             m_head = git_head(bare)  # bare 已含 M（a 未 pull，work-a head 旧）
             # a 首次写协议信号（无历史）
             write_protocol_signal(works["a"], "a", "freezing", "meeting")
-            msgs = _each_agent_messages(bare, ["a", "b"])
+            msgs = each_agent_messages(bare, ["a", "b"])
             fm = msgs["a"][-1]
             # seen_at = 起点（setup commit），不是含 M 的 head
             setup = setup_commit(works["a"])
@@ -364,7 +365,7 @@ class TestProtocolSignal(unittest.TestCase):
         tmp, base, bare, works = make_env()
         try:
             write_protocol_signal(works["a"], "a", "pass", "round-robin", "b")
-            msgs = _each_agent_messages(bare, ["a", "b"])
+            msgs = each_agent_messages(bare, ["a", "b"])
             fm = msgs["a"][-1]
             self.assertEqual(fm["mode"], "round-robin")
             self.assertEqual(fm["next"], "b")
@@ -378,7 +379,7 @@ class TestProtocolSignal(unittest.TestCase):
         tmp, base, bare, works = make_env()
         try:
             write_af_if_no_rr(bare, works["a"], "a", ["a", "b"])
-            msgs = _each_agent_messages(bare, ["a", "b"])
+            msgs = each_agent_messages(bare, ["a", "b"])
             self.assertEqual(msgs["a"][-1]["type"], "all-freezing")
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
@@ -390,7 +391,7 @@ class TestProtocolSignal(unittest.TestCase):
             write_and_commit(works["a"], "a", 1,
                              fm_extra={"mode": "round-robin", "type": "pass"})
             write_af_if_no_rr(bare, works["b"], "b", ["a", "b"])
-            msgs = _each_agent_messages(bare, ["a", "b"])
+            msgs = each_agent_messages(bare, ["a", "b"])
             # b 不应写 af
             self.assertEqual(len(msgs["b"]), 0)
         finally:
@@ -427,7 +428,7 @@ class TestRespondFallback(unittest.TestCase):
             ok = respond_with_fallback(works["a"], "a", self.WritingResp(),
                                        head, [], True, False, 0, ["a", "b"])
             self.assertTrue(ok)
-            msgs = _each_agent_messages(bare, ["a", "b"])
+            msgs = each_agent_messages(bare, ["a", "b"])
             self.assertEqual(len(msgs["a"]), 1)
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
@@ -442,7 +443,7 @@ class TestRespondFallback(unittest.TestCase):
                                        True, False, 0, ["a", "b"])
             self.assertFalse(ok, "代写 = 无产出（不耗配额）")
             self.assertEqual(resp.calls, 1 + 3)  # 1 次 + MAX_RETRY 重试
-            msgs = _each_agent_messages(bare, ["a", "b"])
+            msgs = each_agent_messages(bare, ["a", "b"])
             self.assertEqual(msgs["a"][-1]["type"], "freezing")
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
@@ -456,7 +457,7 @@ class TestRespondFallback(unittest.TestCase):
             ok = respond_with_fallback(works["a"], "a", resp, head, [],
                                        False, True, 0, ["a", "b"])
             self.assertFalse(ok)
-            msgs = _each_agent_messages(bare, ["a", "b"])
+            msgs = each_agent_messages(bare, ["a", "b"])
             fm = msgs["a"][-1]
             self.assertEqual(fm["type"], "pass")
             self.assertEqual(fm["mode"], "round-robin")
@@ -476,7 +477,7 @@ class TestCommitNewFiles(unittest.TestCase):
                           {"from": "a", "type": "message"}, "正文")
             ok = commit_new_files(works["a"], "a", head, "meeting")
             self.assertTrue(ok)
-            msgs = _each_agent_messages(bare, ["a", "b"])
+            msgs = each_agent_messages(bare, ["a", "b"])
             fm = msgs["a"][0]
             self.assertEqual(fm["from"], "a")
             self.assertEqual(fm["mode"], "meeting")
@@ -493,13 +494,13 @@ class TestCommitNewFiles(unittest.TestCase):
             write_message(works["a"], "a/0001.md",
                           {"from": "a", "type": "pass"}, "p")
             commit_new_files(works["a"], "a", head, "round-robin")
-            msgs = _each_agent_messages(bare, ["a", "b"])
+            msgs = each_agent_messages(bare, ["a", "b"])
             self.assertEqual(msgs["a"][0]["next"], "b")
             # 违规 message 也补 next（防御）
             write_message(works["b"], "b/0001.md",
                           {"from": "b", "type": "message"}, "m")
             commit_new_files(works["b"], "b", head, "round-robin")
-            msgs = _each_agent_messages(bare, ["a", "b"])
+            msgs = each_agent_messages(bare, ["a", "b"])
             self.assertEqual(msgs["b"][0]["next"], "a")
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
@@ -520,7 +521,7 @@ class TestCommitNewFiles(unittest.TestCase):
             # 文件被删除（不滞留）
             self.assertFalse(os.path.exists(
                 os.path.join(works["a"], "a/0001.md")))
-            self.assertEqual(_each_agent_messages(bare, ["a", "b"])["a"], [])
+            self.assertEqual(each_agent_messages(bare, ["a", "b"])["a"], [])
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
@@ -635,7 +636,7 @@ class TestFinalize(unittest.TestCase):
             ok = finalize_discussion(works["b"], "b", resp, head)
             self.assertTrue(ok)
             # result.md 提交 + concluded 落盘
-            msgs = _each_agent_messages(bare, ["a", "b"])
+            msgs = each_agent_messages(bare, ["a", "b"])
             self.assertEqual(msgs["b"][-1]["type"], "concluded")
             r = subprocess.run(["git", "show", "HEAD:result.md"], cwd=bare,
                                capture_output=True, text=True)
@@ -657,7 +658,7 @@ class TestFinalize(unittest.TestCase):
             ok = finalize_discussion(works["b"], "b", NoWriteResp(),
                                      git_head(works["b"]))
             self.assertTrue(ok)
-            msgs = _each_agent_messages(bare, ["a", "b"])
+            msgs = each_agent_messages(bare, ["a", "b"])
             self.assertEqual(msgs["b"][-1]["type"], "concluded")
             r = subprocess.run(["git", "show", "HEAD:result.md"], cwd=bare,
                                capture_output=True, text=True)
@@ -673,7 +674,7 @@ class TestFinalize(unittest.TestCase):
                 f.write("# 结论\n\n" + "内容" * 30)
             _commit_result_md(works["b"], "b", "discuss: result.md")
             _commit_result_md(works["b"], "b", "discuss: result.md")  # 幂等
-            msgs = _each_agent_messages(bare, ["a", "b"])
+            msgs = each_agent_messages(bare, ["a", "b"])
             self.assertEqual(msgs["b"], [])
         finally:
             shutil.rmtree(tmp, ignore_errors=True)

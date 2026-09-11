@@ -21,6 +21,7 @@ import json
 import os
 import meeting_fs
 import human_viewer
+import meeting_core
 import meeting_engine
 import re
 import shutil
@@ -881,6 +882,15 @@ def cleanup_discussion(base):
         print(f"[cleanup] 目录不存在: {base}")
         return
     _preserve_result_md(base)
+    # 报告（**删目录前最后一次可读**——目录删后 --report 不可用）。
+    # 报告是附加信息、清理是主职责：报告生成失败**不阻断**清理
+    # （fail-open 只在这一层兜底——build_report 内部各段已各自 fail-open）。
+    print("[cleanup] —— 本次分析报告（删除目录前最后一次可读）——")
+    try:
+        for line in build_report(base):
+            print(line)
+    except Exception as e:                       # noqa: BLE001（兜底不吞：打印）
+        print(f"[cleanup] 报告生成失败（不影响清理）: {e!r}")
     shutil.rmtree(base)
     print(f"[cleanup] 已删除目录 {base}（含 pi-sessions）")
 
@@ -1120,13 +1130,34 @@ def build_report(base):
     # 不是"该 agent 的消息总数"——上限约束的是 meeting 发言轮次，而一个
     # agent 的消息里还有 freezing/all-freezing/pass/concluded 等流程信号。
     # 两者混算会出现"meeting 6/2"这种超限假象（口径错误，2026-09-11 实测）。
+    msgs = meeting_engine.each_agent_messages(bare, agents)
+    lasts = {a: (msgs[a][-1] if msgs[a] else None) for a in agents}
+    types = {a: (lasts[a].get("type") if lasts[a] else None) for a in agents}
     quota_meeting = proto.get("maxMeetingRounds", 10)
     quota_rr = proto.get("maxRRRounds", 7)
-    spoke = _report_meeting_counts(bare, agents)
     out.append("配额：meeting " + "、".join(
-        f"{a} {spoke.get(a, 0)}/{quota_meeting}" for a in agents)
-        + f"（消耗/上限）| RR 上限 {quota_rr}/agent | human 插话 {human_n} 条"
+        f"{a} {meeting_core.meeting_speak_count(msgs, a)}/{quota_meeting}"
+        for a in agents)
+        + f"（消耗/上限，口径 = mode:meeting 且 type:message）"
+        f"| RR 上限 {quota_rr}/agent | human 插话 {human_n} 条"
         "（不占配额；各 agent 上限 +human 条数）")
+    frozen = meeting_core.frozen_agents(agents, types)
+    not_frozen = [a for a in agents if a not in frozen]
+    out.append(f"冻结：{len(frozen)}/{len(agents)} 已冻结"
+               + (f"（{'、'.join(frozen)}）" if frozen else "")
+               + (f"；未冻结 {'、'.join(not_frozen)}" if not_frozen else ""))
+    # aggregate_mode 期望 {agent: {type, mode}}（core 判定入口形态）——
+    # 用 `.get` 规范化：消息缺字段（老产物/手工 fixture）时按 None 处理，
+    # 不得 KeyError（报告契约：读不出 → 降级，不崩）
+    mode_now = meeting_core.aggregate_mode(
+        {a: ({"type": fm.get("type"), "mode": fm.get("mode")} if fm else None)
+         for a, fm in lasts.items()})
+    if mode_now == "round-robin":
+        out.append(f"RR：轮到 "
+                   f"{meeting_engine.rr_next_speaker(bare, agents) or '（未定）'}")
+    else:
+        out.append(f"阶段：{mode_now}")
+    # 标题与口径：一次读取派生的三样观测面（配额进度 / 冻结集合 / RR 位置）
 
     # ---- 进程事实（登记字段；日志的唯一机器消费点） ----
     proc = _report_wake_fields(base)
@@ -1162,35 +1193,8 @@ def build_report(base):
     return out
 
 
-def _report_meeting_counts(bare, agents):
-    """各 agent 的 meeting 发言轮次（消耗配额的部分）。
-
-    判据与状态机一致：`mode == "meeting"` 且 `type == "message"`
-    （engine 的配额计数同义——此处独立实现是因为报告是**只读视图**，
-    不复用状态机内部计数；口径唯一性由判据字面一致 + 测试覆盖保证）。
-    成本：一次 `ls-tree` + 一次 `cat-file --batch`（O(消息数)，冷路径）。
-    fail-open：读不到 → 空 dict（调用方显示 0）。
-    """
-    r = meeting_fs.run_git(bare, "ls-tree", "-r", "-z", "--name-only",
-                           "HEAD", check=False)
-    files = [f for f in r.stdout.rstrip("\0").split("\0")
-             if f and meeting_fs.is_message_file(f)]
-    if not files:
-        return {}
-    contents = meeting_fs.cat_batch(bare, files)
-    counts = {}
-    for path, text in contents.items():
-        who = path.split("/")[0]
-        if who not in agents:
-            continue
-        fm = meeting_fs.parse_frontmatter(text) or {}
-        if fm.get("type") == "message" and fm.get("mode") == "meeting":
-            counts[who] = counts.get(who, 0) + 1
-    return counts
-
-
 def _dur(sec):
-    """人类可读时长（口径由调用方标注）。"""
+    """人类可读时长（口径由调用方在同一行标注——进程跨度/墙钟/间隔）。"""
     sec = int(sec)
     if sec < 60:
         return f"{sec}s"

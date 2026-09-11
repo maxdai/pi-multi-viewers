@@ -252,6 +252,56 @@ class TestMeetingLoopMain(unittest.TestCase):
             shutil.rmtree(tmp, ignore_errors=True)
 
 
+class TestCleanupPrintsReport(unittest.TestCase):
+    """cleanup 打印报告（删目录前最后一次可读）+ 报告失败不阻断清理。"""
+
+    def test_cleanup_prints_report(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = os.path.join(tmp, "mv-x-1")
+            bare = os.path.join(base, "repo.git")
+            os.makedirs(base)
+            subprocess.run(["git", "init", "-q", "--bare", bare], check=True)
+            w = os.path.join(base, "work-a")
+            subprocess.run(["git", "clone", "-q", bare, w], check=True,
+                           capture_output=True)
+            for k, v in (("user.name", "t"), ("user.email", "t@t")):
+                subprocess.run(["git", "config", k, v], cwd=w, check=True)
+            with open(os.path.join(w, "protocol.json"), "w") as f:
+                json.dump({"participants": ["a"], "resultWriter": "a"}, f)
+            with open(os.path.join(w, "result.md"), "w") as f:
+                f.write("# 结论\n\n" + "内容" * 30)
+            subprocess.run(["git", "add", "-A"], cwd=w, check=True,
+                           capture_output=True)
+            subprocess.run(["git", "commit", "-qm", "discuss: setup"],
+                           cwd=w, check=True, capture_output=True)
+            subprocess.run(["git", "push", "-q", "origin", "HEAD"], cwd=w,
+                           check=True, capture_output=True)
+            import start_discussion as sd
+            with mock.patch("builtins.print") as mp:
+                sd.cleanup_discussion(base)
+            out = "\n".join(str(c.args[0]) for c in mp.call_args_list
+                            if c.args)
+            self.assertIn("本次分析报告（删除目录前最后一次可读）", out)
+            self.assertIn("配额：meeting", out)
+            self.assertFalse(os.path.isdir(base))          # 清理完成
+            self.assertTrue(os.path.exists(f"{base}-result.md"))
+
+    def test_report_failure_does_not_block_cleanup(self):
+        """报告生成失败 → 打印失败原因、**仍然删除目录**（fail-open 只在这一层）。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            base = os.path.join(tmp, "mv-x-2")
+            os.makedirs(base)                              # 无 bare → 报告 not-exists 分支
+            import start_discussion as sd
+            with mock.patch.object(sd, "build_report",
+                                   side_effect=RuntimeError("boom")):
+                with mock.patch("builtins.print") as mp:
+                    sd.cleanup_discussion(base)
+            out = "\n".join(str(c.args[0]) for c in mp.call_args_list if c.args)
+            self.assertIn("报告生成失败（不影响清理）", out)
+            self.assertIn("RuntimeError", out)
+            self.assertFalse(os.path.isdir(base))          # 清理未被阻断
+
+
 class TestBuildReport(unittest.TestCase):
     """--report（观测面唯一机器消费出口）：各段取数 + fail-open。"""
 
@@ -326,7 +376,11 @@ class TestBuildReport(unittest.TestCase):
             self.assertNotIn("999,999", txt)
             self.assertNotIn("999.9k", txt)
             # 配额口径 = meeting 轮次/上限（不是消息总数）
-            self.assertIn("配额：meeting a 0/10、b 0/10（消耗/上限）", txt)
+            self.assertIn("配额：meeting a 0/10、b 0/10（消耗/上限，"
+                          "口径 = mode:meeting 且 type:message）", txt)
+            # 三样观测面（第二批）：冻结集合 + 阶段
+            self.assertIn("冻结：0/2 已冻结；未冻结 a、b", txt)
+            self.assertIn("阶段：meeting", txt)
 
     def test_fail_open_missing_dir(self):
         """目录不存在 → n/a（不抛异常、不报错）。"""
@@ -334,6 +388,31 @@ class TestBuildReport(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             txt = "\n".join(sd.build_report(os.path.join(tmp, "nope")))
             self.assertIn("n/a", txt)
+
+    def test_message_files_with_incomplete_fields(self):
+        """有消息文件（含字段不全的）→ 报告不崩（真实暴露：cleanup 路径
+        KeyError('mode')——aggregate_mode 入参必须规范化，缺字段按 None）。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            base = self._env(tmp, with_loop_log=False, with_session=False)
+            w = os.path.join(base, "work-a")
+            os.makedirs(os.path.join(w, "a"), exist_ok=True)
+            # 完整消息（meeting 内容发言 → 计入配额）
+            with open(os.path.join(w, "a/0001.md"), "w") as f:
+                f.write("---\nfrom: a\ntype: message\nmode: meeting\n"
+                        "seen_at: 1\nto: all\n---\n\n正文\n")
+            # 字段不全的消息（缺 mode——老产物/手工构造；不得 KeyError）
+            with open(os.path.join(w, "a/0002.md"), "w") as f:
+                f.write("---\nfrom: a\ntype: freezing\n---\n\n正文\n")
+            subprocess.run(["git", "add", "-A"], cwd=w, check=True,
+                           capture_output=True)
+            subprocess.run(["git", "commit", "-qm", "discuss: a/0001"],
+                           cwd=w, check=True, capture_output=True)
+            subprocess.run(["git", "push", "-q", "origin", "HEAD"], cwd=w,
+                           check=True, capture_output=True)
+            import start_discussion as sd
+            txt = "\n".join(sd.build_report(base))     # 不得抛异常
+            self.assertIn("配额：meeting a 1/10", txt)  # 只数完整的那条
+            self.assertIn("阶段：", txt)
 
     def test_fail_open_missing_logs_and_sessions(self):
         """缺 loop log / session → 对应段 n/a，其余段仍输出（段级隔离）。"""
