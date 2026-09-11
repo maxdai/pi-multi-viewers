@@ -64,38 +64,39 @@ def find_current_dir(cwd=None, sid=None):
     LLM 上下文里再原样复用（改错/截断/相对路径都出过）。发现逻辑下沉后，
     命令可以不带目录，**路径不需要经过任何 LLM 记忆**。
 
-    优先级：
-      1. `mv-<sid>-*` 中的最新（session 隔离——同项目多 session 并发不串台）
-      2. 找不到 → `mv-*` 中的最新（**排除 `mv-spec-*`**：那是尚未被 --start
-         消费的 spec 目录，不是分析目录），标记 `degraded`（调用方应提示）
-      3. 都没有 → (None, False)
+    **只做精确匹配**（`mv-<sid>-*` 中时间戳最新者）：
 
-    判别 = 目录含 `repo.git`（同 engine："bare 是讨论存在的唯一标志"——
-    光看名字会命中残留/无关目录）。
+    为什么**没有**"取项目下最新 `mv-*`"的兜底（e2e16 评审 2:0:1 裁定删除）：
+    1. **破坏性操作不应由工具猜目标**——`--cleanup`/`--say` 作用于发现结果，
+       兜底意味着"猜一个目录然后删它/写它"；最坏失败应是响亮报错而非静默
+       操作错对象；
+    2. 兜底需要机器可判的"这是降级"信号，而 rc 0 + stderr 中文文案不是可靠
+       信号（extension 曾用 `err.includes("警告")` 还原——文案一改就静默失效）；
+    3. 兜底的"最新"按整名排序（含 sid 段）→ 跨 sid 时**系统性取旧**（与
+       "取最新"的语义相反）；
+    4. **不存在"必须无目录且必然无 sid"的设计内场景**：pi 内两条通道都有 sid
+       （bash 注入 `PI_SESSION_ID` / extension `ctx.sessionManager`），终端主
+       路径本就用 `--start` 输出的显式目录。无 sid 时应当报错请调用方显式传目录。
 
-    返回 (绝对路径 | None, degraded: bool)。
+    判别 = 目录含 `repo.git`（同 engine："bare 是讨论存在的唯一标志"——光看
+    名字会命中残留/无关目录）；`mv-spec-*` 不在匹配前缀内（那是尚未被
+    `--start` 消费的 spec 目录）。
+
+    返回绝对路径 | None。
     """
     cwd = cwd or os.getcwd()
     sid = sid if sid is not None else os.environ.get("PI_SESSION_ID", "")
+    if not sid:
+        return None
     try:
         names = sorted(os.listdir(cwd))
     except OSError:
-        return None, False
-
-    def _is_analysis_dir(name):
-        return not name.startswith("mv-spec-") and os.path.isdir(
-            os.path.join(cwd, name, "repo.git"))
-
-    if sid:
-        by_sid = [n for n in names
-                  if n.startswith(f"mv-{sid}-") and _is_analysis_dir(n)]
-        if by_sid:
-            return os.path.join(cwd, by_sid[-1]), False
-    any_mv = [n for n in names
-              if n.startswith("mv-") and _is_analysis_dir(n)]
-    if any_mv:
-        return os.path.join(cwd, any_mv[-1]), True   # 降级：无 sid 匹配
-    return None, False
+        return None
+    # 同 sid 的目录名尾缀 `YYYYMMDD-HHMMSS` 定长可比 → 排序即时间序
+    cands = [n for n in names
+             if n.startswith(f"mv-{sid}-")
+             and os.path.isdir(os.path.join(cwd, n, "repo.git"))]
+    return os.path.join(cwd, cands[-1]) if cands else None
 
 
 def check_status(base):
@@ -153,7 +154,7 @@ def wait_for_completion(base):
     # （原内联 65 行自行 git log 全量 + 手工解析 frontmatter——与
     # viewer 两套输出格式、非增量、概念丢失）。incremental 走
     # since..HEAD 增量 + 统一 format_message。
-    import human_viewer
+    # （函数内重复 import human_viewer 已删——顶层已有；e2e16 F4 清理项）
     sys.stdout.reconfigure(line_buffering=True)
     print(f"[wait] 等待讨论完成: {base}")
     bare = meeting_fs.bare_of_base(base)
@@ -340,7 +341,9 @@ def build_report(base):
         out.append("  n/a（session 缺失，或无本轮数据——边界条目自 2026-09-11 "
                    "起写入，此前的老分析不适用）")
     out.append("（口径：进程跨度=pi 进程生命周期；输出=prompt 分段合计；"
-               "墙钟=commit 时间差——三者不可互替）")
+               "墙钟=commit 时间差——三者不可互替；"
+               "消息数含流程信号（freezing/pass/concluded）与 human，"
+               "配额只计 meeting 发言）")
     return out
 
 
@@ -444,9 +447,9 @@ def _main(argv=None):
     """观测层 CLI——目前只有一个子命令：`--find-dir`（供 wrapper 与
     extension 在"不带目录"时定位当前分析；逻辑单点，两个调用方不各写一份）。
 
-    输出契约：
-      stdout = 绝对路径（找到时）；stderr = 提示（降级/未找到）；
-      退出码 0 = 找到，1 = 未找到。
+    输出契约（二元，无中间态——降级语义已删除，e2e16 F1/F2/F7）：
+      stdout = 绝对路径（找到时）；stderr = 原因（未找到）；
+      退出码 0 = 找到，1 = 未找到（调用方应据此报错请用户显式传目录）。
     """
     import argparse
     ap = argparse.ArgumentParser(description="多视角分析：观测层工具")
@@ -459,14 +462,12 @@ def _main(argv=None):
     if not args.find_dir:
         ap.print_help()
         return 2
-    d, degraded = find_current_dir(args.cwd, args.sid)
+    d = find_current_dir(args.cwd, args.sid)
     if not d:
-        print("错误: 未找到当前分析目录（本目录下没有 mv-* 分析环境）",
+        print("错误: 未找到本 session 的分析目录（cwd 下无 "
+              "mv-<PI_SESSION_ID>-* 环境）——请显式传目录参数",
               file=sys.stderr)
         return 1
-    if degraded:
-        print(f"警告: 未找到本 session 的分析（无 mv-<sid>-*）——"
-              f"取本目录最新: {os.path.basename(d)}", file=sys.stderr)
     print(d)
     return 0
 

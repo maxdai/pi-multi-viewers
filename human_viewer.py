@@ -46,14 +46,9 @@ def participants_from_bare(bare):
     return meeting_fs.read_protocol(bare).get("participants") or None
 
 
-def result_path(base):
-    """result.md 的固定位（`<分析目录>-result.md`，与 --wait / prompt 一致）。
-
-    resultWriter 的 loop 退出（concluded）时保存到该位置，cleanup 兜底再存
-    一次；权威单一事实源是 bare 的 `HEAD:result.md`。调用方**无需**推
-    resultWriter 是谁、也不必进 work 子目录——分析目录删除后该文件仍在。
-    """
-    return f"{base}-result.md"
+# result_path 的实现已迁 meeting_fs（与 RESULT_MD 同家，e2e16 F3）；
+# 本模块保留同名引用，既有的 `human_viewer.result_path` 调用方零改动。
+result_path = meeting_fs.result_path
 
 
 def new_messages(bare, since):

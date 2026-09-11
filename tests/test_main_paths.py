@@ -642,47 +642,49 @@ class TestFindCurrentDir(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             self._env(tmp, [("mv-sidA-20260101-000000", True),
                             ("mv-sidB-20260101-000001", True)])
-            d, degraded = ob.find_current_dir(tmp, "sidA")
+            d = ob.find_current_dir(tmp, "sidA")
             self.assertTrue(d.endswith("mv-sidA-20260101-000000"))
-            self.assertFalse(degraded)
 
     def test_latest_when_same_sid(self):
         import observability as ob
         with tempfile.TemporaryDirectory() as tmp:
             self._env(tmp, [("mv-s-20260101-000000", True),
                             ("mv-s-20260101-000100", True)])
-            d, _ = ob.find_current_dir(tmp, "s")
+            d = ob.find_current_dir(tmp, "s")
             self.assertTrue(d.endswith("mv-s-20260101-000100"))
 
-    def test_fallback_degraded(self):
+    def test_no_fallback_to_latest(self):
+        """无同 sid 匹配 → None（**不降级**）。
+
+        e2e16 F1/F2/F7：此前回退"项目下最新 mv-*"，导致
+        ①破坏性操作（--cleanup/--say）可能作用于猜测目录；
+        ②降级信号只能靠 stderr 中文文案还原（文案一改静默失效）；
+        ③"最新"按整名排序，跨 sid 时系统性取旧。三方裁定删除。
+        """
         import observability as ob
         with tempfile.TemporaryDirectory() as tmp:
             self._env(tmp, [("mv-other-20260101-000000", True)])
-            d, degraded = ob.find_current_dir(tmp, "sidX")
-            self.assertIsNotNone(d)
-            self.assertTrue(degraded, "无 sid 匹配时应标记降级")
+            self.assertIsNone(ob.find_current_dir(tmp, "sidX"),
+                              "无同 sid 匹配必须返回 None，不得回退最新")
 
     def test_skip_spec_dirs(self):
         """mv-spec-* 不是分析目录（未被 --start 消费）——必须排除。"""
         import observability as ob
         with tempfile.TemporaryDirectory() as tmp:
             self._env(tmp, [("mv-spec-20260101-000000", True)])
-            d, degraded = ob.find_current_dir(tmp, "s")
-            self.assertIsNone(d)
-            self.assertFalse(degraded)
+            self.assertIsNone(ob.find_current_dir(tmp, "s"))
 
     def test_requires_repo_git(self):
         """含 repo.git 才算分析环境——光看名字会命中残留/无关目录。"""
         import observability as ob
         with tempfile.TemporaryDirectory() as tmp:
             self._env(tmp, [("mv-s-20260101-000000", False)])
-            d, _ = ob.find_current_dir(tmp, "s")
-            self.assertIsNone(d)
+            self.assertIsNone(ob.find_current_dir(tmp, "s"))
 
     def test_none_found(self):
         import observability as ob
         with tempfile.TemporaryDirectory() as tmp:
-            self.assertEqual(ob.find_current_dir(tmp, "s"), (None, False))
+            self.assertIsNone(ob.find_current_dir(tmp, "s"))
 
     def test_cli_find_dir(self):
         """CLI 契约：找到打印路径 + rc 0；未找到 rc 1。"""
@@ -694,17 +696,19 @@ class TestFindCurrentDir(unittest.TestCase):
             self.assertEqual(rc, 0)
             self.assertIn("mv-s-20260101-000000",
                           str(mp.call_args_list[0].args[0]))
-            # 未找到（空目录）→ rc 1
+            # 未找到：空目录 / sid 不匹配 → 都是 rc 1（**无中间态**）
             empty = os.path.join(tmp, "empty")
             os.makedirs(empty)
             with mock.patch("builtins.print"):
                 rc2 = ob._main(["--find-dir", "--cwd", empty, "--sid", "s"])
             self.assertEqual(rc2, 1)
-            # sid 不匹配但目录存在 → 降级（rc 仍 0，提示在 stderr）
-            with mock.patch("builtins.print"), \
-                    mock.patch("sys.stderr"):
+            with mock.patch("builtins.print"), mock.patch("sys.stderr"):
                 rc3 = ob._main(["--find-dir", "--cwd", tmp, "--sid", "none"])
-            self.assertEqual(rc3, 0)
+            self.assertEqual(rc3, 1, "无同 sid 匹配 = 未找到（不降级）")
+            # 无 sid → rc 1（没有"必然无 sid"的设计内场景，报错要求显式目录）
+            with mock.patch("builtins.print"), mock.patch("sys.stderr"):
+                rc4 = ob._main(["--find-dir", "--cwd", tmp, "--sid", ""])
+            self.assertEqual(rc4, 1)
 
 
 if __name__ == "__main__":

@@ -31,6 +31,21 @@ RESULT_MD = "result.md"
 # 写空文件/仅 frontmatter——只查存在性会退化为空提交，审核 A2）。
 RESULT_MD_MIN_BYTES = 50
 
+
+def result_path(base):
+    """result.md 的固定位（`<分析目录>-result.md`）。
+
+    **与 RESULT_MD 同家**（e2e16 F3）：S1 把"文件叫什么/多大算有效"收进本
+    模块，但拼路径留在 viewer —— 组合层（start_discussion 的 `--status`
+    打印 `[result]`）为拼字符串 import 展示模块，职责颠倒。路径规则是
+    产物契约的一部分，归 fs。
+
+    resultWriter 的 loop 退出（concluded）时保存到该位置，cleanup 兜底再存
+    一次；权威单一事实源是 bare 的 `HEAD:result.md`。调用方**无需**推
+    resultWriter 是谁、也不必进 work 子目录——分析目录删除后该文件仍在。
+    """
+    return f"{base}-{RESULT_MD}"
+
 # 无进展超时兜底（秒）——协议参数的默认值（gen_protocol 固化进
 # protocol.json；engine/fake_agent 的签名默认与 CLI default 同源于此）。
 DEFAULT_STALL_TIMEOUT = 600

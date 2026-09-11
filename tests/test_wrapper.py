@@ -216,7 +216,7 @@ class TestReportDispatch(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             r = run_wrapper(["--report"], cwd=tmp)
             self.assertNotEqual(r.returncode, 0)
-            self.assertIn("未找到当前分析", r.stderr)
+            self.assertIn("未找到本 session 的分析目录", r.stderr)
 
     def test_report_missing_dir_fails(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -269,19 +269,59 @@ class TestDirOptional(unittest.TestCase):
             self.assertEqual(r.returncode, 0, r.stderr)
             self.assertIn("[status]", r.stdout)
 
-    def test_status_degrades_and_warns(self):
-        """sid 不匹配 → 取最新 mv-*，警告打 stderr（不静默插错分析）。"""
+    def test_status_no_sid_match_fails(self):
+        """sid 不匹配 → **rc 1**（不降级取最新——e2e16 F1/F2/F7）。
+
+        降级兜底会让破坏性操作（--cleanup/--say）作用于猜测目录；删除后
+        最坏失败 = 响亮报错要求显式目录。
+        """
         with tempfile.TemporaryDirectory() as tmp:
             self._env(tmp, "mv-other-20260101-000000")
             r = self._run(["--status"], tmp, {"PI_SESSION_ID": "sidZ"})
-            self.assertEqual(r.returncode, 0, r.stderr)
-            self.assertIn("警告", r.stderr)
+            self.assertNotEqual(r.returncode, 0)
+            self.assertIn("请显式传目录参数", r.stderr)
+            # 且**只一条**错误消息（原因由 python 给出，wrapper 不另打——
+            # e2e16 F7：两条文案无信息增益）
+            self.assertEqual(r.stderr.count("错误:"), 1, r.stderr)
 
     def test_status_no_dir_found(self):
         with tempfile.TemporaryDirectory() as tmp:
             r = self._run(["--status"], tmp, {"PI_SESSION_ID": "sidZ"})
             self.assertNotEqual(r.returncode, 0)
-            self.assertIn("未找到当前分析", r.stderr)
+            self.assertIn("未找到本 session 的分析目录", r.stderr)
+
+    def test_view_explicit_dir_not_ignored(self):
+        """F5 回归：--view <dir> 必须用显式目录。
+
+        此前 cmd_view 无条件 shift 后总走自动发现 → 显式目录被**静默丢弃**
+        （多分析并存/跨目录调用看错对象）。测试只覆盖无参形态是回归漏网的
+        直接原因（e2e16 评审 F5）——这里按"新旧行为都测"的教训补上。
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            # 两个并存分析：显式指定 A，自动发现会选 B（更新的那个）
+            a = self._env(tmp, "mv-sidZ-20260101-000000")
+            b = self._env(tmp, "mv-sidZ-20260202-000000")
+            os.makedirs(os.path.join(a, "work-a", "a"), exist_ok=True)
+            with open(os.path.join(a, "work-a", "a", "0001.md"), "w") as f:
+                f.write("---\nfrom: a\ntype: message\nmode: meeting\n---\n\nA 的消息\n")
+            subprocess.run(["git", "add", "-A"], cwd=os.path.join(a, "work-a"),
+                           check=True, capture_output=True)
+            subprocess.run(["git", "commit", "-qm", "discuss: a/0001"],
+                           cwd=os.path.join(a, "work-a"), check=True,
+                           capture_output=True)
+            subprocess.run(["git", "push", "-q", "origin", "HEAD"],
+                           cwd=os.path.join(a, "work-a"), check=True,
+                           capture_output=True)
+            r = self._run(["--view", a], tmp, {"PI_SESSION_ID": "sidZ"})
+            self.assertEqual(r.returncode, 0, r.stderr)
+            # 判别用 HEAD：显式目录 → HEAD 与 A 的 bare 一致（B 有自己的
+            # 独立 HEAD；若误走自动发现（选更新的 B），HEAD 会是 B 的且
+            # A 的消息不会出现）
+            head_a = subprocess.run(
+                ["git", "-C", os.path.join(a, "repo.git"), "rev-parse", "HEAD"],
+                capture_output=True, text=True).stdout.strip()
+            self.assertIn(f"HEAD={head_a}", r.stdout, "应使用显式目录 A")
+            self.assertIn("A 的消息", r.stdout)
 
     def test_say_single_arg_is_text(self):
         """--say "<文本>"（1 参数）= 自动发现 + 文本；

@@ -10,8 +10,9 @@
  *   handler 取 ctx.sessionManager.getSessionId() + ctx.cwd，**调用
  *   observability.py --find-dir**（python 单一实现——wrapper 的消费命令
  *   走同一入口；本扩展不再自持一份发现逻辑，两边口径不会漂移）。
- *   session 隔离（同目录多 session 并发分析互不干扰）；兜底为项目下最新
- *   mv-*，并警告降级（宁可提示也不要静默插错分析）。
+ *   **只精确匹配同 sid 的目录，无降级兜底**（e2e16 F1/F2：降级时插话可能
+ *   写错分析，且判据曾是"stderr 是否含中文'警告'"——文案一改静默失效）；
+ *   未找到 → 报错提示。
  *
  * 前缀 mv- 与 pi-agents-helper 的 discuss-* 命名空间隔离（两个系统的
  * 插话命令都按"同 sid 最新目录"发现目标，共用前缀会互相插错）。
@@ -58,14 +59,15 @@ const OBSERVABILITY = PACKAGE_ROOT
   : "/root/pi-multi-viewers/observability.py"; // 复制安装退化（开发机）
 
 /** 定位当前分析目录：调用 observability.py --find-dir（**python 单一实现**
- *  ——wrapper 消费命令同一入口）。session 隔离与降级规则见该函数 docstring。 */
-function findCurrentDir(
-  cwd: string,
-  sid: string,
-): Promise<{ dir: string | null; degraded: boolean }> {
+ *  ——wrapper 消费命令同一入口）。
+ *
+ *  判据 = **退出码**（不是 stderr 文案——中文提示一改就静默失配，
+ *  e2e16 F2）：rc 0 → stdout 是绝对路径；rc 1 → 未找到（无同 sid 分析）。
+ *  无降级通道（不会回退到"项目下最新"——那会插错分析，e2e16 F1）。 */
+function findCurrentDir(cwd: string, sid: string): Promise<string | null> {
   return new Promise((resolve) => {
     if (!OBSERVABILITY) {
-      resolve({ dir: null, degraded: false });
+      resolve(null);
       return;
     }
     const proc = spawn("python3", [OBSERVABILITY, "--find-dir"], {
@@ -74,18 +76,13 @@ function findCurrentDir(
       stdio: ["ignore", "pipe", "pipe"],
     });
     let out = "";
-    let err = "";
     proc.stdout.on("data", (d) => (out += d.toString()));
-    proc.stderr.on("data", (d) => (err += d.toString()));
+    proc.stderr.on("data", () => {}); // 原因只在 rc=1 时通知用户（见 handler）
     proc.on("close", (code) => {
       const dir = out.trim();
-      resolve({
-        dir: code === 0 && dir ? dir : null,
-        // 降级提示由 python 打到 stderr（"警告: 未找到本 session 的分析…"）
-        degraded: code === 0 && dir !== "" && err.includes("警告"),
-      });
+      resolve(code === 0 && dir ? dir : null);
     });
-    proc.on("error", () => resolve({ dir: null, degraded: false }));
+    proc.on("error", () => resolve(null));
   });
 }
 
@@ -121,22 +118,15 @@ export default function register(pi: any) {
         return;
       }
       const sid = ctx.sessionManager.getSessionId();
-      const found = await findCurrentDir(ctx.cwd, sid);
-      const dir = found.dir;
+      const dir = await findCurrentDir(ctx.cwd, sid);
       if (!dir) {
         ctx.ui.notify(
-          "没有正在进行的多视角分析（cwd 下无 mv-* 目录）。" +
-            "先用 /multi-viewers 启动分析。",
+          "本 session 没有正在进行的多视角分析（cwd 下无 " +
+            `mv-${sid}-* 分析环境）。先用 /multi-viewers 启动，` +
+            "或改用 mv.sh --say <目录> \"<文本>\" 显式指定。",
           "error",
         );
         return;
-      }
-      if (found.degraded) {
-        ctx.ui.notify(
-          `未找到本 session 的分析目录（目录名不含 session id——` +
-            `PI 环境变量可能未注入）——插话指向项目下最新分析: ${dir}`,
-          "warning",
-        );
       }
       const { ok, output } = await runSayer(dir, text);
       if (ok && output) {

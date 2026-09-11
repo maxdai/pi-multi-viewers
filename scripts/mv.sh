@@ -67,11 +67,15 @@ require_dir() {
 # 路径的是 --start 的输出，此前消费命令都要求把它传给每个命令，等于让
 # 调用方（主 pi）把长绝对路径记在 LLM 上下文里再复用——改错/截断/相对
 # 路径都出过（参数形态标准化就是为此）。发现逻辑下沉后路径不经 LLM 记忆。
+# **调用方必须 `|| exit $?`**：本函数的 exit 发生在命令替换的子 shell 里，
+# 不检查返回值会让空结果继续往下走（表现为双重错误消息：python 的原因 +
+# require_dir 的"缺少目录参数"——实测踩到）。
 resolve_dir() {
     local dir="${1:-}"
     if [ -z "$dir" ]; then
-        dir="$("$PYTHON" "$OBSERVABILITY" --find-dir)" || fail \
-            "未指定目录且未找到当前分析（本目录无 mv-* 分析环境）"
+        # 省略 = 自动发现；**失败原因由 python 给出**（错误文案留一处——
+        # e2e16 F7：两条文案没有信息增益，只用工具层那条更贴近原因）。
+        dir="$("$PYTHON" "$OBSERVABILITY" --find-dir)" || exit 1
     fi
     normalize_dir "$dir"
 }
@@ -84,39 +88,45 @@ normalize_dir() {
 
 cmd_status() {
     local dir
-    dir="$(resolve_dir "${1:-}")"
+    dir="$(resolve_dir "${1:-}")" || exit $?
     require_dir "$dir"
     "$PYTHON" "$START_DISCUSSION" --dir "$dir" --status
 }
 
 cmd_report() {
     local dir
-    dir="$(resolve_dir "${1:-}")"
+    dir="$(resolve_dir "${1:-}")" || exit $?
     require_dir "$dir"
     "$PYTHON" "$START_DISCUSSION" --dir "$dir" --report
 }
 
 cmd_wait() {
     local dir
-    dir="$(resolve_dir "${1:-}")"
+    dir="$(resolve_dir "${1:-}")" || exit $?
     require_dir "$dir"
     "$PYTHON" "$START_DISCUSSION" --dir "$dir" --wait
 }
 
 cmd_cleanup() {
     local dir
-    dir="$(resolve_dir "${1:-}")"
+    dir="$(resolve_dir "${1:-}")" || exit $?
     require_dir "$dir"
     "$PYTHON" "$START_DISCUSSION" --dir "$dir" --cleanup
 }
 
 cmd_view() {
     local dir since=""
-    # 目录可省略：有参数时先吃掉（可能是目录，也可能是 --since 起始）
-    if [ "${1:-}" != "--since" ] && [ "$#" -ge 1 ]; then
+    # 首参：非空且非 --since → 显式目录（**F5 回归修复**：此前无条件 shift
+    # 后总走自动发现，显式目录被静默丢弃——多分析并存/跨目录调用会看错对象）。
+    # 判据与 status/report/wait/cleanup 的 `resolve_dir "${1:-}"` 一致。
+    # 注意与 --say 的区别：--say 按**参数个数**区分（文本可含空格/以 -- 开头，
+    # 不能按值判形）；--view 的 --since 是本命令自己的选项名，可以判形。
+    if [ -n "${1:-}" ] && [ "${1:-}" != "--since" ]; then
+        dir="$(resolve_dir "$1")" || exit $?
         shift
+    else
+        dir="$(resolve_dir "")" || exit $?
     fi
-    dir="$(resolve_dir "")"
     while [ "$#" -gt 0 ]; do
         case "$1" in
             --since)
@@ -147,10 +157,10 @@ cmd_say() {
     #   --say "<文本>"         目录自动发现（本 session 当前分析）
     local dir text
     if [ "$#" -ge 2 ]; then
-        dir="$(resolve_dir "$1")"
+        dir="$(resolve_dir "$1")" || exit $?
         text="$2"
     else
-        dir="$(resolve_dir "")"
+        dir="$(resolve_dir "")" || exit $?
         text="${1:-}"
     fi
     require_dir "$dir"

@@ -100,7 +100,7 @@ compaction 的 `firstKeptEntryId` 起 + 其后的条目"——窗口内含 compa
 | `status-<agent>.json` | loop | `{"sessionID": ...}` | 流程（崩溃恢复） | 是（恢复用） | O(1) |
 | `pi-sessions/fork-src-*.jsonl` | pi | 文档化 session schema | fork 构建 + `--report` | 否（报告用） | O(MB) 全量 → **禁轮询** |
 | `result.md`（固定位） | resultWriter loop | 结论文档 | 人 | 是（收尾判据） | — |
-| `--report`（视图） | observability | 文本行 | 人（**三个出口**，见下） | **否**（不得升级为验收 gate） | 冷路径一次性 |
+| `--report`（视图） | observability | 文本行 | 人（**三个出口**，见下） | **否**（不得升级为验收 gate） | 冷路径一次性 —— **O(session 大小)**：每 agent 读整个 fork-src jsonl（实测 3 × 789KB ≈ 2.4MB/次、50–150ms/次，×3 出口 <0.3s/次分析），**不得进入任何轮询路径**（e2e16 评审量化） |
 
 **报告的三个出口**（同一 `build_report`，同一份内容）：
 1. **`--follow` 结束**——viewer 在 done 分支自动附报告（`human_viewer._print_report`）。
@@ -282,10 +282,17 @@ commit 是溯源记录、本节是长期引用点——不并存两份权威值�
     流程依赖 LLM（会漏、不可验收），正是本项目一贯要消除的形态；报告既然
     是给用户的，就该长在用户直接看的通道上。`--view --since` 不附（主 pi
     通道，进 context 且对模型无用）。
-15. **消费命令的目录可省略（自动发现）**：`--view/--say/--status/--report/
-    --wait/--cleanup` 不带目录 → 按 cwd + `PI_SESSION_ID` 发现当前分析
-    （`mv-<sid>-*` 最新；兜底最新 `mv-*` 并警告；判据 = 含 `repo.git`，
-    同 engine"bare 是分析存在的唯一标志"；排除 `mv-spec-*`）。
+15. **消费命令的目录可省略（自动发现，仅精确 sid 匹配）**：`--view/--say/
+    --status/--report/--wait/--cleanup` 不带目录 → 按 cwd + `PI_SESSION_ID`
+    发现当前分析（`mv-<sid>-*` 最新；判据 = 含 `repo.git`，同 engine
+    "bare 是分析存在的唯一标志"；`mv-spec-*` 不在前缀内）。
+    **无降级兜底**（e2e16 评审 2:0:1 裁定）：曾有"无 sid 匹配 → 取项目下
+    最新 `mv-*`"的兜底，三宗罪——①破坏性操作（`--cleanup`/`--say`）会作用
+    于**猜测目录**；②降级只能靠 stderr 中文文案识别（extension 曾用
+    `includes("警告")` 还原布尔，文案一改静默失效，与"判据用退出码"自相
+    矛盾）；③"最新"按整名排序，跨 sid 时**系统性取旧**。核查确认**不存在
+    "必须无目录且必然无 sid"的设计内场景**（pi 两条通道都有 sid，终端主路径
+    本就显式带目录）→ 未匹配 = rc 1 报错请显式传目录。
     **动机**：唯一知道路径的是 `--start` 的输出，此前每个消费命令都要求
     传它 → 主 pi 必须把长绝对路径记在 LLM 上下文里复用（改错/截断/相对
     路径都出过）。发现逻辑下沉后**路径不经过 LLM**。

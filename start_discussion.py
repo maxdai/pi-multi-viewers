@@ -607,7 +607,7 @@ def main():
         if st == "done":
             # 产物路径一并给出：目录可省略后（自动发现），调用方**无法**
             # 自己拼出 `<目录>-result.md`——路径由机制提供，不经 LLM 记忆
-            print(f"[result] {human_viewer.result_path(base)}")
+            print(f"[result] {meeting_fs.result_path(base)}")
         return
     if args.report:
         for line in build_report(base):
