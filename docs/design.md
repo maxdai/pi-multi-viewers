@@ -239,12 +239,20 @@ commit 是溯源记录、本节是长期引用点——不并存两份权威值�
     消费端**只认它**，旧措辞 spec → fail-fast（明确报错，不静默退化）。
     曾出现双轨（生成产 `# 讨论主题：`、消费端写兼容循环兜两种）——那
     正是"补丁掩盖设计缺陷"的形态（不改生产、只兜消费端）。
-11. **`result.md` 的文件名与有效性阈值 = `meeting_fs.RESULT_MD` /
+11. **stall 接管 = 心跳式软仲裁（非互斥）**：非 rw 在无进展超时时接管收尾，
+    先 pull 重检共享事实（concluded / result.md）→ 写接管声明 commit
+    （**只为推进 HEAD**，使对方 `_stall_elapsed` 归零而退出该分支）→
+    finalize。毫秒级同轮窗口存在（双方都可能 finalize），但**不是死锁**：
+    靠 push 容错 + 下轮 concluded 退出兜底，产物始终唯一。声明只降低并发
+    概率，**不构成互斥保证**（注释勿写"天然唯一"）。实测（2026-09-11，
+    381 测试中的 `TestStallTakeover`）：a 进入接管 0.11s 内完成声明→收尾→
+    concluded，b 晚 1.4s 只见 concluded 即退出——正常时序下软仲裁生效。
+12. **`result.md` 的文件名与有效性阈值 = `meeting_fs.RESULT_MD` /
     `RESULT_MD_MIN_BYTES`**：产品级核心产物，此前 8 处字面量分散在
     engine/loop/viewer/start_discussion/fake_agent（`repo.git` 早已收归
     fs 层，产物名却没有家）。文件叫什么、多大算有效——同一概念的两个
     数字住在一起。
-12. **git 守卫范围 = 从讨论 workdir 发起的操作**（`GIT_CEILING_DIRECTORIES`
+13. **git 守卫范围 = 从讨论 workdir 发起的操作**（`GIT_CEILING_DIRECTORIES`
    注入于 spawn）；主项目仓库不在守卫范围（agent 的 cwd 就是主项目，其
    约束归指令层 + 主项目 `.gitignore`）。要拦主仓库需换机制类（沙箱/钩子），
    经评估收益不支撑扩面。

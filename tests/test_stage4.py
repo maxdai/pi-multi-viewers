@@ -25,8 +25,11 @@ from tests.test_meeting_concurrency import setup_env
 class TestStage4(unittest.TestCase):
 
     def setUp(self):
-        self.base = tempfile.mkdtemp()
-        _, self.bare, self.wd = setup_env("stage4", ["a", "b", "c"])
+        # 用例级 teardown 的正形：self.base 必须是**被测环境真正所在**的目录
+        # ——此前这里是 `tempfile.mkdtemp()`（空目录），而 setup_env 的环境
+        # 建在 /tmp/meeting-test/stage4，tearDown 删的是那个空目录 →
+        # 真实环境从不清理（残留堆积，2026-09-11 实测发现 3 个）
+        self.base, self.bare, self.wd = setup_env("stage4", ["a", "b", "c"])
         self.agents = ["a", "b", "c"]
         for ag in self.agents:
             git_pull(self.wd[ag])
@@ -194,8 +197,11 @@ class TestNextMsgId(unittest.TestCase):
     """
 
     def setUp(self):
-        self.base = tempfile.mkdtemp()
-        _, self.bare, self.wd = setup_env("stage4-nid", ["a", "b", "c"])
+        # 用例级 teardown 的正形：self.base 必须是**被测环境真正所在**的目录
+        # ——此前这里是 `tempfile.mkdtemp()`（空目录），而 setup_env 的环境
+        # 建在 /tmp/meeting-test/stage4-nid，tearDown 删的是那个空目录 →
+        # 真实环境从不清理（残留堆积，2026-09-11 实测发现 3 个）
+        self.base, self.bare, self.wd = setup_env("stage4-nid", ["a", "b", "c"])
         self.agents = ["a", "b", "c"]
         for ag in self.agents:
             git_pull(self.wd[ag])
@@ -257,8 +263,11 @@ class TestStallElapsed(unittest.TestCase):
     """
 
     def setUp(self):
-        self.base = tempfile.mkdtemp()
-        _, self.bare, self.wd = setup_env("stage4-stall", ["a", "b"])
+        # 用例级 teardown 的正形：self.base 必须是**被测环境真正所在**的目录
+        # ——此前这里是 `tempfile.mkdtemp()`（空目录），而 setup_env 的环境
+        # 建在 /tmp/meeting-test/stage4-stall，tearDown 删的是那个空目录 →
+        # 真实环境从不清理（残留堆积，2026-09-11 实测发现 3 个）
+        self.base, self.bare, self.wd = setup_env("stage4-stall", ["a", "b"])
         from meeting_fs import git_head
         self.head = git_head(self.wd["a"])
 
