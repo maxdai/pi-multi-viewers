@@ -35,6 +35,7 @@ from meeting_fs import (
     git_show, is_message_file, parse_log_nameonly,
     read_protocol, cat_batch, remove_message, write_text, file_size,
     bare_of_base, bare_of_workdir, log,
+    RESULT_MD, RESULT_MD_MIN_BYTES,
 )
 from meeting_core import (
     meeting_speak_count as core_meeting_speak_count,
@@ -447,7 +448,7 @@ def _result_md_valid(workdir):
     LLM 可能写空文件/仅 frontmatter——存在性检查退化为空提交（审核 A2）。
     存在性与大小经由 fs.file_size 一次判定（-1 = 不存在/不可读）。
     """
-    return file_size(workdir, "result.md") > 50
+    return file_size(workdir, RESULT_MD) > RESULT_MD_MIN_BYTES
 
 
 def finalize_discussion(workdir, agent, responder, head, reason="consensus"):
@@ -462,7 +463,7 @@ def finalize_discussion(workdir, agent, responder, head, reason="consensus"):
     responder(workdir, agent, head, [], False, False, False,
               finalizing=True, finalize_reason=reason)
     # ② 校验 result.md 有效（存在 + 非空）；无则重试（无静默铁律的扩展）
-    result_path = os.path.join(workdir, "result.md")
+    result_path = os.path.join(workdir, RESULT_MD)
     for _ in range(MAX_RETRY):
         if _result_md_valid(workdir):
             break
@@ -475,7 +476,7 @@ def finalize_discussion(workdir, agent, responder, head, reason="consensus"):
         _commit_result_md(workdir, agent, "discuss: result.md")
     else:
         log(agent, "result.md 重试后仍无效——loop 兜底代写")
-        write_text(workdir, "result.md",
+        write_text(workdir, RESULT_MD,
                    "# 讨论结论\n\n（resultWriter 未能生成有效 result.md，"
                    f"由本地循环兜底代写。收尾原因：{reason}）\n")
         _commit_result_md(workdir, agent, "discuss: result.md (loop fallback)")
@@ -491,10 +492,10 @@ def _commit_result_md(workdir, agent, subject):
     用 git status --porcelain（不用 git diff --quiet——diff 看不到
     未跟踪新文件，会误判"已提交"导致 result.md 永不 commit）。
     """
-    r = run_git(workdir, "status", "--porcelain", "--", "result.md",
+    r = run_git(workdir, "status", "--porcelain", "--", RESULT_MD,
                 check=False)
     if r.stdout.strip():
-        git_commit(workdir, ["result.md"], subject)
+        git_commit(workdir, [RESULT_MD], subject)
     else:
         log(agent, "result.md 无改动——跳过 commit（幂等）")
 

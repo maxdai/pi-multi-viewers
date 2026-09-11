@@ -505,7 +505,7 @@ def make_responder(pure, fork_source=None, fork_cwd=None,
             else:
                 reason_txt = "无进展超时（stall），未完全共识"
             # fork 模式（cwd=主项目）下“工作区根目录”有歧义——路径必须绝对
-            result_path = os.path.join(workdir, "result.md")
+            result_path = os.path.join(workdir, meeting_fs.RESULT_MD)
             prompt = (f"讨论已收敛（{reason_txt}）。"
                       f"请写 result.md 到 {result_path}，总结讨论结论。")
             if retry:

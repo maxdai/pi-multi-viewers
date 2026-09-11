@@ -21,6 +21,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import meeting_fs
 from meeting_fs import next_msg_id, write_message
 from meeting_engine import agent_loop
 
@@ -65,7 +66,7 @@ def make_responder(min_sleep, max_sleep, crash_rate):
         # --- 内容决定（LLM 的判断）---
         if finalizing:
             # 收尾指令：resultWriter 写 result.md（双面约束：此时才允许写）
-            result_path = os.path.join(workdir, "result.md")
+            result_path = os.path.join(workdir, meeting_fs.RESULT_MD)
             # 内容 >50 字节（_result_md_valid 阈值，审核#3）——否则恒走
             # loop 兜底代写，正常收尾路径零验证（fake 与真实 responder 语义不一致）
             # 文案三分支（review4 L12）：stall 不误标"配额耗尽"

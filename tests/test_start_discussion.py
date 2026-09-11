@@ -61,7 +61,7 @@ class TestGenProtocol(unittest.TestCase):
 class TestGenQuestion(unittest.TestCase):
     def test_topic_only(self):
         q = gen_question("主题", None, None, None)
-        self.assertIn("# 讨论主题：主题", q)
+        self.assertIn("# 分析主题：主题", q)
         self.assertNotIn("初始立场", q)
         self.assertNotIn("待回答的问题", q)
 

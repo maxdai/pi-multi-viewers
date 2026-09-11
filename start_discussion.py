@@ -377,7 +377,10 @@ def gen_question(topic, stances, background, questions):
     分层（2026-08-09）：background 移到 AGENTS.md（共享，system prompt）；
     立场保持在此（非强制、可被说服，不进 system prompt）。
     """
-    lines = [f"# 讨论主题：{topic}", ""]
+    # 措辞与 spec 骨架（gen_spec_skeleton）、spec-readme 模板、prompt 统一为
+    # "# 分析主题："——**单一措辞**，消费端只认它（此前生产路径产
+    # "# 讨论主题：" 而消费端写兼容循环兜两种，根因却是生产自己在产旧措辞）
+    lines = [f"# 分析主题：{topic}", ""]
     if stances:
         lines += ["## 初始立场", "每个参与者有自己的初始立场（可被论据说服）：", ""]
         for k, v in stances.items():
@@ -684,7 +687,7 @@ def _resolve_spec(spec, agents, topic, background, stances, questions, models,
     # spec 必须有 question.md（讨论起点不可缺）
     if not os.path.isfile(os.path.join(spec_dir, "question.md")):
         return None, None, None, "错误: spec 缺少 question.md（讨论起点，先 --spec-gen 生成）"
-    # 空正文校验（审核#19）：删到只剩说明行 → 无讨论主题（CLI 路径有
+    # 空正文校验（审核#19）：删到只剩说明行 → 无分析主题（CLI 路径有
     # --topic 必填对等约束）
     if not (_spec_read(spec_dir, "question.md") or "").strip():
         return None, None, None, "错误: spec 的 question.md 正文为空（讨论起点不可缺）"
@@ -728,12 +731,10 @@ def setup_environment(args, participants, base, spec_dir=None,
     spec_topic = None
     if spec_question is not None:
         for line in spec_question.splitlines():
-            # 兼容两种措辞（make_spec fixture 用旧版"讨论主题"）
-            for prefix in ("# 分析主题：", "# 讨论主题："):
-                if line.startswith(prefix):
-                    spec_topic = line.replace(prefix, "").strip()
-                    break
-            if spec_topic:
+            # **只认一种措辞**（"# 分析主题："）——生成端与消费端同一约定；
+            # 旧 spec 用别的措辞 → 落到下方 fail-fast（明确报错，不静默）
+            if line.startswith("# 分析主题："):
+                spec_topic = line.replace("# 分析主题：", "").strip()
                 break
     if spec_dir and not spec_topic:
         raise ValueError(
@@ -962,7 +963,7 @@ def check_status(base):
         return "done"
     # 未完成：有 result.md 但未收尾 → 看 loop 存活区分收尾中/收尾中断
     r = meeting_fs.run_git(bare, "log", "--all", "--format=%H", "--",
-                           "result.md", check=False)
+                           meeting_fs.RESULT_MD, check=False)
     if r.stdout.strip():
         return "running" if _loops_alive(base) else "stalled"
     return "running" if _loops_alive(base) else "stopped"
@@ -1296,7 +1297,7 @@ def main():
                         help="讨论运行目录（创建/启动/清理/状态/等待用；--spec-gen 不需要）")
     parser.add_argument("--agents", default=None,
                         help="参与者（逗号分隔，默认 a,b；--spec 时不可传）")
-    parser.add_argument("--topic", default=None, help="讨论主题（--skip-setup 时不需要）")
+    parser.add_argument("--topic", default=None, help="分析主题（--skip-setup 时不需要）")
     parser.add_argument("--stances", default=None, help='JSON: {"a": "立场"}')
     parser.add_argument("--background", default=None, help="背景说明")
     parser.add_argument("--questions", default=None, help="待回答问题（|分隔，对齐 RR）")

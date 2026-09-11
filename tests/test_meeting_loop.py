@@ -394,7 +394,9 @@ class TestForkWake(unittest.TestCase):
         生成的 `# 讨论主题：` 会静默退化为“见 question.md”）。"""
         with open(os.path.join(self.workdir, "question.md"), "w",
                   encoding="utf-8") as f:
-            f.write("# 讨论主题：CLI 前缀的主题\n")   # 旧实现读不到这个前缀
+            # 这里刻意写**正确的**前缀（"# 分析主题："）——若实现回退去解析
+            # question.md，就会读到它；正确行为是只认 protocol.topic
+            f.write("# 分析主题：question.md 里的主题\n")
         proc = FakeProc("ok", out='{"type": "session", "id": "uuid-1"}')
         _, pm = self._run(proc, topic="来自 protocol 的主题")
         cmd = pm.call_args[0][0]

@@ -79,14 +79,14 @@ class TestStripEmptySections(unittest.TestCase):
     """_strip_empty_sections：未填可选节（占位符）注入前去掉（打磨项 2026-09-01）。"""
 
     def test_placeholder_sections_removed(self):
-        q = "# 讨论主题：T\n\n## 初始立场（可选）\n- a: 立场\n- b: 立场\n\n## 待回答的问题（可选）\n- 问题\n"
+        q = "# 分析主题：T\n\n## 初始立场（可选）\n- a: 立场\n- b: 立场\n\n## 待回答的问题（可选）\n- 问题\n"
         out = _strip_empty_sections(q)
         self.assertNotIn("初始立场", out)
         self.assertNotIn("待回答的问题", out)
-        self.assertIn("# 讨论主题：T", out)
+        self.assertIn("# 分析主题：T", out)
 
     def test_filled_section_kept(self):
-        q = "# 讨论主题：T\n\n## 初始立场（可选）\n- a: 我选 Python\n\n## 待回答的问题（可选）\n- 并发场景下各自优劣势？\n"
+        q = "# 分析主题：T\n\n## 初始立场（可选）\n- a: 我选 Python\n\n## 待回答的问题（可选）\n- 并发场景下各自优劣势？\n"
         out = _strip_empty_sections(q)
         self.assertIn("## 初始立场（可选）", out)
         self.assertIn("我选 Python", out)
@@ -94,7 +94,7 @@ class TestStripEmptySections(unittest.TestCase):
 
     def test_mixed_sections(self):
         """已填的保留、未填的去掉（同文件混合）。"""
-        q = "# 讨论主题：T\n\n## 初始立场（可选）\n- a: 立场\n\n## 待回答的问题（可选）\n- 两种语言并发优劣？\n"
+        q = "# 分析主题：T\n\n## 初始立场（可选）\n- a: 立场\n\n## 待回答的问题（可选）\n- 两种语言并发优劣？\n"
         out = _strip_empty_sections(q)
         self.assertNotIn("初始立场", out)
         self.assertIn("## 待回答的问题（可选）", out)
@@ -625,7 +625,7 @@ class TestSpecSetup(unittest.TestCase):
         try:
             os.makedirs(tmp + "/spec/agents", exist_ok=True)
             with open(tmp + "/spec/question.md", "w") as f:
-                f.write("# question.md——说明行\n\n# 讨论主题：只有问题")
+                f.write("# question.md——说明行\n\n# 分析主题：只有问题")
             with open(tmp + "/spec/agents/a.md", "w") as f:
                 f.write("# a.md——说明行\n\na 的分工")
             base = tmp + "/env"
@@ -638,7 +638,7 @@ class TestSpecSetup(unittest.TestCase):
             self.assertNotIn("b 的分工", bdef)
             # question.md 正常注入
             q = open(os.path.join(base, "work-a/question.md")).read()
-            self.assertIn("# 讨论主题：只有问题", q)
+            self.assertIn("# 分析主题：只有问题", q)
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 

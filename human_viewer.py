@@ -106,7 +106,7 @@ def is_finished(bare, agents, mode=None):
         mode = core_aggregate_mode(each_agent_last(bare, agents))
     if mode != "concluded":
         return False
-    content = git_show(bare, "HEAD", "result.md")
+    content = git_show(bare, "HEAD", meeting_fs.RESULT_MD)
     return bool(content) and len(content) > 50
 
 
