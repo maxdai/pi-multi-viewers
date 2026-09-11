@@ -233,7 +233,18 @@ commit 是溯源记录、本节是长期引用点——不并存两份权威值�
    `mv-spec-*`）并**警告降级**
    （宁可提示也不静默插错分析）。观看仍用 `!!` 流式（命令 API 无原生流式
    通道，bash 流式是平台原生能力）。
-10. **git 守卫范围 = 从讨论 workdir 发起的操作**（`GIT_CEILING_DIRECTORIES`
+10. **question.md 的主题行措辞 = `# 分析主题：`（唯一）**：生成端
+    （`gen_question` / `gen_spec_skeleton`）、模板（`spec-readme`）、prompt、
+    消费端（`setup_environment` 提取 `protocol.topic`）四处同一措辞；
+    消费端**只认它**，旧措辞 spec → fail-fast（明确报错，不静默退化）。
+    曾出现双轨（生成产 `# 讨论主题：`、消费端写兼容循环兜两种）——那
+    正是"补丁掩盖设计缺陷"的形态（不改生产、只兜消费端）。
+11. **`result.md` 的文件名与有效性阈值 = `meeting_fs.RESULT_MD` /
+    `RESULT_MD_MIN_BYTES`**：产品级核心产物，此前 8 处字面量分散在
+    engine/loop/viewer/start_discussion/fake_agent（`repo.git` 早已收归
+    fs 层，产物名却没有家）。文件叫什么、多大算有效——同一概念的两个
+    数字住在一起。
+12. **git 守卫范围 = 从讨论 workdir 发起的操作**（`GIT_CEILING_DIRECTORIES`
    注入于 spawn）；主项目仓库不在守卫范围（agent 的 cwd 就是主项目，其
    约束归指令层 + 主项目 `.gitignore`）。要拦主仓库需换机制类（沙箱/钩子），
    经评估收益不支撑扩面。
