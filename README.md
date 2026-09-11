@@ -89,6 +89,8 @@ scripts/mv.sh --start <spec目录>              # 启动（自动挂载主 sessi
 
 # 观看：--start 会输出可直接执行的 !! 流式观看命令（复制执行）
 scripts/mv.sh --view <dir>                    # 或一次性增量查看（主 pi 记录 HEAD 作下轮 --since）
+#  --follow 会打印【状态】(meeting/all-freezing/round-robin/concluded)
+#         与【进度】(meeting 消耗/上限 ｜ freezing 集合 ｜ rr → 下一位)
 
 # 插话 / 状态 / 收尾
 scripts/mv.sh --say <dir> "<文本>"             # 插话（命令行形态；pi 内用 /multi-viewers-say）

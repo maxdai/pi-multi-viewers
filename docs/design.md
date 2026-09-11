@@ -112,6 +112,15 @@ BOUNDARY_TYPE`）——**显式登记"历史（fork 携带）/ 本轮"的分界*
 推断都会漂移（切换叙事改措辞、时钟精度）。2026-09-11 实测：不带边界时报告
 把 717 条 fork 历史算成"本轮 367 次响应 / input 1.2M / cacheRead 136.6M"。
 
+**viewer 进度行（三样观测面）**：`--follow` 每轮在【状态】之外打印
+【进度】行——`meeting <消耗>/<上限> · … ｜ freezing <已冻结>/<总数>（名单）
+｜ rr → <下一位>`。**状态名一律用协议术语**（`meeting`/`freezing`/`rr`；
+译成中文会引入第二套命名，"冻结"到底指 freezing 还是 all-freezing 说不清）。
+判定与 `--report` 共用 core/engine 单一实现（`meeting_speak_count` /
+`frozen_agents` / `rr_next_speaker`），且共用调用方已读的 `msgs`——
+**零新增 bare 读取**（实测改动前后同为 6 次 run 调用 + 1 次 cat-file 批读；
+`rr` 位置仅在 RR 阶段按需调权威实现）。进度行**只在变化时打印**（避免刷屏）。
+
 **报告的打印位置**：`--report`（手动，任意时刻）+ `--cleanup` 前（自动，
 删目录前最后一次可读——目录删后 `--report` 不可用）。cleanup 层对报告
 fail-open（报告失败不阻断清理，且**打印**失败原因不静默）。

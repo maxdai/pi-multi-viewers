@@ -16,6 +16,10 @@ from unittest import mock
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import human_viewer
+from meeting_core import (aggregate_mode as core_aggregate_mode,
+                          frozen_agents, meeting_speak_count)
+from meeting_engine import each_agent_messages
+from human_viewer import progress_text
 import meeting_fs
 from human_viewer import (participants_from_bare, result_path,
                           new_messages, format_message, incremental, main)
@@ -178,6 +182,92 @@ class TestMain(unittest.TestCase):
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
+
+
+class TestProgressText(unittest.TestCase):
+    """进度行（三样观测面）：状态名用协议术语，不翻译。"""
+
+    def _env(self, agents=("a", "b"), max_meeting=10):
+        tmp = tempfile.mkdtemp(prefix="prog-")
+        base = os.path.join(tmp, "mv-x-1")
+        bare = os.path.join(base, "repo.git")
+        os.makedirs(base)
+        subprocess.run(["git", "init", "-q", "--bare", bare], check=True)
+        w = os.path.join(base, "work-a")
+        subprocess.run(["git", "clone", "-q", bare, w], check=True,
+                       capture_output=True)
+        for k, v in (("user.name", "t"), ("user.email", "t@t")):
+            subprocess.run(["git", "config", k, v], cwd=w, check=True)
+        with open(os.path.join(w, "protocol.json"), "w") as f:
+            json.dump({"participants": list(agents), "resultWriter": agents[-1],
+                       "maxMeetingRounds": max_meeting}, f)
+        subprocess.run(["git", "add", "-A"], cwd=w, check=True,
+                       capture_output=True)
+        subprocess.run(["git", "commit", "-qm", "setup"], cwd=w, check=True,
+                       capture_output=True)
+        subprocess.run(["git", "push", "-q", "origin", "HEAD"], cwd=w,
+                       check=True, capture_output=True)
+        return tmp, base, bare, w
+
+    def _msg(self, w, ag, n, typ, mode="meeting", nxt=None):
+        os.makedirs(os.path.join(w, ag), exist_ok=True)
+        fm = f"---\nfrom: {ag}\ntype: {typ}\nmode: {mode}\nseen_at: 1\nto: all\n"
+        if nxt:
+            fm += f"next: {nxt}\n"
+        fm += "---\n\n正文\n"
+        with open(os.path.join(w, ag, f"{n:04d}.md"), "w") as f:
+            f.write(fm)
+        subprocess.run(["git", "add", "-A"], cwd=w, check=True,
+                       capture_output=True)
+        subprocess.run(["git", "commit", "-qm", f"discuss: {ag}/{n:04d}"],
+                       cwd=w, check=True, capture_output=True)
+        subprocess.run(["git", "push", "-q", "origin", "HEAD"], cwd=w,
+                       check=True, capture_output=True)
+
+    def test_terms_are_protocol_names(self):
+        """三样观测面用协议术语（meeting / freezing / rr），不用中文译名。"""
+        tmp, base, bare, w = self._env()
+        try:
+            self._msg(w, "a", 1, "message", "meeting")
+            self._msg(w, "b", 1, "freezing", "meeting")
+            msgs = each_agent_messages(bare, ["a", "b"])
+            lasts = {a: (msgs[a][-1] if msgs[a] else None) for a in ["a", "b"]}
+            mode = core_aggregate_mode(lasts)
+            txt = progress_text(bare, ["a", "b"], msgs, lasts, mode, 10)
+            self.assertIn("meeting 1/10", txt)       # a 的配额消耗
+            self.assertIn("freezing 1/2（b）", txt)  # 冻结集合（用协议名）
+            self.assertNotIn("冻结", txt)            # 不出现中文译名
+            self.assertNotIn("rr →", txt)            # 非 RR 阶段不显示 rr
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_rr_position_only_in_rr(self):
+        """RR 阶段显示 `rr → <agent>`（权威实现，取 next 链）。"""
+        tmp, base, bare, w = self._env()
+        try:
+            self._msg(w, "a", 1, "pass", "round-robin", nxt="b")
+            msgs = each_agent_messages(bare, ["a", "b"])
+            lasts = {a: (msgs[a][-1] if msgs[a] else None) for a in ["a", "b"]}
+            mode = core_aggregate_mode(lasts)
+            self.assertEqual(mode, "round-robin")
+            txt = progress_text(bare, ["a", "b"], msgs, lasts, mode, 10)
+            self.assertIn("rr → b", txt)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_quota_without_limit(self):
+        """未传配额上限 → 只显示消耗数（不猜、不硬编码默认值）。"""
+        tmp, base, bare, w = self._env()
+        try:
+            self._msg(w, "a", 1, "message", "meeting")
+            msgs = each_agent_messages(bare, ["a"])
+            lasts = {"a": msgs["a"][-1] if msgs["a"] else None}
+            txt = progress_text(bare, ["a"], msgs, lasts,
+                                core_aggregate_mode(lasts), None)
+            self.assertIn("meeting 1 ｜", txt)
+            self.assertNotIn("meeting 1/", txt)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
 
 
 class TestObserverPollInterval(unittest.TestCase):

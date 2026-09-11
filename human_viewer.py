@@ -31,7 +31,13 @@ import time
 import meeting_fs
 from meeting_fs import (run_git, git_show, git_head, is_message_file,
                         parse_log_nameonly, extract_body, parse_frontmatter)
-from meeting_engine import aggregate_mode
+from meeting_core import (
+    aggregate_mode as core_aggregate_mode,
+    frozen_agents,
+    meeting_speak_count,
+)
+from meeting_engine import (each_agent_last, each_agent_messages,
+                            rr_next_speaker)
 
 
 def participants_from_bare(bare):
@@ -94,23 +100,32 @@ def is_finished(bare, agents, mode=None):
     为什么落 viewer：它是唯一增量实现的持有者，也是观察端判据的家。
     """
     if mode is None:
-        mode = aggregate_mode(bare, agents)
+        # 经 engine.each_agent_last（它把最后一条规范化成 {type, mode, next}
+        # ——缺字段补 None）；直接传原始 frontmatter 会在 core 里 KeyError
+        # （core 用 v["mode"] 按契约取值，不猜缺字段）
+        mode = core_aggregate_mode(each_agent_last(bare, agents))
     if mode != "concluded":
         return False
     content = git_show(bare, "HEAD", "result.md")
     return bool(content) and len(content) > 50
 
 
-def incremental(bare, agents, since):
+def incremental(bare, agents, since, max_meeting=None):
     """单次增量读取。
 
-    返回: (mode, lines: list[str], head, done)
+    返回: (mode, lines: list[str], head, done, progress)
     - mode: 当前聚合 mode（meeting/all-freezing/round-robin/concluded）
     - lines: 新消息展示行（旧→新）
     - head: 当前 HEAD
-    - done: 分析是否已收尾（mode == concluded）
+    - done: 分析是否已收尾（concluded 且 result.md 有效）
+    - progress: 进度行文本（三样观测面，见 progress_text）
+
+    **单次读取**：一次 each_agent_messages → 派生 mode 与全部三样观测面
+    （mode 判定、freezing 集合、meeting 配额），不重复读 bare。
     """
-    mode = aggregate_mode(bare, agents)
+    msgs = each_agent_messages(bare, agents)
+    lasts = {a: (msgs[a][-1] if msgs[a] else None) for a in agents}
+    mode = core_aggregate_mode(lasts)
     lines = []
     for commit, path in new_messages(bare, since):
         content = git_show(bare, commit, path)
@@ -120,7 +135,43 @@ def incremental(bare, agents, since):
         if s:
             lines.append(s)
     head = git_head(bare)
-    return mode, lines, head, is_finished(bare, agents, mode)
+    return (mode, lines, head, is_finished(bare, agents, mode),
+            progress_text(bare, agents, msgs, lasts, mode, max_meeting))
+
+
+def progress_text(bare, agents, msgs, lasts, mode, max_meeting=None):
+    """进度行：三样观测面（**状态名一律用协议术语**，不翻译）。
+
+    形态：`meeting 7/10 · 6/10 ｜ freezing 2/3（性能、简单）｜ rr → 简单`
+
+    - `meeting`：配额消耗/上限（`meeting_core.meeting_speak_count` 口径
+      ——"mode:meeting 且 type:message"的发言轮；上限来自 protocol，
+      调用方传入；未传则只显示消耗数）。
+    - `freezing`：已冻结数/总数（`meeting_core.frozen_agents`）。
+    - `rr`：RR 阶段轮到谁（**权威实现** `rr_next_speaker`；仅
+      round-robin 阶段出现）。
+
+    **为什么用协议术语而非中文**（用户 2026-09-11）：状态名是协议的
+    一等概念（`meeting`/`freezing`/`round-robin`），翻译成中文会引入
+    第二套命名（"冻结"到底指 freezing 还是 all-freezing？）——协议名
+    在代码、消息 frontmatter、`--report`、viewer 里只有一个说法。
+
+    判定全部复用 core/engine 的单一实现（与 `--report` 同一份），
+    且共用调用方已读的 msgs——**零新增 bare 读取**；仅 rr 位置在
+    RR 阶段调权威实现（需要读 HEAD 的文件列表，属必要成本）。
+    """
+    types = {a: (lasts[a].get("type") if lasts[a] else None) for a in agents}
+    parts = []
+    counts = " · ".join(f"{meeting_speak_count(msgs, a)}"
+                        + (f"/{max_meeting}" if max_meeting else "")
+                        for a in agents)
+    parts.append(f"meeting {counts}")
+    frozen = frozen_agents(agents, types)
+    parts.append(f"freezing {len(frozen)}/{len(agents)}"
+                 + (f"（{'、'.join(frozen)}）" if frozen else ""))
+    if mode == "round-robin":
+        parts.append(f"rr → {rr_next_speaker(bare, agents) or '（未定）'}")
+    return " ｜ ".join(parts)
 
 
 def _cursor_path(base):
@@ -150,15 +201,27 @@ def _write_cursor(base, ref):
 OBSERVER_POLL_INTERVAL = 2.0
 
 
-def follow(base, bare, agents, poll_interval=OBSERVER_POLL_INTERVAL):
-    """--follow：循环展示（tail -f 式）直到分析结束。"""
+def follow(base, bare, agents, max_meeting=None,
+           poll_interval=OBSERVER_POLL_INTERVAL):
+    """--follow：循环展示（tail -f 式）直到分析结束。
+
+    状态名用协议术语（`【状态】meeting` / `all-freezing` / `round-robin`
+    / `concluded`）；进度行见 progress_text。
+    """
     since = _read_cursor(base)
     last_mode = None
+    last_progress = None
     while True:
-        mode, lines, head, done = incremental(bare, agents, since)
+        mode, lines, head, done, progress = incremental(
+            bare, agents, since, max_meeting)
         if mode != last_mode:
             print(f"【状态】{mode}", flush=True)
             last_mode = mode
+        # 进度行只在**变化时**打印（每轮都打会刷屏；冻结/配额/RR 位
+        # 置在两次消息之间本就不变）
+        if progress != last_progress:
+            print(f"【进度】{progress}", flush=True)
+            last_progress = progress
         for s in lines:
             print(s, flush=True)
         if head != since:
@@ -184,17 +247,22 @@ def main():
         print(f"错误: 分析不存在: {base}", file=sys.stderr)
         return 1
 
-    agents = participants_from_bare(bare)
+    proto = meeting_fs.read_protocol(bare)   # 一次读取：参与者 + 配额上限
+    agents = proto.get("participants") or None
     if not agents:
         print(f"错误: 无法读取 protocol.json（分析未初始化?）: {base}",
               file=sys.stderr)
         return 1
+    max_meeting = proto.get("maxMeetingRounds")
 
     sys.stdout.reconfigure(line_buffering=True)
     if args.follow:
-        follow(base, bare, agents)
+        follow(base, bare, agents, max_meeting=max_meeting)
     else:
-        mode, lines, _, done = incremental(bare, agents, args.since)
+        mode, lines, _, done, progress = incremental(
+            bare, agents, args.since, max_meeting)
+        print(f"【状态】{mode}", flush=True)
+        print(f"【进度】{progress}", flush=True)
         print(f"【状态】{mode}", flush=True)
         for s in lines:
             print(s, flush=True)

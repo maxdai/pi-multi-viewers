@@ -216,7 +216,7 @@ class TestViewer(unittest.TestCase):
                    {"from": "a", "type": "message", "mode": "meeting",
                     "seen_at": "", "to": "all", "summary": "a 观点"}, "a 正文")
         write_msg(wd["human"], *human_msg(1, "人正文", summary="人插话"))
-        mode, lines, _, done = incremental(bare, ["a", "b"], None)
+        mode, lines, _, done, _p = incremental(bare, ["a", "b"], None)
         self.assertEqual(mode, "meeting")
         self.assertEqual(len(lines), 2)
         self.assertTrue(any("[a/0001.md] a (message): a 观点" in s
@@ -236,7 +236,7 @@ class TestViewer(unittest.TestCase):
         write_msg(wd["human"], *human_msg(1, "人正文"))
         msgs = new_messages(bare, head1)
         self.assertEqual([p for _, p in msgs], ["human/0001.md"])
-        mode, lines, _, _ = incremental(bare, ["a", "b"], head1)
+        mode, lines, _, _, _p = incremental(bare, ["a", "b"], head1)
         self.assertEqual(mode, "meeting")
         self.assertEqual(len(lines), 1)
         self.assertIn("[human/0001.md]", lines[0])
@@ -262,11 +262,11 @@ class TestViewer(unittest.TestCase):
         write_msg(wd["a"], "a/0001.md",
                    {"from": "a", "type": "concluded", "mode": "concluded",
                     "seen_at": "", "to": "all"}, "收尾")
-        mode, _, _, done = incremental(bare, ["a", "b"], None)
+        mode, _, _, done, _p = incremental(bare, ["a", "b"], None)
         self.assertEqual(mode, "concluded")
         self.assertFalse(done)          # 产物未落盘 → 未完成
         self._write_result(wd["a"])     # resultWriter 写产物（+commit/push）
-        mode2, _, _, done2 = incremental(bare, ["a", "b"], None)
+        mode2, _, _, done2, _p = incremental(bare, ["a", "b"], None)
         self.assertEqual(mode2, "concluded")
         self.assertTrue(done2)          # 两条件齐 → 完成
 

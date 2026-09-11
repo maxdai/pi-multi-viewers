@@ -272,7 +272,7 @@ class TestFlowComposition(unittest.TestCase):
         self.assertIn("human 插话第一行", s)
 
         # V6：incremental（状态 + 消息 + done）
-        mode, lines, head, done = incremental(self.bare, ["a", "b"], "")
+        mode, lines, head, done, _p = incremental(self.bare, ["a", "b"], "")
         self.assertEqual(mode, "meeting")
         self.assertTrue(any("human/0001.md" in l for l in lines))
         self.assertFalse(done)

@@ -1038,8 +1038,9 @@ def wait_for_completion(base):
                   "重跑：--skip-setup --start（protocol 缺失则先 --cleanup "
                   "后重建）")
             return 1
-        _mode, lines, head, done = human_viewer.incremental(
-            bare, agents, since)
+        _mode, lines, head, done, _progress = human_viewer.incremental(
+            bare, agents, since,
+            meeting_fs.read_protocol(bare).get("maxMeetingRounds"))
         if done:
             for line in lines:
                 print(line)
