@@ -199,7 +199,11 @@ cmd_start() {
     local session_id="${PI_SESSION_ID:-}"
     local stamp
     stamp="$(date +%Y%m%d-%H%M%S)"
-    local dir_name="discuss"
+    # 目录前缀 mv-：与 pi-agents-helper 的 discuss-<sid>-* **命名空间隔离**
+    # ——两个系统的 extension 都按"同 sid 最新目录"发现目标，共用前缀会
+    # 在同 session 并发两套时互相插错（且 human 消息格式兼容 → 静默写错）。
+    # 前缀也是产品语言的统一（本项目用"分析"，不再沿用"discuss"）。
+    local dir_name="mv"
     if [ -n "$session_id" ]; then
         dir_name="${dir_name}-${session_id}"
     fi

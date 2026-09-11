@@ -7,13 +7,16 @@
  * 结果用 ctx.ui.notify 反馈。
  *
  * 讨论目录发现（零状态文件）：
- *   wrapper --start 的目录名 = discuss-<PI_SESSION_ID>-<时间戳>
+ *   wrapper --start 的目录名 = mv-<PI_SESSION_ID>-<时间戳>
  *   （aft 不再替换 bash 后 PI_SESSION_ID 注入可用）；
  *   handler 用 ctx.sessionManager.getSessionId() 取本 session id，
- *   glob ctx.cwd/discuss-<sid>-* 取最新目录——session 隔离（同目录多
+ *   glob ctx.cwd/mv-<sid>-* 取最新目录——session 隔离（同目录多
  *   session 并发分析也互不干扰），无状态文件、无 cleanup 比对。
  *   兜底：无 sid 目录（PI 环境变量未注入时 wrapper 拿不到 sid）→ 项目下
- *   最新的 discuss-*，并警告降级（宁可提示也不要静默插错分析）。
+ *   最新的 mv-*，并警告降级（宁可提示也不要静默插错分析）。
+ *
+ * 前缀 mv- 与 pi-agents-helper 的 discuss-* 命名空间隔离（两个系统的
+ * 插话命令都按"同 sid 最新目录"发现目标，共用前缀会互相插错）。
  *
  * 观看分析仍用 `!!` bash 流式（human_viewer --follow）——命令 API 无原生
  * 流式通道（handler 返回 Promise<void>），且 bash 流式是平台原生能力。
@@ -53,8 +56,8 @@ const SAYER = PACKAGE_ROOT
   ? path.join(PACKAGE_ROOT, "human_sayer.py")
   : "/root/pi-multi-viewers/human_sayer.py"; // 复制安装退化（开发机）
 
-/** 按 (cwd, sessionId) 推导当前分析目录：优先 discuss-<sid>-<stamp>
- *  （session 隔离），找不到回退 discuss-<stamp>（无 sid 目录——PI 环境
+/** 按 (cwd, sessionId) 推导当前分析目录：优先 mv-<sid>-<stamp>
+ *  （session 隔离），找不到回退 mv-<stamp>（无 sid 目录——PI 环境
  *  变量缺失时 wrapper 拿不到 sid，降级为项目下最新分析，警告提示）。 */
 function findCurrentDir(
   cwd: string,
@@ -63,7 +66,7 @@ function findCurrentDir(
   try {
     const names = fs.readdirSync(cwd, { withFileTypes: true });
     const bySid = names
-      .filter((e) => e.isDirectory() && e.name.startsWith(`discuss-${sid}-`))
+      .filter((e) => e.isDirectory() && e.name.startsWith(`mv-${sid}-`))
       .map((e) => e.name)
       .sort();
     if (bySid.length > 0) {
@@ -71,7 +74,14 @@ function findCurrentDir(
       return { dir: fs.existsSync(dir) ? dir : null, degraded: false };
     }
     const any = names
-      .filter((e) => e.isDirectory() && e.name.startsWith("discuss-"))
+      .filter(
+        (e) =>
+          e.isDirectory() &&
+          e.name.startsWith("mv-") &&
+          // 排除 mv-spec-*：那是尚未被 --start 消费的 spec 目录，不是分析
+          // 目录（否则会选中它并报出误导性的"分析不存在"）
+          !e.name.startsWith("mv-spec-"),
+      )
       .map((e) => e.name)
       .sort();
     if (any.length > 0) {
@@ -120,7 +130,7 @@ export default function register(pi: any) {
       const dir = found.dir;
       if (!dir) {
         ctx.ui.notify(
-          "没有正在进行的多视角分析（cwd 下无 discuss-* 目录）。" +
+          "没有正在进行的多视角分析（cwd 下无 mv-* 目录）。" +
             "先用 /multi-viewers 启动分析。",
           "error",
         );

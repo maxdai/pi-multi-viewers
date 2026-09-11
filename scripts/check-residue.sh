@@ -10,9 +10,9 @@
 #      近 24h 创建且 cwd 不在白名单（真实项目）的——测试引导 session
 #      散落形态（--tmp-xxx-- 等）
 #   2. 讨论进程：meeting_loop（argv 判据）/ pi（comm + PPID 判据）
-#   3. 讨论环境目录：$PWD 下 discuss-* 残留（另有 gitignore 兜底不入库）
+#   3. 分析环境目录：$PWD 下 mv-* 残留（另有 gitignore 兜底不入库）
 #      + 结构识别（2026-09-10 补）：含 repo.git/ 与 pi-sessions/ 的目录
-#      ——测试脚手架常用 /tmp/mv-*/disc 等非 discuss-* 命名，纯命名匹配
+#      ——测试脚手架常用 /tmp/mv-*/disc 等非 mv-<sid>-* 命名，纯命名匹配
 #      会漏检（e2e8 残留即此盲区），改为按环境结构识别
 #
 # 白名单：cwd 为真实项目目录的 session 不算残留（mv-main 等长期会话）。
@@ -155,11 +155,15 @@ for d in /proc/[0-9]*; do
     esac
 done
 
-# --- 3. 讨论环境目录残留 ---
-# 3a. 命名形态：$PWD 下 discuss-*（兜底：半创建、尚无 repo.git 的环境）
-for d in discuss-*/; do
+# --- 3. 分析环境目录残留 ---
+# 3a. 命名形态：$PWD 下 mv-*（兜底：半创建、尚无 repo.git 的环境）。
+#     排除 mv-spec-*——那是用户尚未消费的 spec 目录（正常存在，非残留）
+for d in mv-*/; do
     [ -d "$d" ] || continue
-    echo "[残留-3] 讨论目录: $PWD/$d"
+    case "$(basename "$d")" in
+        mv-spec-*) continue ;;
+    esac
+    echo "[残留-3] 分析目录: $PWD/$d"
     RESIDUE=1
 done
 

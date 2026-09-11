@@ -83,7 +83,7 @@ bug 定位完成前保留；成功/定位完成的 session 随手清。
 **清理验收机制（2026-09-09 建）**：靠记忆逐项检查必然漏（afk-e2e 引导
 session 漏删即反例——两代项目重复犯）。测试/验证结束跑
 `scripts/check-residue.sh`（残留检查器）：一条命令报告三类残留——
-主 pi 侧近 24h 非白名单 session / loop+pi 进程 / discuss-* 目录，
+主 pi 侧近 24h 非白名单 session / loop+pi 进程 / mv-* 目录，
 输出"干净"或残留清单。退出码 0=干净 1=有残留。
 
 ### 8. 测试与产品目录隔离 + 用例级 teardown

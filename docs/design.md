@@ -146,8 +146,9 @@ commit 是溯源记录、本节是长期引用点——不并存两份权威值�
    `registerCommand` handler 直接 spawn `human_sayer.py`（一次调用一次返回），
    结果经 `ctx.ui.notify` 反馈——**不经过 LLM**（插话本质是本地命令执行；
    经 LLM 会引入不确定性与额外延迟）。目录发现零状态文件：
-   `ctx.cwd` + `sessionManager.getSessionId()` → `discuss-<sid>-*` 最新
-   （session 隔离）；无 sid 目录时兜底项目下最新 `discuss-*` 并**警告降级**
+   `ctx.cwd` + `sessionManager.getSessionId()` → `mv-<sid>-*` 最新
+   （session 隔离）；无 sid 目录时兜底项目下最新 `mv-*`（排除
+   `mv-spec-*`）并**警告降级**
    （宁可提示也不静默插错分析）。观看仍用 `!!` 流式（命令 API 无原生流式
    通道，bash 流式是平台原生能力）。
 10. **git 守卫范围 = 从讨论 workdir 发起的操作**（`GIT_CEILING_DIRECTORIES`

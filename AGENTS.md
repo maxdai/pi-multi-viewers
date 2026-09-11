@@ -172,7 +172,8 @@ loop、状态从 git 共享事实推导、单一事实源 = protocol.json、无�
 
 - **当前形态**：prompt × 1（multi-viewers，开发机已注册可用）+
   extension × 1（multi-viewers-say 插话：零 LLM，直接 spawn human_sayer.py；
-  目录发现 = `<cwd>/discuss-<sessionId>-*` 最新，兜底 `discuss-*` 并警告）
+  目录发现 = `<cwd>/mv-<sessionId>-*` 最新，兜底 `mv-*`（排除
+  `mv-spec-*`）并警告）
   + wrapper。npm 发版 0.1.0 待办。
 - **开发机安装（两步，缺一不可；2026-09-10 实测）**：
   ① `pi install /root/pi-multi-viewers`——**注册包**（写
