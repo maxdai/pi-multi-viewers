@@ -194,7 +194,20 @@ def build_report(base):
         return out
     proto = meeting_fs.read_protocol(bare)
 
-    # ---- 流程时间线（bare = 判定域，现场派生） ----
+    # ---- 一次读取（消息文件 = 权威口径），供流程/配额/冻结/RR 四段共用 ----
+    msgs = meeting_engine.each_agent_messages(bare, agents)
+    per_agent = {a: len(msgs.get(a, [])) for a in agents}
+    # human 消息不在 participants 里（视而不见原则）——单独数 human/ 目录的
+    # 消息文件。**不用 commit subject 统计**：那是自由文本（`discuss: X/NNNN`），
+    # 格式一改/手写就静默归零（2026-09-11 实测：构造环境 subject 不同 → "提交 0"
+    # 而实际有 3 条消息）；消息文件是判定域的事实，格式由本仓控制。
+    r_h = meeting_fs.run_git(bare, "ls-tree", "-r", "-z", "--name-only",
+                             "HEAD", check=False)
+    human_n = sum(1 for f in r_h.stdout.rstrip("\0").split("\0")
+                  if f and f.startswith("human/")
+                  and meeting_fs.is_message_file(f))
+
+    # ---- 流程时间线（时间戳来自 commit——消息文件不带墙钟） ----
     r = meeting_fs.run_git(bare, "log", "--reverse", "--format=%ct%x09%s",
                            "HEAD", check=False)
     rows = []
@@ -203,23 +216,15 @@ def build_report(base):
             continue
         ts, subj = line.split("\t", 1)
         rows.append((int(ts), subj))
-    per_agent = {a: 0 for a in agents}
-    human_n = 0
-    for _, subj in rows:
-        m = re.match(r"discuss:\s*(.+?)/(\d+)$", subj)
-        if not m:
-            continue
-        who = m.group(1)
-        if who == "human" or who not in per_agent:
-            human_n += 1
-        else:
-            per_agent[who] += 1
     if rows:
         span = rows[-1][0] - rows[0][0]
-        out.append(f"流程：{len(agents)} agents | 提交 "
-                   f"{sum(per_agent.values())}（含流程信号；"
-                   + " / ".join(f"{a} {n}" for a, n in per_agent.items())
-                   + f"）| 墙钟跨度 {_dur(span)}（首末 commit 差）")
+        detail = " / ".join(f"{a} {n}" for a, n in per_agent.items())
+        if human_n:      # human 单列明细（它不是参与者），但计入合计
+            detail += f" / human {human_n}"
+        out.append(f"流程：{len(agents)} agents | 消息 "
+                   f"{sum(per_agent.values()) + human_n}"
+                   f"（含流程信号；{detail}）| 墙钟跨度 {_dur(span)}"
+                   f"（首末 commit 差）")
     # 最长无进展间隔（相邻 commit 间隔的最大值）
     gaps = [(rows[i + 1][0] - rows[i][0], rows[i][0], rows[i + 1][0])
             for i in range(len(rows) - 1)]
@@ -233,7 +238,7 @@ def build_report(base):
     # 不是"该 agent 的消息总数"——上限约束的是 meeting 发言轮次，而一个
     # agent 的消息里还有 freezing/all-freezing/pass/concluded 等流程信号。
     # 两者混算会出现"meeting 6/2"这种超限假象（口径错误，2026-09-11 实测）。
-    msgs = meeting_engine.each_agent_messages(bare, agents)
+    # msgs 由上方流程段一次读取提供（同一读取派生四段）。
     lasts = {a: (msgs[a][-1] if msgs[a] else None) for a in agents}
     types = {a: (lasts[a].get("type") if lasts[a] else None) for a in agents}
     quota_meeting = proto.get("maxMeetingRounds", 10)
@@ -290,7 +295,7 @@ def build_report(base):
                    f"{u['responses']} 次 | error {u['errors']} 次")
     if not any_usage:
         out.append("  n/a（session 缺失，或无本轮数据——边界条目自 2026-09-11 "
-                   "起写入，此前的老分析不适用）」")
+                   "起写入，此前的老分析不适用）")
     out.append("（口径：进程跨度=pi 进程生命周期；输出=prompt 分段合计；"
                "墙钟=commit 时间差——三者不可互替）")
     return out

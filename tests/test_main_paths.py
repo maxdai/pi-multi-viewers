@@ -322,13 +322,18 @@ class TestBuildReport(unittest.TestCase):
                        capture_output=True)
         subprocess.run(["git", "commit", "-qm", "discuss: setup"], cwd=w,
                        check=True, capture_output=True)
-        for subj in commits:      # 追加消息 commit（subject = discuss: x/N）
-            with open(os.path.join(w, "dummy"), "w") as f:
-                f.write(subj)
+        # 追加**真实消息文件**（装置对齐生产形状：消息存在于 bare 的
+        # <agent>/NNNN.md，不是靠 commit subject 文本——报告按文件数统计）
+        for path, typ, mode in commits:
+            d = os.path.join(w, path.split("/")[0])
+            os.makedirs(d, exist_ok=True)
+            with open(os.path.join(w, path + ".md"), "w") as f:
+                f.write(f"---\nfrom: {path.split('/')[0]}\ntype: {typ}\n"
+                        f"mode: {mode}\n---\n\n正文\n")
             subprocess.run(["git", "add", "-A"], cwd=w, check=True,
                            capture_output=True)
-            subprocess.run(["git", "commit", "-qm", subj], cwd=w, check=True,
-                           capture_output=True)
+            subprocess.run(["git", "commit", "-qm", f"discuss: {path}"],
+                           cwd=w, check=True, capture_output=True)
         subprocess.run(["git", "push", "-q", "origin", "HEAD"], cwd=w,
                        check=True, capture_output=True)
         if with_loop_log:
@@ -360,11 +365,13 @@ class TestBuildReport(unittest.TestCase):
         """四段齐备：流程/配额/进程（登记字段）/LLM（session 字段）。"""
         import start_discussion as sd
         with tempfile.TemporaryDirectory() as tmp:
-            base = self._env(tmp, commits=["discuss: a/0001",
-                                           "discuss: b/0001",
-                                           "discuss: human/0001"])
+            base = self._env(tmp, commits=[("a/0001", "message", "meeting"),
+                                           ("b/0001", "message", "meeting"),
+                                           ("human/0001", "message", "meeting")])
             txt = "\n".join(sd.build_report(base))
-            self.assertIn("流程：2 agents | 提交 2", txt)
+            # 合计 = a/0001 + b/0001 + human/0001（human 单列明细但计入合计）
+            self.assertIn("流程：2 agents | 消息 3", txt)
+            self.assertIn("/ human 1", txt)
             self.assertIn("a 1 / b 1", txt)
             self.assertIn("human 插话 1 条", txt)
             # 登记字段 elapsed_ms=42100 → 人类可读"进程跨度 总 42s"
@@ -376,7 +383,8 @@ class TestBuildReport(unittest.TestCase):
             self.assertNotIn("999,999", txt)
             self.assertNotIn("999.9k", txt)
             # 配额口径 = meeting 轮次/上限（不是消息总数）
-            self.assertIn("配额：meeting a 0/10、b 0/10（消耗/上限，"
+            # 配额段存在 + 口径标注（本 fixture 各 1 条 meeting 消息 → 1/10）
+            self.assertIn("配额：meeting a 1/10、b 1/10（消耗/上限，"
                           "口径 = mode:meeting 且 type:message）", txt)
             # 三样观测面（第二批）：冻结集合 + 阶段
             self.assertIn("冻结：0/2 已冻结；未冻结 a、b", txt)

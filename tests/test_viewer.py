@@ -295,5 +295,77 @@ class TestObserverPollInterval(unittest.TestCase):
             meeting_engine.POLL_INTERVAL = orig
 
 
+class TestFollowPrintsReport(unittest.TestCase):
+    """follow 结束时自动附观测报告（用户通道自带，不依赖任何 LLM 动作）。"""
+
+    def test_report_lines_in_output(self):
+        """done → 输出含【分析报告】与流程段（真实 bare，最小构造）。"""
+        import threading
+        import human_viewer as hv
+        tmp = tempfile.mkdtemp(prefix="frep-")
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        base = os.path.join(tmp, "disc")
+        bare = os.path.join(base, "repo.git")
+        os.makedirs(base)
+        subprocess.run(["git", "init", "--bare", bare], check=True,
+                       capture_output=True)
+        w = os.path.join(base, "work-a")
+        subprocess.run(["git", "clone", bare, w], check=True,
+                       capture_output=True)
+        for k, v in (("user.name", "t"), ("user.email", "t@t")):
+            subprocess.run(["git", "config", k, v], cwd=w, check=True)
+        with open(os.path.join(w, "protocol.json"), "w") as f:
+            json.dump({"participants": ["a", "b"], "resultWriter": "b"}, f)
+        os.makedirs(os.path.join(w, "a"))
+        with open(os.path.join(w, "a/0001.md"), "w") as f:
+            f.write("---\nfrom: a\ntype: message\nmode: meeting\n---\n\n正文\n")
+        with open(os.path.join(w, "result.md"), "w") as f:
+            f.write("# 结论\n\n" + "内容" * 40)
+        subprocess.run(["git", "add", "-A"], cwd=w, check=True,
+                       capture_output=True)
+        subprocess.run(["git", "commit", "-m", "discuss: a/0001"], cwd=w,
+                       check=True, capture_output=True)
+        subprocess.run(["git", "push", "origin", "HEAD"], cwd=w, check=True,
+                       capture_output=True)
+
+        out = []
+
+        class FakeOut:
+            def write(self, s):
+                out.append(s)
+
+            def flush(self):
+                pass
+
+        def _run():
+            old = sys.stdout
+            sys.stdout = FakeOut()
+            try:
+                hv.follow(base, bare, ["a", "b"], poll_interval=0.05)
+            finally:
+                sys.stdout = old
+
+        t = threading.Thread(target=_run)
+        t.start()
+        # 写 concluded（b 收尾）→ follow 退出
+        subprocess.run(["git", "pull", "--rebase", "--autostash"], cwd=w,
+                       check=False, capture_output=True)
+        os.makedirs(os.path.join(w, "b"), exist_ok=True)
+        with open(os.path.join(w, "b/0001.md"), "w") as f:
+            f.write("---\nfrom: b\ntype: concluded\nmode: concluded\n---\n\n")
+        subprocess.run(["git", "add", "-A"], cwd=w, check=True,
+                       capture_output=True)
+        subprocess.run(["git", "commit", "-m", "discuss: b/0001"], cwd=w,
+                       check=True, capture_output=True)
+        subprocess.run(["git", "push", "origin", "HEAD"], cwd=w, check=True,
+                       capture_output=True)
+        t.join(timeout=15)
+        self.assertFalse(t.is_alive(), "follow 未退出")
+        txt = "".join(out)
+        self.assertIn("【分析已结束】", txt)
+        self.assertIn("【分析报告】", txt)
+        self.assertIn("流程：", txt)
+
+
 if __name__ == "__main__":
     unittest.main()

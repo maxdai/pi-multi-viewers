@@ -100,7 +100,18 @@ compaction 的 `firstKeptEntryId` 起 + 其后的条目"——窗口内含 compa
 | `status-<agent>.json` | loop | `{"sessionID": ...}` | 流程（崩溃恢复） | 是（恢复用） | O(1) |
 | `pi-sessions/fork-src-*.jsonl` | pi | 文档化 session schema | fork 构建 + `--report` | 否（报告用） | O(MB) 全量 → **禁轮询** |
 | `result.md`（固定位） | resultWriter loop | 结论文档 | 人 | 是（收尾判据） | — |
-| `--report`（视图） | start_discussion | 文本行 | 人/主 pi | **否**（不得升级为验收 gate） | 冷路径一次性 |
+| `--report`（视图） | observability | 文本行 | 人（**三个出口**，见下） | **否**（不得升级为验收 gate） | 冷路径一次性 |
+
+**报告的三个出口**（同一 `build_report`，同一份内容）：
+1. **`--follow` 结束**——viewer 在 done 分支自动附报告（`human_viewer._print_report`）。
+   这是**用户通道自带**：用户执行 `!!` 命令就在结束时直接看到，**零 LLM 参与**
+   （此前只靠 prompt 要求主 pi"记得转述"——那是 LLM 依赖，会漏；机制化后
+   用户必然看到）。
+2. **`--cleanup`**——删目录前最后一次可读（结果与 1 重复出现是刻意的：
+   不同时点各看一次，且清理后现场已不存在）。
+3. **`--report`**——独立入口（中途查看 / 脚本消费）。
+`--view --since`（主 pi 增量轮询通道）**不附报告**——它面向 LLM，
+输出进 context，报告对模型无用且占 token。
 
 ### 本轮边界（`mv.analysis-start`）
 
@@ -265,7 +276,13 @@ commit 是溯源记录、本节是长期引用点——不并存两份权威值�
     `start_discussion.check_status` 与定义处同址，拆后 mock re-export
     不生效——本轮 4 处测试因此假绿/失败，已改到 `spec_gen` /
     `observability`）。
-14. **git 守卫范围 = 从讨论 workdir 发起的操作**（`GIT_CEILING_DIRECTORIES`
+14. **报告附在 `--follow` 输出末尾（机制化，不依赖 LLM）**：`--follow` 是
+    用户直接执行的通道（`!!`），done 时自动打印报告——用户零操作看到运行
+    事实。**为什么不能只靠 prompt**：让主 pi"记得跑 `--report` 并转述"是
+    流程依赖 LLM（会漏、不可验收），正是本项目一贯要消除的形态；报告既然
+    是给用户的，就该长在用户直接看的通道上。`--view --since` 不附（主 pi
+    通道，进 context 且对模型无用）。
+15. **git 守卫范围 = 从讨论 workdir 发起的操作**（`GIT_CEILING_DIRECTORIES`
    注入于 spawn）；主项目仓库不在守卫范围（agent 的 cwd 就是主项目，其
    约束归指令层 + 主项目 `.gitignore`）。要拦主仓库需换机制类（沙箱/钩子），
    经评估收益不支撑扩面。

@@ -231,8 +231,35 @@ def follow(base, bare, agents, max_meeting=None,
         if done:
             print(f"【分析已结束】result.md: {result_path(base)}",
                   flush=True)
+            _print_report(base)
             return
         time.sleep(poll_interval)
+
+
+def _print_report(base):
+    """分析结束时打印观测报告（**用户通道自带**，不依赖任何 LLM 动作）。
+
+    为什么在这里：`--follow` 是用户直接执行的通道（`!!` 命令），结束时
+    自动附报告 = 用户零操作看到运行事实（提交/墙钟/配额/进程/LLM 用量），
+    而不是指望主 pi 记得去跑 `--report` 再转述（LLM 依赖，可能漏）。
+    `--report` 独立入口与 `--cleanup` 的打印保持不变（不同场景各看一次）。
+
+    **延迟 import observability**：该模块顶层 import 本模块
+    （wait_for_completion 用 incremental），顶层反向 import 会成环。本函数
+    只在 done 分支执行一次（冷路径），函数内 import 是标准解法。
+
+    fail-open：报告是附加信息，生成失败绝不阻断观看退出（契约同
+    observability.build_report——任何一段读不出显示 n/a）。
+    """
+    try:
+        from observability import build_report
+        print("【分析报告】", flush=True)
+        for line in build_report(base):
+            print(line, flush=True)
+    except Exception as e:                      # noqa: BLE001
+        # 宽捕获是刻意的：报告在观看主循环的退出路径上，任何异常
+        # （含未预期）都不该让用户失去"分析已结束"这个关键信息
+        print(f"【分析报告】生成失败（不影响观看）：{e}", flush=True)
 
 
 def main():
