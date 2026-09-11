@@ -1103,8 +1103,8 @@ def build_report(base):
             per_agent[who] += 1
     if rows:
         span = rows[-1][0] - rows[0][0]
-        out.append(f"流程：{len(agents)} agents | 消息 "
-                   f"{sum(per_agent.values())}（"
+        out.append(f"流程：{len(agents)} agents | 提交 "
+                   f"{sum(per_agent.values())}（含流程信号；"
                    + " / ".join(f"{a} {n}" for a, n in per_agent.items())
                    + f"）| 墙钟跨度 {_dur(span)}（首末 commit 差）")
     # 最长无进展间隔（相邻 commit 间隔的最大值）
@@ -1116,10 +1116,17 @@ def build_report(base):
                    f"（{_hhmm(t1)} → {_hhmm(t2)}，commit 间隔）")
 
     # ---- 配额与 human 插话（bare 派生，无状态） ----
+    # **配额消耗从 frontmatter 统计**（mode==meeting 且 type==message），
+    # 不是"该 agent 的消息总数"——上限约束的是 meeting 发言轮次，而一个
+    # agent 的消息里还有 freezing/all-freezing/pass/concluded 等流程信号。
+    # 两者混算会出现"meeting 6/2"这种超限假象（口径错误，2026-09-11 实测）。
     quota_meeting = proto.get("maxMeetingRounds", 10)
-    out.append(f"配额：meeting {max(per_agent.values()) if per_agent else 0}"
-               f"/{quota_meeting}（各 agent 消息数上限）| human 插话 {human_n} 条"
-               "（不占配额，各 agent 上限 +human 条数）")
+    quota_rr = proto.get("maxRRRounds", 7)
+    spoke = _report_meeting_counts(bare, agents)
+    out.append("配额：meeting " + "、".join(
+        f"{a} {spoke.get(a, 0)}/{quota_meeting}" for a in agents)
+        + f"（消耗/上限）| RR 上限 {quota_rr}/agent | human 插话 {human_n} 条"
+        "（不占配额；各 agent 上限 +human 条数）")
 
     # ---- 进程事实（登记字段；日志的唯一机器消费点） ----
     proc = _report_wake_fields(base)
@@ -1148,10 +1155,38 @@ def build_report(base):
                    f"{u['cache_read']} | output {u['output']} | 响应 "
                    f"{u['responses']} 次 | error {u['errors']} 次")
     if not any_usage:
-        out.append("  n/a（无 session 文件——已 cleanup 或首唤未完成）")
+        out.append("  n/a（session 缺失，或无本轮数据——边界条目自 2026-09-11 "
+                   "起写入，此前的老分析不适用）」")
     out.append("（口径：进程跨度=pi 进程生命周期；输出=prompt 分段合计；"
                "墙钟=commit 时间差——三者不可互替）")
     return out
+
+
+def _report_meeting_counts(bare, agents):
+    """各 agent 的 meeting 发言轮次（消耗配额的部分）。
+
+    判据与状态机一致：`mode == "meeting"` 且 `type == "message"`
+    （engine 的配额计数同义——此处独立实现是因为报告是**只读视图**，
+    不复用状态机内部计数；口径唯一性由判据字面一致 + 测试覆盖保证）。
+    成本：一次 `ls-tree` + 一次 `cat-file --batch`（O(消息数)，冷路径）。
+    fail-open：读不到 → 空 dict（调用方显示 0）。
+    """
+    r = meeting_fs.run_git(bare, "ls-tree", "-r", "-z", "--name-only",
+                           "HEAD", check=False)
+    files = [f for f in r.stdout.rstrip("\0").split("\0")
+             if f and meeting_fs.is_message_file(f)]
+    if not files:
+        return {}
+    contents = meeting_fs.cat_batch(bare, files)
+    counts = {}
+    for path, text in contents.items():
+        who = path.split("/")[0]
+        if who not in agents:
+            continue
+        fm = meeting_fs.parse_frontmatter(text) or {}
+        if fm.get("type") == "message" and fm.get("mode") == "meeting":
+            counts[who] = counts.get(who, 0) + 1
+    return counts
 
 
 def _dur(sec):
@@ -1215,30 +1250,24 @@ def _report_session_usage(base, agent):
     fp = os.path.join(base, "pi-sessions", f"fork-src-{sid}.jsonl")
     if not os.path.isfile(fp):
         return {}
+    # **只统计边界之后的条目**（本轮运行事实）——fork 携带的历史条目里也
+    # 有大量 assistant+usage，全文件统计会把主 pi 的历史算成本次分析的
+    # 消耗（2026-09-11 实测：717 条 fork 历史被算成"本轮 367 次响应 /
+    # input 1.2M"）。边界由 append_handoff_turns 写入（显式登记，非推断）。
     u = {"input": 0, "cache_read": 0, "output": 0, "responses": 0, "errors": 0}
-    try:
-        with open(fp, encoding="utf-8", errors="replace") as fh:
-            for line in fh:
-                if '"usage"' not in line:
-                    continue
-                try:
-                    ev = json.loads(line)
-                except ValueError:
-                    continue
-                m = ev.get("message") or {}
-                if m.get("role") != "assistant":
-                    continue
-                u["responses"] += 1
-                if m.get("stopReason") == "error":
-                    u["errors"] += 1
-                usage = m.get("usage") or {}
-                for k, key in (("input", "input"), ("cacheRead", "cache_read"),
-                               ("output", "output")):
-                    v = usage.get(k)
-                    if isinstance(v, int):
-                        u[key] += v
-    except OSError:
-        return {}
+    for ev in meeting_fs.iter_after_boundary(fp):
+        m = ev.get("message") or {}
+        if m.get("role") != "assistant":
+            continue
+        u["responses"] += 1
+        if m.get("stopReason") == "error":
+            u["errors"] += 1
+        usage = m.get("usage") or {}
+        for k, key in (("input", "input"), ("cacheRead", "cache_read"),
+                       ("output", "output")):
+            v = usage.get(k)
+            if isinstance(v, int):
+                u[key] += v
     if not u["responses"]:
         return {}
     # 数字格式化（人读）：千分位缩写

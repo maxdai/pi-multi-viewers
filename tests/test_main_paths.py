@@ -292,6 +292,14 @@ class TestBuildReport(unittest.TestCase):
             os.makedirs(os.path.join(base, "pi-sessions"))
             with open(os.path.join(base, "pi-sessions/fork-src-sid-a.jsonl"),
                       "w") as f:
+                # 边界**之前**的历史条目（fork 携带）——不得计入本轮
+                f.write(json.dumps({"type": "message", "message": {
+                    "role": "assistant", "stopReason": "stop",
+                    "usage": {"input": 999999, "output": 999999}}}) + "\n")
+                # 边界条目（append_handoff_turns 写入；显式本轮起点）
+                f.write(json.dumps({
+                    "type": "custom_message", "customType": "mv.analysis-start",
+                    "display": False}) + "\n")
                 f.write(json.dumps({"type": "message", "message": {
                     "role": "assistant", "stopReason": "toolUse",
                     "usage": {"input": 274, "cacheRead": 183552,
@@ -306,7 +314,7 @@ class TestBuildReport(unittest.TestCase):
                                            "discuss: b/0001",
                                            "discuss: human/0001"])
             txt = "\n".join(sd.build_report(base))
-            self.assertIn("流程：2 agents | 消息 2", txt)
+            self.assertIn("流程：2 agents | 提交 2", txt)
             self.assertIn("a 1 / b 1", txt)
             self.assertIn("human 插话 1 条", txt)
             # 登记字段 elapsed_ms=42100 → 人类可读"进程跨度 总 42s"
@@ -314,6 +322,11 @@ class TestBuildReport(unittest.TestCase):
             self.assertIn("rc≠0 0 次", txt)
             self.assertIn("cacheRead 183.6k", txt)
             self.assertIn("三者不可互替", txt)     # 跨度分标
+            # 边界之前的历史 usage 不得计入本轮（999999 应被排除）
+            self.assertNotIn("999,999", txt)
+            self.assertNotIn("999.9k", txt)
+            # 配额口径 = meeting 轮次/上限（不是消息总数）
+            self.assertIn("配额：meeting a 0/10、b 0/10（消耗/上限）", txt)
 
     def test_fail_open_missing_dir(self):
         """目录不存在 → n/a（不抛异常、不报错）。"""

@@ -75,6 +75,32 @@ def log(agent, msg):
     print(f"[{ts}] {agent}: {msg}", flush=True)
 
 
+def iter_after_boundary(session_file):
+    """迭代 session 文件中**边界条目之后**的条目（本轮运行事实）。
+
+    边界 = `custom_message` + `customType == BOUNDARY_TYPE`（由
+    append_handoff_turns 写）。未找到边界（老产物/手工 session）→ 返回
+    空迭代：**调用方按"无本轮数据"处理（n/a），不得退回全文扫描**——
+    那正是修掉的口径错误（把 fork 携带的历史算成本轮）。
+    fail-open：文件不可读/JSON 坏行跳过。
+    """
+    seen = False
+    try:
+        with open(session_file, encoding="utf-8", errors="replace") as f:
+            for line in f:
+                if not seen:
+                    if BOUNDARY_TYPE in line:
+                        # 边界行本身不产出（它没有 message 字段）
+                        seen = True
+                    continue
+                try:
+                    yield json.loads(line)
+                except ValueError:
+                    continue
+    except OSError:
+        return
+
+
 def read_protocol(bare):
     """读取共享协议（`HEAD:protocol.json`）——**协议读取的唯一实现**。
 
@@ -983,8 +1009,13 @@ def preserve_result_md(base):
         f.write(r.stdout)
     return dest
 
+# 边界条目类型（显式标记"本轮分析起点"）：边界之后的条目才是本次分析的
+# 运行事实。消费者：`--report` 的 LLM 段（不数 fork 携带的历史 usage）。
+BOUNDARY_TYPE = "mv.analysis-start"
+
+
 def append_handoff_turns(session_file, turns):
-    """session 尾部追加对话回合（切换叙事，2026-09-09 设计）。
+    """session 尾部追加对话回合（切换叙事，2026-09-09 设计）+ **边界条目**。
 
     turns: [(role, text), ...]——按序追加，parentId 接到现有链尾，
     最简字段（role/content，无 provider/usage——pi 加载只关心角色与
@@ -992,7 +1023,16 @@ def append_handoff_turns(session_file, turns):
     用途：fork 源尾部注入"停止旧任务 → 新任务说明 → 确认"对话，
     显式切断历史叙事惯性（agent 读到的最后叙事是任务切换共识，
     无法再把自己当成旧叙事的延续）。
-    返回追加条数。
+
+    **末尾追加一条 `custom_message` 边界条目**（`BOUNDARY_TYPE`）：显式
+    切出"历史（fork 携带）/ 本轮"的分界，供 `--report` 统计本轮 usage。
+    为什么显式而非推断（如按条数/时间戳）：条数会随切换叙事改措辞而漂移、
+    时间戳会因时钟精度与主 session 末条接近而歧义——**边界是事实，应登记
+    而非猜**（2026-09-11 实测：不带边界的报告把 fork 的 717 条历史算成
+    本轮 367 次响应）。pi 对 custom_message 条目的容忍已冒烟验证（`pi
+    --session` 打开正常、追问正常回复）。
+
+    返回追加条数（含边界条目——它是本次追加的一部分）。
     """
     with open(session_file, encoding="utf-8") as f:
         lines = [json.loads(l) for l in f if l.strip()]
@@ -1013,4 +1053,14 @@ def append_handoff_turns(session_file, turns):
             f.write(json.dumps(e, ensure_ascii=False) + "\n")
             parent = eid
             n += 1
+        # 边界条目（字段最小：type + customType + 时间戳；pi 不需要
+        # 它做任何事，只是链上一条可检索的事实）
+        bid = uuid.uuid4().hex[:8]
+        f.write(json.dumps({
+            "type": "custom_message", "id": bid, "parentId": parent,
+            "customType": BOUNDARY_TYPE, "display": False,
+            "timestamp": datetime.now(timezone.utc).isoformat().replace(
+                "+00:00", "Z"),
+        }, ensure_ascii=False) + "\n")
+        n += 1
     return n

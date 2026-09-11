@@ -102,6 +102,20 @@ compaction 的 `firstKeptEntryId` 起 + 其后的条目"——窗口内含 compa
 | `result.md`（固定位） | resultWriter loop | 结论文档 | 人 | 是（收尾判据） | — |
 | `--report`（视图） | start_discussion | 文本行 | 人/主 pi | **否**（不得升级为验收 gate） | 冷路径一次性 |
 
+### 本轮边界（`mv.analysis-start`）
+
+fork 源尾部在切换叙事之后追加一条 `custom_message` 边界条目（`meeting_fs.
+BOUNDARY_TYPE`）——**显式登记"历史（fork 携带）/ 本轮"的分界**。
+
+为什么必须显式：`--report` 的 LLM 段要统计**本次分析**的 usage，而 session
+文件里同时含 fork 携带的历史条目（也有 assistant + usage）。按条数/时间戳
+推断都会漂移（切换叙事改措辞、时钟精度）。2026-09-11 实测：不带边界时报告
+把 717 条 fork 历史算成"本轮 367 次响应 / input 1.2M / cacheRead 136.6M"。
+
+消费规则：`meeting_fs.iter_after_boundary` 只产出边界之后的条目；**未找到
+边界（老产物/手工 session）→ 返回空、按 n/a 处理，不得退回全文扫描**
+（那正是修掉的口径错误）。pi 对 `custom_message` 条目的容忍已冒烟验证。
+
 ### 登记字段（无家就地捕获）
 
 唤醒完成行追加两个字段——**只有这里**产出，`--report` 是唯一读者：
