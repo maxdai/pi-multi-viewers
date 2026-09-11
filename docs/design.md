@@ -252,7 +252,20 @@ commit 是溯源记录、本节是长期引用点——不并存两份权威值�
     engine/loop/viewer/start_discussion/fake_agent（`repo.git` 早已收归
     fs 层，产物名却没有家）。文件叫什么、多大算有效——同一概念的两个
     数字住在一起。
-13. **git 守卫范围 = 从讨论 workdir 发起的操作**（`GIT_CEILING_DIRECTORIES`
+13. **分层 = core ← fs ← engine ← loop，`start_discussion` 是组合层**
+    （S2 拆分后）：三项职责按"谁消费"拆到两个同层模块——
+    `spec_gen.py`（分析前的静态产物生成 + 为其服务的 pi 环境探测）、
+    `observability.py`（运行期只读观测）；主文件保留 CLI 分发、环境创建、
+    启动、清理与编排。**判据是职责而非行数**：spec 生成与观测各自 350–520
+    行、概念内聚，再拆会制造碎片（import 网变复杂而收益递减）。
+    两个子模块只依赖底层（core/fs/engine），互不依赖、不反向依赖主文件；
+    主文件 re-export 子模块公开符号，保证 `from start_discussion import X`
+    的既有调用方（tests/wrapper）零改动。
+    **拆分暴露的纪律**：`mock.patch` 必须打在**符号定义处**（拆前
+    `start_discussion.check_status` 与定义处同址，拆后 mock re-export
+    不生效——本轮 4 处测试因此假绿/失败，已改到 `spec_gen` /
+    `observability`）。
+14. **git 守卫范围 = 从讨论 workdir 发起的操作**（`GIT_CEILING_DIRECTORIES`
    注入于 spawn）；主项目仓库不在守卫范围（agent 的 cwd 就是主项目，其
    约束归指令层 + 主项目 `.gitignore`）。要拦主仓库需换机制类（沙箱/钩子），
    经评估收益不支撑扩面。

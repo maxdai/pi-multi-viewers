@@ -454,13 +454,14 @@ class TestStartDiscussionMain(unittest.TestCase):
         """--wait 在给定 check_status 下的终态输出（真实 subprocess 太重，
         仅驱动 main 的等待分支）。"""
         import start_discussion as sd
+        import observability
         import human_viewer
         base = os.path.join(tmp, "disc-x")
         os.makedirs(base, exist_ok=True)
         out = []
         with mock.patch("sys.argv", ["start_discussion.py", "--dir", base,
                                      "--wait"]):
-            with mock.patch("start_discussion.check_status",
+            with mock.patch("observability.check_status",
                             return_value=state):
                 # --wait 前置会读 bare 的参与者列表（本测试不建 bare）
                 with mock.patch.object(human_viewer,

@@ -13,26 +13,33 @@
 
 生命周期：
   创建（--dir）→ 启动（--start，可选）→ 观察（--status/--wait）→ 清理（--cleanup）
+
+本文件 = **组合层**（CLI 分发 + 环境创建/启动/清理 + 编排）。同层拆出的模块：
+  spec_gen.py     spec 生成（question/骨架/viewers 快照/agent 定义 + pi 环境探测）
+  observability.py 观测（check_status / --report / --wait / loop 存活）
+
+依赖方向：主文件 → {spec_gen, observability, meeting_fs, meeting_engine,
+human_viewer}；两个子模块**只**依赖底层（core/fs/engine），不互相依赖、
+不反向依赖主文件。为向后兼容（tests/wrapper 的 `from start_discussion
+import X`），主文件 re-export 了子模块的公开符号（见文件尾部）。
 """
 
 import argparse
-import glob
 import json
 import os
-import meeting_fs
-import human_viewer
-import meeting_core
-import meeting_engine
 import re
 import shutil
 import subprocess
 import sys
 import time
 
+import meeting_fs
+import observability
+import spec_gen
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 TPL_DIR = os.path.join(HERE, "templates")
-PI_AGENT_DIR = os.environ.get("PI_CODING_AGENT_DIR",
-                             os.path.expanduser("~/.pi/agent"))
+
 GIT_USER = "meeting-bot"
 GIT_EMAIL = "meeting-bot@local"
 
@@ -50,107 +57,12 @@ def run_cmd(cmd, cwd=None, check=True):
     return r
 
 
-def _spec_read(spec_dir, rel):
-    """读 spec 文件内容，永远跳过第一行（说明行，B 方案）。
-
-    设计 16.4：第一行是骨架生成时的用途说明，不注入；正文从第二行起。
-    文件不存在 → 返回 None（逐文件独立回退）。
-    """
-    fp = os.path.join(spec_dir, rel)
-    if not os.path.isfile(fp):
-        return None
-    with open(fp) as f:
-        lines = f.read().splitlines()
-    return "\n".join(lines[1:]).strip("\n")
 
 
-def _join_model_ref(provider, model_id):
-    """按 pi 契约把 (provider, model_id) 拼成完整 model ref。
-
-    契约（pi 源码 resolveSpawnContext）：PI_PROVIDER=provider、
-    PI_MODEL=model id；session 的 model_change 同样分 provider/modelId
-    两字段；settings 的 defaultModel/defaultProvider 同构。**model id 本身
-    可含 '/'**（聚合类 provider 的命名空间 id，如 commandcode-goat 的
-    "deepseek/deepseek-v4-flash"）——因此拼接是**无条件**的字段拼接，
-    不得按"是否含斜杠"猜形状（形状启发式会把 provider 丢掉，解析到
-    同名的另一个 provider，静默失真；2026-09-10 实测 fix）。
-
-    provider 缺失时只能原样返回（无法拼接）——这是调用方应保证的前置。
-    """
-    provider = (provider or "").strip()
-    model_id = (model_id or "").strip()
-    if not model_id:
-        return ""
-    if not provider:
-        return model_id
-    return f"{provider}/{model_id}"
 
 
-def _default_model():
-    """本机默认模型（如 opencode-go/deepseek-v4-flash）。
-
-    从 pi settings.json 读取 defaultProvider/defaultModel，按契约拼接
-    （_join_model_ref——defaultModel 同样可能是含 '/' 的 id）。
-    无默认模型配置 → 返回 None（pi-agent.json 不写 model，回退 pi 默认）。
-    获取失败（pi 不可用/无 settings）→ 返回 None。
-    """
-    try:
-        with open(os.path.join(PI_AGENT_DIR, "settings.json")) as f:
-            cfg = json.load(f)
-        provider = cfg.get("defaultProvider") or ""
-        model = cfg.get("defaultModel") or ""
-        if not model:
-            return None
-        return _join_model_ref(provider, model) or None
-    except (OSError, ValueError):
-        return None
 
 
-def _detect_pi_model_thinking():
-    """探测主 pi 当前 model/thinking（spec models.md 预填，对齐 wrapper 旧语义）。
-
-    顺序：PI_MODEL/PI_PROVIDER/PI_REASONING_LEVEL 环境变量（wrapper 由主 pi
-    bash 注入）→ session 文件最后 model_change/thinking_level_change 事件
-    （PI_SESSION_FILE 或 cwd 编码目录最新 jsonl）→ settings 默认（_default_model）。
-    返回 (model, thinking)——缺失项为空串。
-    """
-    model = os.environ.get("PI_MODEL") or ""
-    provider = os.environ.get("PI_PROVIDER") or ""
-    thinking = os.environ.get("PI_REASONING_LEVEL") or ""
-    # 契约拼接（不按形状猜——id 可含 '/'，见 _join_model_ref）
-    model = _join_model_ref(provider, model)
-    if model and thinking:
-        return model, thinking
-    # session 文件兜底（查找规则单点：current_session_file）
-    try:
-        sf = current_session_file()
-        if sf:
-            sm = st = sp = ""
-            with open(sf, encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        ev = json.loads(line)
-                    except ValueError:
-                        continue
-                    t = ev.get("type")
-                    if t == "model_change":
-                        sm = ev.get("modelId") or sm
-                        sp = ev.get("provider") or sp
-                    elif t == "thinking_level_change":
-                        st = ev.get("thinkingLevel") or st
-            if not model and sm:
-                # model_change 是 provider + modelId 两字段——同样按契约拼接
-                model = _join_model_ref(sp, sm)
-            if not thinking and st:
-                thinking = st
-    except OSError:
-        pass
-    if not model:
-        model = _default_model() or ""
-    return model, thinking
 
 
 def _spec_models(spec_dir, participants):
@@ -186,157 +98,10 @@ def _spec_models(spec_dir, participants):
     return out
 
 
-def _strip_empty_sections(question):
-    """去掉 question.md 中未填的可选节（打磨项 2026-09-01 讨论结论）。
-
-    模板生成的可选节（## 初始立场 / ## 待回答的问题）如果用户没编辑，
-    节内只有占位符行（"- X: 立场" / "- 问题"）——注入前整节去掉，
-    避免占位符混入讨论环境。判据精确：占位符是确定字符串，用户真实
-    内容不会写成 "- X: 立场"（立场值就是"立场"二字）。
-    """
-    placeholder = re.compile(r"^-\s+(\w+:)?\s*立场$|^-\s+问题$")
-    out = []
-    pending_title = None  # 当前节的标题（占位符节连标题一起删）
-    cur = []  # 当前节内容行
-    cur_is_placeholder = True
-
-    def flush():
-        if not cur_is_placeholder:
-            if pending_title is not None:
-                out.append(pending_title)
-            out.extend(cur)
-
-    for line in question.splitlines():
-        if line.startswith("## "):
-            flush()
-            pending_title = line
-            cur = []
-            cur_is_placeholder = True
-        elif line.strip() == "":
-            cur.append(line)
-        else:
-            cur.append(line)
-            if not placeholder.match(line):
-                cur_is_placeholder = False
-    flush()
-    return "\n".join(out)
 
 
-def gen_spec_skeleton(spec_dir, participants, topic=None, background=None,
-                      viewers_dir=None):
-    """生成 spec 骨架（--spec-gen，唯一实现）：question.md + background.md +
-    models.md + agents/。
-
-    agents/ 三态：viewers_dir 给定 → _snapshot_viewers（校验+快照，失败
-    返回 (None, err)、零产物）；显式 participants → 占位骨架；两者皆无 →
-    无 agents/（start 报错提示）。
-    topic/background: wrapper --prepare 传入（直接填进骨架）；CLI 直用
-      时缺省 = 占位文案。
-    models.md 预填主 pi 当前 model/thinking（_detect_pi_model_thinking，
-    对齐旧 wrapper read_pi_model_thinking 语义——用户少改一个文件）。
-    每个文件第一行 = 用途说明（不注入，设计 16.4）。
-    """
-    if viewers_dir:
-        participants, err = _snapshot_viewers(spec_dir, viewers_dir)
-        if err:
-            return None, err
-    # spec 目录本身无条件创建（2026-09-09 回归修复：agents 创建并入条件
-    # 分支后，viewers 骨架曾连 spec_dir 都不建 → README copy 崩）
-    os.makedirs(spec_dir, exist_ok=True)
-    # agents/ 占位骨架仅显式 --agents 时生成（viewers 快照路径已建好并
-    # 含内容——不能被占位覆盖；两者皆无 = viewers 发现留给启动时点）
-    if participants and not viewers_dir:
-        os.makedirs(os.path.join(spec_dir, "agents"), exist_ok=True)
-    # README.md：从模板复制（内容不变——模板化，用户 7909）
-    shutil.copyfile(os.path.join(TPL_DIR, "spec-readme.md.tpl"),
-                    os.path.join(spec_dir, "README.md"))
-    # question.md：第一行说明 + 基本结构模板（用户 7713：提供基本结构）
-    q = [
-        "# question.md——分析起点（话题/立场/待答问题，自由 markdown）。本行是说明行，不会注入。",
-        "",
-        f"# 分析主题：{topic or "请填写"}",
-        "",
-        "## 初始立场（可选，每参与者一行）",
-    ]
-    q += [f"- {p}: 立场" for p in participants]
-    q += ["", "## 待回答的问题（可选）", "- 问题", ""]
-    with open(os.path.join(spec_dir, "question.md"), "w") as f:
-        f.write("\n".join(q))
-    # background.md（第一行说明 + 正文；用户 7707：文件可以是空的）
-    with open(os.path.join(spec_dir, "background.md"), "w") as f:
-        f.write("# background.md——显式边界与约定（注入每个 work 的 AGENTS.md 背景节）。"
-                "本行是说明行，不会注入。\n\n")
-        if background:
-            f.write(background + "\n")
-    # models.md（用户 8024/9204/9271：预列各 agent，每行 agent名: model，
-    # variant 默认 max 隐式——只有非 max 才写 `, variant`，日常更简洁；
-    # model/thinking 预填主 pi 当前值，用户少改一个文件）
-    pm, pt = _detect_pi_model_thinking()
-    with open(os.path.join(spec_dir, "models.md"), "w") as f:
-        lines = ["# models.md——模型配置（可选）。每行：agent名: model[, variant]。"
-                 "model 默认 default，variant 默认 max（只有不用 max 才写 variant）。"
-                 "本行是说明行，不会注入。"]
-        for p in participants:
-            if pm and pt:
-                lines.append(f"{p}: {pm}, {pt}")
-            elif pm:
-                lines.append(f"{p}: {pm}")
-            elif pt:
-                lines.append(f"{p}: default, {pt}")
-            else:
-                lines.append(f"{p}: default")
-        f.write("\n".join(lines) + "\n")
-    # agents/X.md 占位 + .order（仅显式 --agents 时；快照路径的 .order
-    # 由 _snapshot_viewers 写入，此处不得重写）
-    if participants and not viewers_dir:
-        for p in participants:
-            with open(os.path.join(spec_dir, "agents", f"{p}.md"), "w") as f:
-                f.write(f"# {p}.md——agent {p} 的分工/补充（追加到 agent {p} 定义正文）。"
-                        f"本行是说明行，不会注入。\n\n")
-        # .order：固化 --agents 顺序（审核#6——sorted() 推断破坏顺序语义，
-        # starter/默认 resultWriter/RR 轮转链依赖 participants 顺序）
-        with open(os.path.join(spec_dir, "agents", ".order"), "w") as f:
-            f.write("\n".join(participants) + "\n")
-    return participants, None
 
 
-def gen_agents_md(args, agent, participants, spec_background=None,
-                 main_pi_cwd=None):
-    """meeting 协议 AGENTS.md（共享协议 + background；身份/立场在 agent
-    定义/question.md）。
-
-    spec_background: spec 提供时优先（设计 16.6），否则 args.background，否则占位。
-    main_pi_cwd: 主 pi 工作目录（程序化注入，用户 2026-09-02）——直接进
-      AGENTS.md（注入 system prompt 的载体），不经 background.md 转接：
-      background.md 是人工编辑的讨论内容（用户审核 spec 时看），cwd 是
-      环境事实（程序化写入），分开保持各自干净。None（手动场景）→ 节隐藏。
-    """
-    others = [p for p in participants if p != agent]
-    sample = others[0] if others else "x"
-    background = (spec_background if spec_background is not None
-                  else (args.background or "（无）"))
-    with open(os.path.join(TPL_DIR, "AGENTS.md.tpl")) as f:
-        tpl = f.read()
-    # cwd 节：占位符填充（T5 修复，e2e7 评审）——原实现先 format 出
-    # "（未提供）"再整段字符串 replace 删除：模板文案/换行一改，隐藏
-    # 静默失效（模板与 python 双份文本耦合）。占位符方案：节文本单份
-    # 定义在此，模板位置显式可见；None → 空串（节消失）
-    if main_pi_cwd:
-        cwd_section = (
-            f"\n## 主 pi 工作目录\n\n分析环境的主 pi 在 `{main_pi_cwd}` "
-            f"目录运行。与该目录相关的信息\n（源码、文档、配置）可在其中"
-            f"查找：如有需要可查看相关文件以获取\n比本背景更详细的信息。\n")
-    else:
-        cwd_section = ""
-    out = tpl.format(
-        AGENT_NAME=agent,
-        N=str(len(participants)),
-        PARTICIPANTS_DISPLAY="、".join(participants),
-        SAMPLE_OTHER=sample,
-        BACKGROUND=background,
-        MAIN_PI_CWD_SECTION=cwd_section,
-    )
-    return out
 
 
 def gen_agent_def(agent, participants, models=None, stances=None, extra=None):
@@ -371,54 +136,8 @@ def gen_agent_def(agent, participants, models=None, stances=None, extra=None):
     return result
 
 
-def gen_question(topic, stances, background, questions):
-    """question.md（讨论起点：话题 + 可选立场 + 待回答问题）。
-
-    分层（2026-08-09）：background 移到 AGENTS.md（共享，system prompt）；
-    立场保持在此（非强制、可被说服，不进 system prompt）。
-    """
-    # 措辞与 spec 骨架（gen_spec_skeleton）、spec-readme 模板、prompt 统一为
-    # "# 分析主题："——**单一措辞**，消费端只认它（此前生产路径产
-    # "# 讨论主题：" 而消费端写兼容循环兜两种，根因却是生产自己在产旧措辞）
-    lines = [f"# 分析主题：{topic}", ""]
-    if stances:
-        lines += ["## 初始立场", "每个参与者有自己的初始立场（可被论据说服）：", ""]
-        for k, v in stances.items():
-            lines.append(f"- {k}: {v}")
-        lines += ["", "开场时请声明你的立场，然后参与讨论。"]
-    if questions:
-        lines += ["", "## 待回答的问题"] + [f"- {q}" for q in questions] + [""]
-    return "\n".join(lines)
 
 
-def gen_protocol(topic, participants, max_meeting, max_rr, pure=False,
-                 result_writer=None,
-                 stall_timeout=meeting_fs.DEFAULT_STALL_TIMEOUT,
-                 fork_source=None, fork_cwd=None,
-                 fork_mode=meeting_fs.DEFAULT_FORK_MODE):
-    """protocol.json（meeting 模式）。"""
-    rw = result_writer or participants[-1]
-    proto = {
-        "mode": "meeting",
-        "protocol_version": 2,
-        "topic": topic or "",
-        "participants": participants,
-        "resultWriter": rw,
-        "maxMeetingRounds": max_meeting,
-        "maxRRRounds": max_rr,
-        "stallTimeoutSeconds": stall_timeout,
-        "commitPolicy": "one-message-per-commit",
-    }
-    if pure:
-        proto["pure"] = True
-    if fork_source:
-        # fork 模式（多视角）：首唤挂载主 session + cwd=主项目
-        # forkMode 取值域与默认值的定义在 meeting_fs（FORK_MODES /
-        # DEFAULT_FORK_MODE，单一事实源）；此处只写入选定值
-        proto["forkSource"] = fork_source
-        proto["forkCwd"] = fork_cwd or os.getcwd()
-        proto["forkMode"] = fork_mode
-    return proto
 
 
 def _resolve_path(p):
@@ -427,194 +146,24 @@ def _resolve_path(p):
         return os.path.abspath(os.path.expanduser(p))
     return os.path.join(os.getcwd(), p)
 
-MAX_AGENT_NAME_LEN = 32
 
 
-def pi_sessions_dir(cwd):
-    """主 pi session 目录（编码约定单点，T7 收归 e2e7 评审）。
-
-    pi 的 session 目录编码 = "--" + 去首尾斜杠 + 内斜杠换 "-" + "--"
-    （/root/x → --root-x--；/tmp → --tmp--）。此前该约定在
-    _detect_pi_model_thinking 与 resolve_fork_source 两处字面量重复，
-    AGENTS.md 明言"编码错一根横线 = 静默解析不到"——风险点不应复制。
-    """
-    enc = "--" + cwd.strip("/").replace("/", "-") + "--"
-    return os.path.join(PI_AGENT_DIR, "sessions", enc)
 
 
-def current_session_file():
-    """当前主 pi 的 session 文件路径（解析不到 → 空串）。
-
-    **查找规则的唯一实现**（此前两处各写一遍：resolve_fork_source 按
-    PI_SESSION_ID 匹配文件名、_detect_pi_model_thinking 兜底取目录内
-    **字典序最后**——同一概念两套规则，兜底可能选到别的 session）。
-    规则：PI_SESSION_FILE（pi 直接给的路径，最精确）→ PI_SESSION_ID
-    匹配文件名 → 目录内字典序最后（都无法确认时只能如此，调用方自决
-    是否接受）。
-    """
-    sf = os.environ.get("PI_SESSION_FILE") or ""
-    if sf and os.path.isfile(sf):
-        return sf
-    sdir = pi_sessions_dir(os.getcwd())
-    try:
-        cands = sorted(f for f in os.listdir(sdir) if f.endswith(".jsonl"))
-    except OSError:
-        cands = []
-    if not cands:
-        return ""
-    sid = os.environ.get("PI_SESSION_ID") or ""
-    if sid:
-        hits = [f for f in cands if sid in f]
-        if hits:
-            return os.path.join(sdir, hits[-1])
-    return os.path.join(sdir, cands[-1])
 
 
-def check_agent_name(name):
-    """单个 agent/视角名合法性（T4 收归，e2e7 评审）：唯一实现。
-
-    规则（viewers 文件名即 agent 名 → 同一套规则两处来源）：
-    非空 / 无路径分隔符与空白 / ≤32 字符 / 非 human 保留名。
-    返回错误信息或 None。
-    """
-    if not name:
-        return "空名"
-    if re.search(r"[/\\\s]", name):
-        return "含路径分隔符或空白"
-    if len(name) > MAX_AGENT_NAME_LEN:
-        return f"超过 {MAX_AGENT_NAME_LEN} 字符"
-    if name == "human":
-        return "'human' 是保留名（human 插话通道），不可作为参与者"
-    return None
 
 
-def list_agent_md(d):
-    """列出目录下的 agent 定义文件名（去 `.md`、**排除隐藏文件**、排序）。
-
-    **列举规则的唯一实现**——viewers/ 与 spec/agents/ 两条来源共用。
-    为什么排除隐藏文件：`.draft.md` 之类会被当成参与者（名为 `.draft`，
-    点号不在名字规则的禁止集内）静默进入讨论。此前只有 viewers 分支
-    排除、spec/agents 的两处列举没排除（实测缺口）。
-    """
-    return sorted(f[:-3] for f in os.listdir(d)
-                  if f.endswith(".md") and not f.startswith("."))
 
 
-def validate_participants(participants):
-    """整组名字校验（**名字规则的唯一入口**）。返回错误或 None。
-
-    覆盖：非空 / 无路径分隔符与空白 / ≤32 / 非 human 保留名。
-    CLI（--agents）与 spec/viewers（文件名）三条来源路径都经此。
-    """
-    for p in participants:
-        err = check_agent_name(p)
-        if err:
-            return f"错误: 非法 agent 名（{err}）：{p}"
-    return None
 
 
-def viewer_set_error(names, empty, where="viewers/"):
-    """viewers 集合级校验（**唯一实现**）：空正文视角 + 至少 2 个。
-
-    where: 报错时指路的目录前缀（"viewers/" 或 "spec/agents/"）。
-    返回错误文本或 None。为什么单点：同一套规则曾在 prepare 快照路径与
-    spec 解析路径各写一遍，文案与检查项已经漂移（实测：非法名文案带不带
-    文件名后缀不一致、≥2 检查一处列参与者一处不列）。
-    """
-    if empty:
-        # 空视角 = 没有 lenses 的 agent：行为由模型自由发挥，多视角退化成
-        # "同名随机视角"——静默退化，与无静默铁律相悖（占位文件忘写是常见成因）
-        detail = "、".join(f"{where}{n}.md（{why}）" for n, why in empty)
-        return (f"错误: {detail}——视角任务书不能为空"
-                f"（写清该视角用什么 lenses 看分析对象）")
-    if len(names) < 2:
-        return (f"错误: {where} 下仅发现 {len(names)} 个视角"
-                f"（{', '.join(names)}）——多视角分析至少需要 2 个")
-    return None
 
 
-def _discover_viewers(viewers_dir):
-    """发现 viewers 目录（多视角产品约定）：*.md 文件名即 agent 名。
-
-    返回 (participants, briefs, errors)——participants 按文件名排序（决定
-    starter/RR 轮转与默认 resultWriter）；briefs = {agent: 视角任务书正文}；
-    errors = [(name, 原因)]（空/纯空白视角——这类视角无 lenses，会让多视角
-    退化成同名随机视角，属静默退化，必须报错而非放行）。
-    目录不存在/无文件 → (None, None, [])（调用方决定报错或回退）。
-    """
-    if not os.path.isdir(viewers_dir):
-        return None, None, []
-    names = list_agent_md(viewers_dir)
-    if not names:
-        return None, None, []
-    briefs, errors = {}, []
-    for n in names:
-        with open(os.path.join(viewers_dir, f"{n}.md"), encoding="utf-8") as f:
-            brief = f.read().strip("\n")
-        if not brief.strip():
-            errors.append((n, "空视角任务书（没有任何视角内容）"))
-            continue
-        briefs[n] = brief
-    return names, briefs, errors
 
 
-def resolve_fork_source():
-    """从主 pi 环境（PI_SESSION_ID）解析当前 session 文件绝对路径
-    （fork-only 启动必需，2026-09-09 从 wrapper 收归——session 文件发现
-    逻辑与 _detect_pi_model_thinking 同款路径约定）。
-
-    sessions 目录编码 = "--" + 去首尾斜杠内斜杠换 "-" + "--"。
-    返回 (fork_source 或 None, error)——PI_SESSION_ID 未注入/文件缺失
-    都是明确错误（fork-only 无静默退化）。
-    """
-    sid = os.environ.get("PI_SESSION_ID") or ""
-    if not sid:
-        return None, ("错误: PI_SESSION_ID 未注入——多视角分析必须在主 pi "
-                      "session 内经 wrapper 启动。若确实在 session 内，"
-                      "检查是否有扩展接管了 bash 工具（如 AFT 的 "
-                      "`~/.config/cortexkit/aft.jsonc` 未设 \"bash\": false）"
-                      "——接管后 pi 的环境变量不会传入 bash")
-    # 委托 current_session_file（查找规则单点）；这里只管错误语义
-    path = current_session_file()
-    if not path or sid not in os.path.basename(path):
-        sdir = pi_sessions_dir(os.getcwd())
-        enc = os.path.basename(sdir)
-        return None, (f"错误: 未找到主 session 文件（{enc}/*_{sid}.jsonl）"
-                      "——fork-only 模式必须挂载主 session")
-    return path, None
 
 
-def _snapshot_viewers(spec_dir, viewers_dir):
-    """viewers 校验（prepare 时点）+ 快照进 spec/agents/（单一事实源：
-    所有视角都源自 viewers/，spec agents/ = 本场快照，可按场修改，
-    分析结束 spec 即删、资产永续；用户 2026-09-09 设计）。
-
-    校验（任何违规 → 返回错误，不产生任何 spec 文件——用户：不合规
-    根本不应该开始 spec-gen）：目录存在 / ≥2 个合法 .md（排除隐藏）/
-    无 human / 名字合法（空白/路径分隔符/≤32）。
-    快照文件含说明行首行（spec 约定：_spec_read 跳过首行——裸拷贝会
-    把正文首行当说明吃掉，实测缺口）。
-    返回 (participants, error)。
-    """
-    names, _briefs, empty = _discover_viewers(viewers_dir)
-    if names is None:
-        return None, ("错误: 未找到 viewers/ 目录——多视角分析的视角资产"
-                      "必须先建好（项目 cwd 下 viewers/<视角名>.md，至少 2 个）")
-    err = validate_participants(names) or viewer_set_error(names, empty)
-    if err:
-        return None, err
-    agents_dir = os.path.join(spec_dir, "agents")
-    os.makedirs(agents_dir, exist_ok=True)
-    for n in names:
-        with open(os.path.join(viewers_dir, f"{n}.md")) as f:
-            brief = f.read()
-        with open(os.path.join(agents_dir, f"{n}.md"), "w") as f:
-            f.write(f"# {n}.md——快照自 viewers/{n}.md（本行说明不注入；"
-                    f"按场修改这里，不影响 viewers/ 资产）\n\n")
-            f.write(brief)
-    with open(os.path.join(agents_dir, ".order"), "w") as f:
-        f.write("\n".join(names) + "\n")
-    return names, None
 
 
 def _resolve_spec(spec, agents, topic, background, stances, questions, models,
@@ -897,77 +446,10 @@ def cleanup_discussion(base):
     print(f"[cleanup] 已删除目录 {base}（含 pi-sessions）")
 
 
-def _loop_pids(base):
-    """本讨论存活的 loop PID 列表。
-
-    **判据 = argv 精确相等，不是命令行文本正则**（2026-09-10 评审 A2）：
-    `pgrep -f <正则>` 会匹配到**任何**命令行里含该文本的进程——从 shell
-    包装调用时（`bash -c "...pgrep -f 'meeting_loop.py.*<base>'..."`）会命中
-    调用者自身，误判"有 loop 存活"。项目已固化该教训（docs/test-methodology.md
-    方法 2：方括号技巧或精确 PID），此处用 /proc 的 argv 逐项比较根治：
-    只看 argv 里是否有**恰好等于** `os.path.join(base, "meeting_loop.py")`
-    的元素——与启动方（Popen cmd 的第一个参数）同一构造。
-    附带：/proc 扫描 ≈1.1ms vs pgrep ≈5.9ms（不构成选型理由，理由是判据精度）。
-
-    读不到 /proc（非 Linux/权限）→ 返回空列表（fail-open：与"无 loop"同义，
-    只影响状态显示，不影响流程——loop 自身不依赖此函数）。
-    """
-    target = os.path.join(base, "meeting_loop.py")
-    pids = []
-    for entry in glob.glob("/proc/[0-9]*/cmdline"):
-        try:
-            with open(entry, "rb") as f:
-                argv = f.read().decode("utf-8", "replace").split("\0")
-        except OSError:
-            continue
-        if target in argv:
-            pids.append(entry.split("/")[2])
-    return pids
 
 
-def _loops_alive(base):
-    """讨论的 loop 进程是否存活（argv 精确匹配，见 _loop_pids）。"""
-    return bool(_loop_pids(base))
 
 
-def check_status(base):
-    """讨论状态（单值；状态全集显式于此，T3/#7 修复 e2e7 评审）：
-
-      not-exists   无 bare（目录不存在/未创建）
-      done         result.md + concluded（权威收尾完成）
-      running      有 loop 存活（讨论中 / 收尾中——收尾中细分见下）
-      stalled      有 result.md 无 concluded 且 **loop 均不存活**
-                   （收尾中断：rw 崩溃在 result.md 之后、concluded 之前）
-      stopped      无 result.md 且 loop 不存活（未启动/中断）
-
-    修复动因（e2e7 评审 T3）：原实现"有 result.md 无 concluded"恒返回
-    running 且不看存活 → "收尾进行中"与"收尾间隙崩溃"不可区分，--wait
-    无限轮询（无终止上界）。现 stalled 使 --wait 有界退出。
-    移除恒 None 第二返回值（#7 装饰性契约）——信息由状态本身表达。
-    """
-    bare = meeting_fs.bare_of_base(base)
-    if not os.path.isdir(bare):
-        return "not-exists"
-    # 读路径统一走 fs.run_git（quotepath 加固单点；run_cmd 只做一次性
-    # 环境命令——init/clone/config/push）
-    # 读路径统一走 fs.run_git（quotepath 加固单点；run_cmd 只做一次性
-    # 环境命令——init/clone/config/push）
-    agents = meeting_fs.read_protocol(bare).get("participants", [])
-    # "收尾完成"判据**单源** = human_viewer.is_finished（concluded 且
-    # HEAD:result.md 有效）——与 viewer 的 done 同一判据（§3.5-P5：此前
-    # viewer 认 concluded、这里还额外认 result.md 存在，分叉会让 viewer
-    # 在产物落盘前先报"已结束"并打印尚不存在的路径）。
-    # 不用 git grep 全文：行文本匹配会被 result.md/消息正文里的
-    # `type: concluded` 误触发（实测）；human 消息天然排除（aggregate_mode
-    # 只按 participants 取末条）。
-    if human_viewer.is_finished(bare, agents):
-        return "done"
-    # 未完成：有 result.md 但未收尾 → 看 loop 存活区分收尾中/收尾中断
-    r = meeting_fs.run_git(bare, "log", "--all", "--format=%H", "--",
-                           meeting_fs.RESULT_MD, check=False)
-    if r.stdout.strip():
-        return "running" if _loops_alive(base) else "stalled"
-    return "running" if _loops_alive(base) else "stopped"
 
 
 def _parse_agents(agents_arg):
@@ -995,302 +477,35 @@ def _parse_agents(agents_arg):
     return participants, None
 
 
-def wait_for_completion(base):
-    """`--wait`：阻塞展示进展直到收尾或终态。返回退出码（0 完成 / 1 终止）。
-
-    从 main 内联抽出（main 里最大单块；项目方法论把 main/CLI 分发
-    列为独立测试盲区）。**纯结构变换**：调用序列与 sleep 序列逐字
-    不变——helper 只做机械动作（状态判定 → 打印 → 增量展示 → sleep），
-    不吸收"何时进入分支"的阶段判断。
-
-    终止语义（四种终态，各有明确文案）：stalled / not-exists /
-    stopped（按 loop-*.log 分叉成因）/ done（含固定位 result.md 提示）。
-    """
-    # T1 收归（e2e7 评审）：进展展示复用 human_viewer.incremental
-    # （原内联 65 行自行 git log 全量 + 手工解析 frontmatter——与
-    # viewer 两套输出格式、非增量、概念丢失）。incremental 走
-    # since..HEAD 增量 + 统一 format_message。
-    import human_viewer
-    sys.stdout.reconfigure(line_buffering=True)
-    print(f"[wait] 等待讨论完成: {base}")
-    bare = meeting_fs.bare_of_base(base)
-    agents = human_viewer.participants_from_bare(bare) or []
-    since = ""   # 首次全量（--wait 一次性观察，无游标持久需求）
-    first = True
-    while True:
-        state = check_status(base)
-        if state == "stalled":
-            print("[wait] 收尾中断（result.md 已提交、concluded 缺失、"
-                  "无 loop 存活）——停止等待；可读 result.md 或 --cleanup")
-            return 1
-        if state == "not-exists":
-            print(f"[wait] 讨论不存在: {base}")
-            return 1
-        if state == "stopped":
-            # 终态：无 result.md 且无 loop 存活。
-            #
-            # **不用 loop-*.log 存在性分叉成因**（§3.4-P4）：那是拿日志当
-            # 判定输入（唯一实例，与"日志零判定输入"不变量冲突），且两个
-            # 分支给出的动作此前都不可执行（`--start` 对已存在目录报"请先
-            # --cleanup"；裸 `--start <base>` 又因缺 question.md 失败）。
-            # 合并为一条动作完整的提示——真正可执行的是 `--skip-setup
-            # --start`（环境不完整则先 --cleanup 重建）。
-            print(f"[wait] 未在运行且未收尾（{base}：无 loop 存活、无 "
-                  "result.md）——查 loop-*.log / status-*.json 判断原因；"
-                  "重跑：--skip-setup --start（protocol 缺失则先 --cleanup "
-                  "后重建）")
-            return 1
-        _mode, lines, head, done, _progress = human_viewer.incremental(
-            bare, agents, since,
-            meeting_fs.read_protocol(bare).get("maxMeetingRounds"))
-        if done:
-            for line in lines:
-                print(line)
-                print()
-            print("[wait] 讨论完成 ✅")
-            # 固定位（与 prompt 收尾指引一致）：resultWriter 的 loop
-            # 退出时保存、cleanup 兜底再存一次——调用方无需推 rw 是谁
-            print(f"[wait] result.md: {base}-result.md")
-            return 0
-        for line in lines:
-            print(f"[wait] {time.strftime('%H:%M:%S')} 新进展:")
-            print(line)
-            print()
-        since = head or since
-        if first:
-            first = False
-        # 观察刷新节奏（消费端常量——与 loop 的空闲重试节奏有意独立，
-        # 见 human_viewer.OBSERVER_POLL_INTERVAL 注释）。原硬编码 10s
-        # 会让结束观察延迟最长 10s（e2e13 时间流分析：唯一 >10s 的
-        # 非必要等待点）。
-        time.sleep(human_viewer.OBSERVER_POLL_INTERVAL)
 
 
-def build_report(base):
-    """只读报告（`--report`）——观测面的**唯一机器消费出口**。
-
-    契约（design.md 观测面契约节）：
-    - **冷路径一次性**：不常驻、不被轮询；调用方（人/主 pi）按需触发。
-    - **不持久化**：视图不占"数字的家"——数字的家是 bare（判定域）、
-      loop log 的登记字段、pi session 的文档化字段；报告只是它们的一次投影。
-    - **fail-open**：任何一段读不出（缺目录/缺文件/格式变）→ 该段显示 n/a，
-      不报错、不改判定、不阻塞。
-    - **跨度分标**：进程跨度（elapsed_ms）≠ per-response 跨度（session
-      时间戳差）≠ 墙钟跨度（commit 时间差）——各自标名，不混算。
-    - **不得升级为验收 gate**：有效期判断留给人 + result.md（本轮 §4 明确
-      不做运行期评分）。
-
-    返回输出行列表（调用方 print）。
-    """
-    out = []
-    out.append(f"[报告] {base}")
-    bare = meeting_fs.bare_of_base(base)
-    if not os.path.isdir(bare):
-        out.append("  分析目录不存在（已 cleanup？）——n/a")
-        return out
-    agents = meeting_fs.read_protocol(bare).get("participants", [])
-    if not agents:
-        out.append("  协议不可读（participants 空）——n/a")
-        return out
-    proto = meeting_fs.read_protocol(bare)
-
-    # ---- 流程时间线（bare = 判定域，现场派生） ----
-    r = meeting_fs.run_git(bare, "log", "--reverse", "--format=%ct%x09%s",
-                           "HEAD", check=False)
-    rows = []
-    for line in r.stdout.splitlines():
-        if "\t" not in line:
-            continue
-        ts, subj = line.split("\t", 1)
-        rows.append((int(ts), subj))
-    per_agent = {a: 0 for a in agents}
-    human_n = 0
-    for _, subj in rows:
-        m = re.match(r"discuss:\s*(.+?)/(\d+)$", subj)
-        if not m:
-            continue
-        who = m.group(1)
-        if who == "human" or who not in per_agent:
-            human_n += 1
-        else:
-            per_agent[who] += 1
-    if rows:
-        span = rows[-1][0] - rows[0][0]
-        out.append(f"流程：{len(agents)} agents | 提交 "
-                   f"{sum(per_agent.values())}（含流程信号；"
-                   + " / ".join(f"{a} {n}" for a, n in per_agent.items())
-                   + f"）| 墙钟跨度 {_dur(span)}（首末 commit 差）")
-    # 最长无进展间隔（相邻 commit 间隔的最大值）
-    gaps = [(rows[i + 1][0] - rows[i][0], rows[i][0], rows[i + 1][0])
-            for i in range(len(rows) - 1)]
-    if gaps:
-        g, t1, t2 = max(gaps)
-        out.append(f"节奏：最长无进展 interval {_dur(g)}"
-                   f"（{_hhmm(t1)} → {_hhmm(t2)}，commit 间隔）")
-
-    # ---- 配额与 human 插话（bare 派生，无状态） ----
-    # **配额消耗从 frontmatter 统计**（mode==meeting 且 type==message），
-    # 不是"该 agent 的消息总数"——上限约束的是 meeting 发言轮次，而一个
-    # agent 的消息里还有 freezing/all-freezing/pass/concluded 等流程信号。
-    # 两者混算会出现"meeting 6/2"这种超限假象（口径错误，2026-09-11 实测）。
-    msgs = meeting_engine.each_agent_messages(bare, agents)
-    lasts = {a: (msgs[a][-1] if msgs[a] else None) for a in agents}
-    types = {a: (lasts[a].get("type") if lasts[a] else None) for a in agents}
-    quota_meeting = proto.get("maxMeetingRounds", 10)
-    quota_rr = proto.get("maxRRRounds", 7)
-    out.append("配额：meeting " + "、".join(
-        f"{a} {meeting_core.meeting_speak_count(msgs, a)}/{quota_meeting}"
-        for a in agents)
-        + f"（消耗/上限，口径 = mode:meeting 且 type:message）"
-        f"| RR 上限 {quota_rr}/agent | human 插话 {human_n} 条"
-        "（不占配额；各 agent 上限 +human 条数）")
-    frozen = meeting_core.frozen_agents(agents, types)
-    not_frozen = [a for a in agents if a not in frozen]
-    out.append(f"冻结：{len(frozen)}/{len(agents)} 已冻结"
-               + (f"（{'、'.join(frozen)}）" if frozen else "")
-               + (f"；未冻结 {'、'.join(not_frozen)}" if not_frozen else ""))
-    # aggregate_mode 期望 {agent: {type, mode}}（core 判定入口形态）——
-    # 用 `.get` 规范化：消息缺字段（老产物/手工 fixture）时按 None 处理，
-    # 不得 KeyError（报告契约：读不出 → 降级，不崩）
-    mode_now = meeting_core.aggregate_mode(
-        {a: ({"type": fm.get("type"), "mode": fm.get("mode")} if fm else None)
-         for a, fm in lasts.items()})
-    if mode_now == meeting_core.M_ROUND_ROBIN:
-        out.append(f"RR：轮到 "
-                   f"{meeting_engine.rr_next_speaker(bare, agents) or '（未定）'}")
-    else:
-        out.append(f"阶段：{mode_now}")
-    # 标题与口径：一次读取派生的三样观测面（配额进度 / 冻结集合 / RR 位置）
-
-    # ---- 进程事实（登记字段；日志的唯一机器消费点） ----
-    proc = _report_wake_fields(base)
-    out.append("进程（loop log 登记字段）：")
-    if not proc:
-        out.append("  n/a（无完成行——尚未唤醒或日志缺失）")
-    for a in agents:
-        d = proc.get(a)
-        if not d:
-            out.append(f"  {a}: n/a")
-            continue
-        out.append(f"  {a}: 唤醒 {d['wakes']} 次 | 进程跨度 总 "
-                   f"{_dur(d['total_ms'] // 1000)} / 最大 "
-                   f"{_dur(d['max_ms'] // 1000)} | rc≠0 {d['fails']} 次")
-
-    # ---- LLM 运行事实（session 文档化字段；流式预过滤，不整文件解析） ----
-    out.append("LLM（session 文档化字段）：")
-    any_usage = False
-    for a in agents:
-        u = _report_session_usage(base, a)
-        if not u:
-            out.append(f"  {a}: n/a")
-            continue
-        any_usage = True
-        out.append(f"  {a}: input {u['input']} | cacheRead "
-                   f"{u['cache_read']} | output {u['output']} | 响应 "
-                   f"{u['responses']} 次 | error {u['errors']} 次")
-    if not any_usage:
-        out.append("  n/a（session 缺失，或无本轮数据——边界条目自 2026-09-11 "
-                   "起写入，此前的老分析不适用）」")
-    out.append("（口径：进程跨度=pi 进程生命周期；输出=prompt 分段合计；"
-               "墙钟=commit 时间差——三者不可互替）")
-    return out
 
 
-def _dur(sec):
-    """人类可读时长（口径由调用方在同一行标注——进程跨度/墙钟/间隔）。"""
-    sec = int(sec)
-    if sec < 60:
-        return f"{sec}s"
-    if sec < 3600:
-        return f"{sec // 60}m{sec % 60:02d}s"
-    return f"{sec // 3600}h{(sec % 3600) // 60:02d}m"
 
 
-def _hhmm(ts):
-    return time.strftime("%H:%M:%S", time.localtime(ts))
 
 
-def _report_wake_fields(base):
-    """解析 loop-*.log 的登记字段（`elapsed_ms` / `rc`）。
-
-    **日志的唯一机器消费点**（观测面契约：日志零判定输入，报告只读已登记
-    字段——不解析自由文本、不做启发式猜测）。fail-open：读不到 → 跳过。
-    """
-    out = {}
-    for f in sorted(glob.glob(os.path.join(base, "loop-*.log"))):
-        agent = os.path.basename(f)[len("loop-"):-len(".log")]
-        d = {"wakes": 0, "total_ms": 0, "max_ms": 0, "fails": 0}
-        try:
-            with open(f, encoding="utf-8", errors="replace") as fh:
-                for line in fh:
-                    m = re.search(r"elapsed_ms=(\d+) rc=(-?\d+)", line)
-                    if not m:
-                        continue
-                    d["wakes"] += 1
-                    ms, rc = int(m.group(1)), int(m.group(2))
-                    d["total_ms"] += ms
-                    d["max_ms"] = max(d["max_ms"], ms)
-                    if rc != 0:
-                        d["fails"] += 1
-        except OSError:
-            continue
-        if d["wakes"]:
-            out[agent] = d
-    return out
 
 
-def _report_session_usage(base, agent):
-    """从该 agent 的 session 文件取 usage（**单一适配器** + 流式预过滤）。
-
-    字段来源 = pi 的**文档化** session schema（`docs/session-format.md`：
-    `usage` / `stopReason`）。行级预过滤（`"usage" in line` 才 json.loads）
-    ——避免对 MB 级文件整解析（实测 json.loads 3MB ≈27ms，预过滤可省大部分）。
-    fail-open：文件缺失/字段变 → 返回 {}。
-    """
-    try:
-        with open(os.path.join(base, f"status-{agent}.json")) as f:
-            sid = json.load(f).get("sessionID") or ""
-    except (OSError, ValueError):
-        sid = ""
-    if not sid:
-        return {}
-    fp = os.path.join(base, "pi-sessions", f"fork-src-{sid}.jsonl")
-    if not os.path.isfile(fp):
-        return {}
-    # **只统计边界之后的条目**（本轮运行事实）——fork 携带的历史条目里也
-    # 有大量 assistant+usage，全文件统计会把主 pi 的历史算成本次分析的
-    # 消耗（2026-09-11 实测：717 条 fork 历史被算成"本轮 367 次响应 /
-    # input 1.2M"）。边界由 append_handoff_turns 写入（显式登记，非推断）。
-    u = {"input": 0, "cache_read": 0, "output": 0, "responses": 0, "errors": 0}
-    for ev in meeting_fs.iter_after_boundary(fp):
-        m = ev.get("message") or {}
-        if m.get("role") != "assistant":
-            continue
-        u["responses"] += 1
-        if m.get("stopReason") == "error":
-            u["errors"] += 1
-        usage = m.get("usage") or {}
-        for k, key in (("input", "input"), ("cacheRead", "cache_read"),
-                       ("output", "output")):
-            v = usage.get(k)
-            if isinstance(v, int):
-                u[key] += v
-    if not u["responses"]:
-        return {}
-    # 数字格式化（人读）：千分位缩写
-    for k in ("input", "cache_read", "output"):
-        u[k] = _num(u[k])
-    return u
 
 
-def _num(n):
-    """人可读数字（k/M 缩写；原值精度对人读报告无意义）。"""
-    if n >= 1_000_000:
-        return f"{n / 1_000_000:.1f}M"
-    if n >= 1_000:
-        return f"{n / 1_000:.1f}k"
-    return str(n)
 
+
+# ---- 从 spec_gen re-export（S2 拆分；向后兼容：tests/wrapper/extension
+# 里的 `from start_discussion import X` 与 CLI 分发继续工作）----
+from spec_gen import (  # noqa: F401
+    check_agent_name, validate_participants, gen_question,
+    _strip_empty_sections, gen_spec_skeleton, _spec_read,
+    _snapshot_viewers, _discover_viewers, list_agent_md,
+    viewer_set_error, gen_agents_md, gen_protocol,
+    pi_sessions_dir, current_session_file, _join_model_ref,
+    _default_model, _detect_pi_model_thinking, resolve_fork_source,
+    PI_AGENT_DIR, MAX_AGENT_NAME_LEN,
+)
+from observability import (  # noqa: F401
+    _loop_pids, _loops_alive, check_status, build_report,
+    wait_for_completion,
+)
 
 def main():
     parser = argparse.ArgumentParser(description="Meeting 模式讨论环境")

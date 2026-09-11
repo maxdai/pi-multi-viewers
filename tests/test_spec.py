@@ -16,6 +16,7 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from unittest import mock
 
+import spec_gen
 from start_discussion import (
     _spec_read, _spec_models, _resolve_spec, gen_spec_skeleton,
     gen_agents_md, gen_agent_def, setup_environment,
@@ -172,7 +173,7 @@ class TestCurrentSessionFile(unittest.TestCase):
             sdir = self._fake_sessions(tmp, ["a_AAA.jsonl", "b_ZZZ.jsonl"])
             with mock.patch.dict(os.environ, {
                     "PI_SESSION_FILE": "", "PI_SESSION_ID": "AAA"}):
-                with mock.patch.object(sd, "pi_sessions_dir",
+                with mock.patch.object(spec_gen, "pi_sessions_dir",
                                        return_value=sdir):
                     self.assertTrue(sd.current_session_file()
                                     .endswith("a_AAA.jsonl"))
@@ -184,7 +185,7 @@ class TestCurrentSessionFile(unittest.TestCase):
             sdir = self._fake_sessions(tmp, ["a_AAA.jsonl", "b_ZZZ.jsonl"])
             with mock.patch.dict(os.environ, {
                     "PI_SESSION_FILE": "", "PI_SESSION_ID": ""}):
-                with mock.patch.object(sd, "pi_sessions_dir",
+                with mock.patch.object(spec_gen, "pi_sessions_dir",
                                        return_value=sdir):
                     self.assertTrue(sd.current_session_file()
                                     .endswith("b_ZZZ.jsonl"))
@@ -204,7 +205,7 @@ class TestCurrentSessionFile(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             with mock.patch.dict(os.environ, {
                     "PI_SESSION_FILE": "", "PI_SESSION_ID": ""}):
-                with mock.patch.object(sd, "pi_sessions_dir",
+                with mock.patch.object(spec_gen, "pi_sessions_dir",
                                        return_value=os.path.join(tmp, "no")):
                     self.assertEqual(sd.current_session_file(), "")
 
@@ -229,12 +230,12 @@ class TestSpecModels(unittest.TestCase):
             env = {"PI_MODEL": "", "PI_PROVIDER": "",
                    "PI_REASONING_LEVEL": "", "PI_SESSION_FILE": ""}
             with mock.patch.dict(os.environ, env):
-                with mock.patch("start_discussion._default_model",
+                with mock.patch("spec_gen._default_model",
                                 return_value=None):
                     # 探测入口直接归零（比 mock 文件系统更精确：被测的是
                     # "探测不到时兜底"，不是 session 查找本身——后者由
                     # TestCurrentSessionFile 覆盖）
-                    with mock.patch("start_discussion.current_session_file",
+                    with mock.patch("spec_gen.current_session_file",
                                     return_value=""):
                         d = os.path.join(tmp, "spec")
                         gen_spec_skeleton(d, ["a", "b", "c"])
@@ -291,7 +292,7 @@ class TestSpecModels(unittest.TestCase):
             base = tmp + "/env"
             from unittest import mock
             import start_discussion as sd
-            with mock.patch.object(sd, "_default_model", return_value="test/default"):
+            with mock.patch.object(spec_gen, "_default_model", return_value="test/default"):
                 setup_environment(Args(), ["a", "b"], base, spec)
             adef = open(os.path.join(base, "work-a/.pi/agent/a.md")).read()
             self.assertIn("你使用模型 opencode-go/gpt-5.6-luna 参与讨论", adef)
@@ -315,7 +316,7 @@ class TestSpecModels(unittest.TestCase):
             with open(os.path.join(d, "settings.json"), "w") as f:
                 json.dump({"defaultProvider": "opencode-go",
                            "defaultModel": "deepseek-v4-flash"}, f)
-            with mock.patch.object(sd, "PI_AGENT_DIR", d):
+            with mock.patch.object(spec_gen, "PI_AGENT_DIR", d):
                 self.assertEqual(sd._default_model(), "opencode-go/deepseek-v4-flash")
 
     def test_default_model_missing_settings(self):
@@ -323,11 +324,11 @@ class TestSpecModels(unittest.TestCase):
         import start_discussion as sd
         from unittest import mock
         with tempfile.TemporaryDirectory() as d:
-            with mock.patch.object(sd, "PI_AGENT_DIR", d):
+            with mock.patch.object(spec_gen, "PI_AGENT_DIR", d):
                 self.assertIsNone(sd._default_model())
             with open(os.path.join(d, "settings.json"), "w") as f:
                 f.write("{bad json")
-            with mock.patch.object(sd, "PI_AGENT_DIR", d):
+            with mock.patch.object(spec_gen, "PI_AGENT_DIR", d):
                 self.assertIsNone(sd._default_model())
 
     # ---- _join_model_ref：契约拼接（不按值形状猜，2026-09-10） ----
@@ -365,7 +366,7 @@ class TestSpecModels(unittest.TestCase):
             with open(os.path.join(d, "settings.json"), "w") as f:
                 json.dump({"defaultProvider": "commandcode-goat",
                            "defaultModel": "deepseek/deepseek-v4-flash"}, f)
-            with mock.patch.object(sd, "PI_AGENT_DIR", d):
+            with mock.patch.object(spec_gen, "PI_AGENT_DIR", d):
                 self.assertEqual(
                     sd._default_model(),
                     "commandcode-goat/deepseek/deepseek-v4-flash")

@@ -18,7 +18,9 @@ meeting_fs.py        git/文件层
 meeting_engine.py    【唯一状态机】+ 协议信号 + responder 注入
 meeting_loop.py      Pi 薄壳：首唤生成 fork 源 + `--session` 打开 → 存 sid → `--session-id` 续接
 fake_agent.py        测试薄壳：responder = 随机决策
-start_discussion.py  环境生成/启动/清理（viewers 发现 / spec 解析 / fork 源）
+start_discussion.py  组合层：CLI 分发 + 环境创建/启动/清理（_resolve_spec / setup_environment）
+spec_gen.py          spec 生成层（question/骨架/viewers 校验与快照/agent 定义 + pi 环境探测）
+observability.py     观测层（check_status / --report / --wait / loop 存活检测）
 human_viewer.py      【human 通道】只读展示（增量/--follow/游标）
 human_sayer.py       【human 通道】插话命令（单次/stdin/交互 -i）
 scripts/mv.sh        wrapper（prepare/start/status/wait/cleanup/view/say）

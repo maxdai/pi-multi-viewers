@@ -134,13 +134,18 @@ frontmatter 字段、写文件路径、独立参与者纪律。
 ## 架构
 
 ```
-meeting_core.py    纯判定（冻结级联/RR/聚合）
-meeting_fs.py      git 层
-meeting_engine.py  唯一状态机（六分支）
-meeting_loop.py    Pi 薄壳（fork 首唤 + --session-id 续接 + 视角注入）
-start_discussion.py 环境生成/启动/状态/清理
-human_viewer/sayer human 插话通道
+meeting_core.py     纯判定（冻结级联/RR/聚合 + 状态机词汇常量）
+meeting_fs.py       git 层 + fork 源生成/裁剪 + 协议与产物常量
+meeting_engine.py   唯一状态机（六分支）
+meeting_loop.py     Pi 薄壳（fork 首唤 + --session-id 续接 + 视角注入）
+start_discussion.py 组合层：CLI 分发 + 环境创建/启动/清理
+spec_gen.py         spec 生成（question/骨架/viewers 快照/agent 定义 + pi 环境探测）
+observability.py    观测（check_status / --report / --wait / loop 存活）
+human_viewer/sayer  human 插话通道
 ```
+
+依赖方向单向：`core ← fs ← engine ← loop`；`start_discussion` 组合
+`spec_gen` / `observability`（两者只依赖底层，互不依赖、不反向依赖主文件）。
 
 ## 开发
 
