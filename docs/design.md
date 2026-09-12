@@ -308,7 +308,21 @@ commit 是溯源记录、本节是长期引用点——不并存两份权威值�
     一改就静默失配（LLM 会以为没报错而继续）。改为"命令非零退出 → 停下来
     读报错原文问用户"：判据降为退出码（wrapper 的 `fail()` 保证 `exit 1`），
     原因解释交还给输出原文。
-17. **git 守卫范围 = 从讨论 workdir 发起的操作**（`GIT_CEILING_DIRECTORIES`
+17. **CLI 层 = Python（bash 只留 shim）**：`scripts/mv.sh` 是 5 行 shim
+    （找到仓库根 → `exec python3 mv_cli.py "$@"`），解析/决议/调用/展示全在
+    `mv_cli.py`。**路径 `scripts/mv.sh` 不变**（prompt/README/用户习惯引用
+    它）。收敛依据不是"更整洁"，而是这层产出的真实 bug **全部出自 bash
+    陷阱**（`shift` 吃掉显式目录 = F5 回归、`local` 重复声明清空变量、命令
+    替换里的 `exit` 不进父 shell 致双重错误消息、参数静默丢弃 = P0），且
+    bash 在本项目工具链里**零行覆盖**（Python 覆盖率看不到它）——缺口只能靠
+    真实 e2e 或评审暴露。收敛后逻辑进入覆盖率与进程内单测
+    （tests/test_mv_cli.py），解析统一出口。子进程边界不变：start_discussion
+    / human_viewer / human_sayer 仍以子进程调用（各自是 CLI 入口）。
+    顺带三处"无静默"加固（bash 版是静默的）：status/report/wait/cleanup 的
+    多余参数响亮失败、`--say` 多于 2 个参数响亮失败（未加引号文本会被当成
+    目录）、`--view` 的 viewer 失败透传 rc 且**不打印 HEAD 游标**（给失败的
+    一轮发游标会让下一次 `--since` 静默跳过消息）。
+18. **git 守卫范围 = 从讨论 workdir 发起的操作**（`GIT_CEILING_DIRECTORIES`
    注入于 spawn）；主项目仓库不在守卫范围（agent 的 cwd 就是主项目，其
    约束归指令层 + 主项目 `.gitignore`）。要拦主仓库需换机制类（沙箱/钩子），
    经评估收益不支撑扩面。

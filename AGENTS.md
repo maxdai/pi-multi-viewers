@@ -23,7 +23,8 @@ spec_gen.py          spec 生成层（question/骨架/viewers 校验与快照/ag
 observability.py     观测层（check_status / --report / --wait / loop 存活检测）
 human_viewer.py      【human 通道】只读展示（增量/--follow/游标）
 human_sayer.py       【human 通道】插话命令（单次/stdin/交互 -i）
-scripts/mv.sh        wrapper（prepare/start/status/wait/cleanup/view/say）
+scripts/mv.sh        稳定入口 shim（exec mv_cli.py；路径被 prompt/README 引用）
+mv_cli.py            命令行实现（prepare/start/status/report/wait/cleanup/view/say）
 prompts/multi-viewers.md  /multi-viewers 入口（视角设计三原则 + 审核闸门）
 extensions/multi-viewers-say/  /multi-viewers-say 插话（registerCommand，零 LLM）
 docs/design.md       设计文档（fork 源模式与规模口径 + 决策记录）
