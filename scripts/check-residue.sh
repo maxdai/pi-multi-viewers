@@ -4,6 +4,10 @@
 # 用法: ./scripts/check-residue.sh [--verbose]
 # 退出码: 0 = 干净；1 = 有残留（列出清单）
 #
+# **调用纪律**（2026-09-12）：看退出码 + 末行 `[residue] ...` 汇总；
+# 不要只 grep 某一类残留——那会把其它类整块滤掉，把"有残留"跑成"看起来
+# 干净"（实测：grep 残留-2|残留-3 滤掉了 4 个 session 残留）。
+#
 # 检查三类测试残留形态（2026-09-09 建立——此前靠人工记忆逐项检查，
 # 反复漏检：afk-e2e 引导 session 漏删即反例）：
 #   1. 主 pi 侧 session：~/.pi/agent/sessions/<编码目录>/*.jsonl 中
@@ -40,6 +44,9 @@ is_registered() {
 }
 
 RESIDUE=0
+N_SESSION=0
+N_PROC=0
+N_DIR=0
 
 say() { [ "$1" = "--verbose" ] || [ -n "$VERBOSE" ] && echo "$2"; }
 
@@ -64,16 +71,25 @@ for d in "$SESS_DIR"/*/; do
                 "$w"*|"$w") whitelisted=1 ;;
             esac
         done
-        if [ "$whitelisted" = "0" ]; then
-            # 归属判定（2026-09-09）：登记日志回查——已登记=测试产物
-            # （可删），未登记=非本流程创建（勿删，提示加白名单）。
-            # 首条消息摘要仅作补充信息（不再作为删除判断依据）。
-            if is_registered "$f"; then
-                owner="[已登记-测试产物，可删]"
-            else
-                owner="[未登记-非本流程创建，勿删]"
-                RESIDUE=1
-            fi
+        # 归属判定（2026-09-09 起）：登记日志回查——已登记=测试产物（可删），
+        # 未登记=非本流程创建（勿删，提示加白名单）。首条消息摘要仅作补充
+        # 信息（不作删除依据）。
+        # **登记优先于白名单**（2026-09-12 修）：登记是**显式事实**（创建即
+        # 登记），白名单是**按 cwd 的猜测**。此前白名单在前 → 探针跑在白名单
+        # 项目目录（如 --print 冒烟在 /root/pi-agents-helper）时整个文件被跳过、
+        # 连"已登记"都不报——实测漏检（那次 4 个漏检 session 里有 1 个正是此形）。
+        if is_registered "$f"; then
+            # 已登记 = **本流程测试产物**（可删）——但"还存在"本身就是残留：
+            # 验收语义是"清理完毕"→ 计入 RESIDUE（归属标记只决定谁来删）
+            owner="[已登记-测试产物，可删]"
+            RESIDUE=1
+        elif [ "$whitelisted" = "0" ]; then
+            owner="[未登记-非本流程创建，勿删]"
+            RESIDUE=1
+        else
+            continue   # 白名单 cwd 且未登记 = 用户自己的长期会话，不是残留
+        fi
+            N_SESSION=$((N_SESSION + 1))
             first_user=$(python3 -c "
 import json, sys
 try:
@@ -87,10 +103,9 @@ try:
 except Exception:
     print('')
 " 2>/dev/null)
-            echo "[残留-1] session（24h 内 cwd=$cwd，创建 $(stat -c %y "$f" | cut -d. -f1)）$owner"
-            echo "        首条消息: ${first_user:-（无 user 消息）}"
-            echo "        路径: $f"
-        fi
+        echo "[残留-1] session（24h 内 cwd=$cwd，创建 $(stat -c %y "$f" | cut -d. -f1)）$owner"
+        echo "        首条消息: ${first_user:-（无 user 消息）}"
+        echo "        路径: $f"
     done
 done
 
@@ -128,6 +143,7 @@ for d in /proc/[0-9]*; do
             */meeting_loop.py)
                 echo "[残留-2] meeting_loop 进程 PID=$pid: $(ps -p "$pid" -o cmd= 2>/dev/null)"
                 RESIDUE=1
+                N_PROC=$((N_PROC + 1))
                 LOOP_PIDS="$LOOP_PIDS $pid"
                 break
                 ;;
@@ -143,12 +159,14 @@ for d in /proc/[0-9]*; do
         # loop 已退出、pi 被 init 收养（PPID=1）——孤儿残留
         echo "[残留-2] pi 进程 PID=$pid（孤儿：PPID=1，其 loop 已退出）"
         RESIDUE=1
+        N_PROC=$((N_PROC + 1))
         continue
     fi
     case " $LOOP_PIDS " in
         *" $ppid "*)
             echo "[残留-2] pi 进程 PID=$pid（父 meeting_loop PID=$ppid）"
             RESIDUE=1
+            N_PROC=$((N_PROC + 1))
             ;;
         # 其余 comm=pi 的进程不报：用户自己正在用的 pi 会话（PPID 是
         # pi-web/shell 等）不是残留——"名称 + PPID"两个条件同时成立才判定
@@ -165,6 +183,7 @@ for d in mv-*/; do
     esac
     echo "[残留-3] 分析目录: $PWD/$d"
     RESIDUE=1
+    N_DIR=$((N_DIR + 1))
 done
 
 # 3b. 结构形态：任何含 repo.git/ + pi-sessions/ 的目录 = 讨论环境
@@ -181,10 +200,13 @@ for base in "$PWD" "${TMPDIR:-/tmp}"; do
         SEEN_ENVS="$SEEN_ENVS $d"
         echo "[残留-3] 讨论环境: $d（$(du -sh "$d" 2>/dev/null | cut -f1)）"
         RESIDUE=1
+        N_DIR=$((N_DIR + 1))
     done < <(find "$base" -maxdepth 3 -type d -name repo.git 2>/dev/null)
 done
 
-if [ "$RESIDUE" = "0" ]; then
-    echo "干净：无测试残留"
-fi
+# 汇总行：**结论只在这一行**——调用方看这一行 + 退出码即可，
+# 不必（也不得）只 grep 某一类（2026-09-12：调用方 grep "残留-2|残留-3"
+# 把 [残留-1] 整类滤掉，把有残留跑成"看起来干净"）。
+echo "[residue] session=$N_SESSION 进程=$N_PROC 目录=$N_DIR →" \
+     "$([ "$RESIDUE" = "0" ] && echo 干净 || echo 有残留)"
 exit "$RESIDUE"

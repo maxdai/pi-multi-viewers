@@ -24,6 +24,7 @@ observability.py     观测层（check_status / --report / --wait / loop 存活�
 human_viewer.py      【human 通道】只读展示（增量/--follow/游标）
 human_sayer.py       【human 通道】插话命令（单次/stdin/交互 -i）
 scripts/mv.sh        稳定入口 shim（exec mv_cli.py；路径被 prompt/README 引用）
+scripts/pi-probe.sh  LLM 探针（跑 pi + 登记新 session → 残留检查器可追溯）
 mv_cli.py            命令行实现（prepare/start/status/report/wait/cleanup/view/say）
 prompts/multi-viewers.md  /multi-viewers 入口（视角设计三原则 + 审核闸门）
 extensions/multi-viewers-say/  /multi-viewers-say 插话（registerCommand，零 LLM）
