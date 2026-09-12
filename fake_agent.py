@@ -88,9 +88,17 @@ def make_responder(min_sleep, max_sleep, crash_rate):
             # RR 阶段：单向流，只写 pass（无异议回退，留待以后）
             decision = meeting_core.T_PASS
         else:
-            # meeting 阶段：有内容 → message；无话可说 → freezing
-            decision = meeting_core.T_MESSAGE if random.random() < 0.65 \
-                else meeting_core.T_FREEZING
+            # meeting 阶段：有内容 → message；无话可说 → freezing。
+            # **首轮例外 = 必写 message**（装置对齐生产，2026-09-12）：真实
+            # wake prompt 对首位发言者的指令是"你是第一位发言者——直接产出
+            # 你的第一条视角分析"，fake 首轮却可能 freezing——语义不符，且
+            # 使"全员首轮 freezing"有 0.35^N 的概率（N=4 时 1.5%）撞上
+            # cascade 测试的 "应有 message" 断言 → 随机红（实测 ~2%/全量跑）。
+            if is_first:
+                decision = meeting_core.T_MESSAGE
+            else:
+                decision = meeting_core.T_MESSAGE if random.random() < 0.65 \
+                    else meeting_core.T_FREEZING
 
         time.sleep(random.uniform(min_sleep, max_sleep))
         if random.random() < crash_rate:
