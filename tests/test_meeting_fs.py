@@ -442,6 +442,33 @@ class TestForkSourceInvariants(unittest.TestCase):
         lines.extend(extra or [])
         return self._write(tmp, lines)
 
+    # ---- 配置条目不随 fork 携带（三模式统一）----
+    def test_config_entries_stripped(self):
+        """`thinking_level_change` 不进 fork 源——pi 才会补写**本场生效值**。
+
+        pi 侧逻辑：`if (!hasThinkingEntry) appendThinkingLevelChange(...)`。
+        旧会话的档位条目被复制进来 → pi 认为"已有档位条目"→ 不写本场的 →
+        session 里就没有"本场生效档位"这个事实（报告无法做
+        「声明值 vs 生效值」对照；2026-09-12 实测）。
+        `model_change` **不剔除**（无 --model 的路径靠它回填主 pi 模型）。
+        """
+        extra = [
+            {"type": "thinking_level_change", "id": "t1", "parentId": "m5",
+             "timestamp": "2026-09-10T00:02:00.000Z", "thinkingLevel": "max"},
+            {"type": "model_change", "id": "mo1", "parentId": "t1",
+             "timestamp": "2026-09-10T00:02:01.000Z",
+             "provider": "p", "modelId": "m"},
+        ]
+        for mode in ("budget", "compaction", "full"):
+            with self.subTest(mode=mode):
+                with tempfile.TemporaryDirectory() as tmp:
+                    src = self._chain_src(tmp, extra=extra)
+                    out = os.path.join(tmp, "out.jsonl")
+                    build_fork_source(src, out, "newid", "/tmp")
+                    types = [e.get("type") for e in self._read(out)]
+                    self.assertNotIn("thinking_level_change", types)
+                    self.assertIn("model_change", types)
+
     # ---- I1 产物内 id 唯一 ----
     def test_i1_ids_unique(self):
         for mode in ("budget", "compaction", "full"):

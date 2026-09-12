@@ -344,6 +344,10 @@ class TestBuildReport(unittest.TestCase):
         if with_session:
             with open(os.path.join(base, "status-a.json"), "w") as f:
                 json.dump({"sessionID": "sid-a"}, f)
+            # 声明值（spec 侧的家）——与生效值对照用
+            os.makedirs(os.path.join(base, "work-a"), exist_ok=True)
+            with open(os.path.join(base, "work-a", "pi-agent.json"), "w") as f:
+                json.dump({"model": "m", "thinking": "high"}, f)
             os.makedirs(os.path.join(base, "pi-sessions"))
             with open(os.path.join(base, "pi-sessions/fork-src-sid-a.jsonl"),
                       "w") as f:
@@ -355,10 +359,26 @@ class TestBuildReport(unittest.TestCase):
                 f.write(json.dumps({
                     "type": "custom_message", "customType": "mv.analysis-start",
                     "display": False}) + "\n")
-                f.write(json.dumps({"type": "message", "message": {
-                    "role": "assistant", "stopReason": "toolUse",
-                    "usage": {"input": 274, "cacheRead": 183552,
-                              "output": 1200}}}) + "\n")
+                # pi 打开会话时写入的生效档位（在边界之后）
+                f.write(json.dumps({
+                    "type": "thinking_level_change",
+                    "timestamp": "2026-09-11T12:00:00.000Z",
+                    "thinkingLevel": "high"}) + "\n")
+                # 一条正常响应（span 40s，含 reasoning——⊂ output 不可相加）
+                f.write(json.dumps({
+                    "type": "message",
+                    "timestamp": "2026-09-11T12:00:40.000Z",
+                    "message": {
+                        "role": "assistant", "stopReason": "toolUse",
+                        "usage": {"input": 274, "cacheRead": 183552,
+                                  "output": 1200, "reasoning": 900}}}) + "\n")
+                # 一次 provider 失败（error 单列；usage 全零，不污染生成时长）
+                f.write(json.dumps({
+                    "type": "message",
+                    "timestamp": "2026-09-11T12:02:40.000Z",
+                    "message": {
+                        "role": "assistant", "stopReason": "error",
+                        "usage": {}}}) + "\n")
         return base
 
     def test_sections(self):
@@ -379,6 +399,20 @@ class TestBuildReport(unittest.TestCase):
             self.assertIn("rc≠0 0 次", txt)
             self.assertIn("cacheRead 183.6k", txt)
             self.assertIn("三者不可互替", txt)     # 跨度分标
+            # 建议 1（e2e17 评审）：按 stopReason 原值分组——键 = 原值
+            self.assertIn("stopReason：", txt)
+            # 计数 + **响应跨度合计**（fixture：12:00:00→12:00:40 = 40s；
+            # 12:00:40→12:02:40 = 2m00s 的失败等待——provider 成本可见）
+            self.assertIn("toolUse 1（40s）", txt)
+            self.assertIn("error 1（2m00s）", txt)
+            self.assertIn("响应 2 次", txt)            # toolUse + error
+            # usage 合计：reasoning ⊂ output（同一行可见，不相加）
+            self.assertIn("output 1.2k（reasoning 900）", txt)
+            # 档位对照：声明（pi-agent.json）vs 生效（session 条目）
+            self.assertIn("档位：声明 high", txt)
+            self.assertIn("生效 high", txt)
+            self.assertIn("✓ 一致", txt)
+            self.assertIn("响应跨度合计", txt)         # 口径标注
             # 边界之前的历史 usage 不得计入本轮（999999 应被排除）
             self.assertNotIn("999,999", txt)
             self.assertNotIn("999.9k", txt)
@@ -389,6 +423,28 @@ class TestBuildReport(unittest.TestCase):
             # 三样观测面（第二批）：冻结集合 + 阶段
             self.assertIn("冻结：0/2 已冻结；未冻结 a、b", txt)
             self.assertIn("阶段：meeting", txt)
+
+    def test_level_mismatch_visible(self):
+        """声明值 ≠ 生效值 → 报告显式 ⚠ 不一致（这是 e2e17 §1 要的可见性：
+        声明值从来没人跟生效值对照过）。"""
+        import start_discussion as sd
+        with tempfile.TemporaryDirectory() as tmp:
+            base = self._env(tmp)
+            # 声明改成 max（生效仍是 session 里的 high）
+            with open(os.path.join(base, "work-a", "pi-agent.json"), "w") as f:
+                json.dump({"model": "m", "thinking": "max"}, f)
+            txt = "\n".join(sd.build_report(base))
+            self.assertIn("⚠ 不一致", txt)
+            self.assertIn("声明 max", txt)
+            self.assertIn("生效 high", txt)
+
+    def test_level_absent_when_no_declaration(self):
+        """两个家都读不到 → 显式 n/a（不猜、不写 0）。"""
+        import start_discussion as sd
+        with tempfile.TemporaryDirectory() as tmp:
+            base = self._env(tmp, with_loop_log=False, with_session=False)
+            txt = "\n".join(sd.build_report(base))
+            self.assertIn("档位：n/a", txt)
 
     def test_fail_open_missing_dir(self):
         """目录不存在 → n/a（不抛异常、不报错）。"""

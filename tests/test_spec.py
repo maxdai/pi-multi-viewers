@@ -16,6 +16,7 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from unittest import mock
 
+import meeting_fs
 import spec_gen
 from start_discussion import (
     _spec_read, _spec_models, _resolve_spec, gen_spec_skeleton,
@@ -642,6 +643,106 @@ class TestSpecSetup(unittest.TestCase):
             self.assertIn("# 分析主题：只有问题", q)
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
+
+
+class TestModelsVariantSemantics(unittest.TestCase):
+    """models.md 的 variant 槽语义（e2e17 评审 §7.2/§7.10）。
+
+    此前 `default` 在 model 槽 = 继承本机，在 variant 槽 = **max**——相邻
+    两行同词反义，按上一行直觉读下一行必错。别名已删：variant 槽写
+    `default` 不再被重解释（原值透传 → 可见失败），缺省 = DEFAULT_THINKING。
+    """
+
+    def _spec(self, tmp, body):
+        d = os.path.join(tmp, "s")
+        os.makedirs(os.path.join(d, "agents"))
+        for n in ("甲", "乙"):
+            with open(os.path.join(d, "agents", n + ".md"), "w") as f:
+                f.write("视角内容")
+        with open(os.path.join(d, "question.md"), "w") as f:
+            f.write("# 分析主题：T\n")
+        with open(os.path.join(d, "models.md"), "w") as f:
+            f.write("# 说明行\n" + body)
+        return d
+
+    def test_variant_default_not_alias(self):
+        import start_discussion as sd
+        with tempfile.TemporaryDirectory() as tmp:
+            d = self._spec(tmp, "甲: m, default\n乙: m\n")
+            r = sd._spec_models(d, ["甲", "乙"])
+            self.assertEqual(r["甲"][1], "default",
+                             "variant 槽的 default 不再是 max 的别名")
+            self.assertEqual(r["乙"][1], meeting_fs.DEFAULT_THINKING,
+                             "缺省档位引用同一常量")
+
+    def test_variant_constant_single_source(self):
+        """默认档位的**值**只有一个声明点（回归 = 代码里再现字面量）。
+
+        源码文本检查（非行为检查）在这里是恰当的：要防的正是"又写了一遍
+        字面量"——行为测试看不到重复声明。只查**非注释行**（注释里保留
+        `(None, "max")` 作为历史说明是有意的）。
+        """
+        import start_discussion as sd
+        bad = []
+        for i, line in enumerate(open(sd.__file__, encoding="utf-8"), 1):
+            if line.lstrip().startswith("#"):
+                continue
+            if '"max"' in line or "'max'" in line:
+                bad.append(f"{i}: {line.rstrip()}")
+        self.assertEqual(bad, [],
+                         "档位字面量应只存在于 meeting_fs.DEFAULT_THINKING")
+        src = open(sd.__file__, encoding="utf-8").read()
+        # 四个引用点（解析缺省 / CLI --models / 归一循环 / json 兜底）+ 文档
+        self.assertGreaterEqual(src.count("DEFAULT_THINKING"), 4,
+                                "引用点：解析缺省 / CLI / 归一循环 / json 兜底")
+
+
+class TestSkeletonModelsMd(unittest.TestCase):
+    """骨架 models.md：**两个槽都显式写出**（含探测失败路径）。"""
+
+    def test_skeleton_writes_explicit_variant(self):
+        import spec_gen
+        with tempfile.TemporaryDirectory() as tmp:
+            vd = os.path.join(tmp, "viewers")
+            os.makedirs(vd)
+            for n in ("甲", "乙"):
+                with open(os.path.join(vd, n + ".md"), "w") as f:
+                    f.write("视角内容")
+            spec = os.path.join(tmp, "spec")
+            with mock.patch.object(spec_gen, "_detect_pi_model_thinking",
+                                   return_value=("", "")):
+                spec_gen.gen_spec_skeleton(spec, None, topic="T",
+                                           viewers_dir=vd)
+            with open(os.path.join(spec, "models.md")) as f:
+                lines = [l for l in f.read().splitlines() if ":" in l
+                         and not l.startswith("#")]
+            self.assertTrue(lines)
+            for l in lines:
+                self.assertIn(",", l,
+                              "variant 槽必须显式写出（留空会静默取档）")
+                self.assertTrue(l.endswith(meeting_fs.DEFAULT_THINKING), l)
+
+    def test_detection_failure_warns(self):
+        """探测失败**可见**（stderr 一行），但不阻断（终端直用时本就没有
+        PI_* 环境变量——报错会断掉合法路径）。"""
+        import spec_gen, io
+        from contextlib import redirect_stderr
+        with tempfile.TemporaryDirectory() as tmp:
+            vd = os.path.join(tmp, "viewers")
+            os.makedirs(vd)
+            for n in ("甲", "乙"):
+                with open(os.path.join(vd, n + ".md"), "w") as f:
+                    f.write("视角内容")
+            spec = os.path.join(tmp, "spec")
+            err = io.StringIO()
+            with mock.patch.object(spec_gen, "_detect_pi_model_thinking",
+                                   return_value=("", "")), \
+                    redirect_stderr(err):
+                spec_gen.gen_spec_skeleton(spec, None, topic="T",
+                                           viewers_dir=vd)
+            self.assertIn("未探测到主 pi 的 thinking 档位", err.getvalue())
+            self.assertTrue(os.path.isdir(spec))     # 不阻断
+
 
 
 if __name__ == "__main__":

@@ -22,7 +22,7 @@ PI_AGENT_DIR = os.environ.get("PI_CODING_AGENT_DIR",
 MAX_AGENT_NAME_LEN = 32
 
 import meeting_fs
-from meeting_fs import run_git, DEFAULT_STALL_TIMEOUT
+from meeting_fs import run_git, DEFAULT_STALL_TIMEOUT, DEFAULT_THINKING
 
 
 def _join_model_ref(provider, model_id):
@@ -276,24 +276,27 @@ def gen_spec_skeleton(spec_dir, participants, topic=None, background=None,
                 "本行是说明行，不会注入。\n\n")
         if background:
             f.write(background + "\n")
-    # models.md（用户 8024/9204/9271：预列各 agent，每行 agent名: model，
-    # variant 默认 max 隐式——只有非 max 才写 `, variant`，日常更简洁；
-    # model/thinking 预填主 pi 当前值，用户少改一个文件）
+    # models.md（用户 8024/9204/9271：预列各 agent，每行 agent名: model,
+    # variant；model/thinking 预填主 pi 当前值，用户少改一个文件）
+    # **两个槽都永远显式写出**（含探测失败的路径）：variant 槽留空会静默落到
+    # DEFAULT_THINKING，而 spec 文件表面完全正常（甚至更"干净"）——意图与
+    # 生效值之间没有留痕（e2e17 评审 §7.3）。探测失败另打一行可见提示。
     pm, pt = _detect_pi_model_thinking()
+    variant = pt or DEFAULT_THINKING
     with open(os.path.join(spec_dir, "models.md"), "w") as f:
-        lines = ["# models.md——模型配置（可选）。每行：agent名: model[, variant]。"
-                 "model 默认 default，variant 默认 max（只有不用 max 才写 variant）。"
+        lines = ["# models.md——模型配置（可选）。每行：agent名: model, variant。"
+                 "model 写 default = 继承本机默认；variant 不写 = "
+                 f"{DEFAULT_THINKING}（**两个槽都显式写出**，一眼可见）。"
                  "本行是说明行，不会注入。"]
         for p in participants:
-            if pm and pt:
-                lines.append(f"{p}: {pm}, {pt}")
-            elif pm:
-                lines.append(f"{p}: {pm}")
-            elif pt:
-                lines.append(f"{p}: default, {pt}")
-            else:
-                lines.append(f"{p}: default")
+            lines.append(f"{p}: {pm or 'default'}, {variant}")
         f.write("\n".join(lines) + "\n")
+    if not pt:
+        # 探测失败**可见**（不是静默取档）：打印在使用者能看到的地方，
+        # 不阻断（终端直用时 PI_* 环境变量本就不存在，报错会断掉合法路径）。
+        print(f"[spec-gen] 未探测到主 pi 的 thinking 档位——models.md 用默认 "
+              f"{DEFAULT_THINKING}（如需其它档位请直接编辑该文件）",
+              file=sys.stderr)
     # agents/X.md 占位 + .order（仅显式 --agents 时；快照路径的 .order
     # 由 _snapshot_viewers 写入，此处不得重写）
     if participants and not viewers_dir:

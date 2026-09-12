@@ -70,8 +70,11 @@ def _spec_models(spec_dir, participants):
     """解析 models.md（容错，用户 8024/9204 定）：返回 {agent: (model, variant)}。
 
     每行格式：`agent名: model, variant`（model 与 variant 逗号分隔）。
-    - model 缺省/'default' → None（创建时填本机默认模型）
-    - variant 缺省/'default'/'max' → 'max'（默认档，专业用户才改）
+    - model 缺省/'default' → None（创建时填本机默认模型）——`default`
+      这个别名**只在 model 槽有意义**
+    - variant 缺省 → DEFAULT_THINKING；**没有 `default` 别名**（同词在相邻
+      两行反义会让读者必错；且空已是缺省，别名不增加表达力）——写了 `default`
+      就按原值透传给 pi（可见失败，而非静默重解释）
     容错：空行/无 ':'/agent 不在 participants → 跳过；单字段行只有 model。
     规则：第一行说明跳过（_spec_read）。
     """
@@ -93,8 +96,13 @@ def _spec_models(spec_dir, participants):
         parts = [p.strip() for p in rest.split(",")]
         model = parts[0] if parts and parts[0] else ""
         variant = parts[1] if len(parts) > 1 else ""
+        # `default` **只在 model 槽有意义**（= 继承本机）。variant 槽不做
+        # 同名别名（e2e17 评审 §7.2：相邻两行同词反义——model 的 default
+        # = 继承，variant 的 default = max，按上一行直觉读下一行必错）；
+        # 且别名并不增加表达力：空 = max 已是缺省。写 `default` 不再是
+        # 别名 → 原值传给 pi（可见的失败，而不是静默重解释成 max）。
         m = None if (not model or model == "default") else model
-        v = "max" if (not variant or variant == "default") else variant
+        v = variant or meeting_fs.DEFAULT_THINKING
         out[agent] = (m, v)
     return out
 
@@ -303,21 +311,23 @@ def setup_environment(args, participants, base, spec_dir=None,
                    for p in participants}
     agent_extra = {k: v for k, v in agent_extra.items() if v}
     # models：spec 模式从 models.md 读（自包含，{agent: (model, variant)}），
-    # CLI --models 已互斥（{agent: model} 旧格式——variant 用默认 max）
+    # CLI --models 已互斥（{agent: model} 旧格式——variant 用默认档）
     if spec_dir:
         models = _spec_models(spec_dir, participants)
     else:
-        models = {p: (m, "max") for p, m in (args.models or {}).items()}
-    # default 模型 → 创建时实时获取 Pi 默认模型填入：
-    # pi-agent.json 带 model 后，meeting_loop 才会传 --model；
-    # 骨架期 models.md 仍写 default（--spec-gen 不获取），创建时（--spec）
-    # 才解析。运行期固化不变（环境自包含）。
-    if spec_dir:
-        dm = _default_model()
-        if dm:
-            for p in participants:
-                if p not in models or models[p][0] is None:
-                    models[p] = (dm, models.get(p, (None, "max"))[1])
+        models = {p: (m, meeting_fs.DEFAULT_THINKING)
+                  for p, m in (args.models or {}).items()}
+    # 归一：每个 participant 都有 (model, variant) 条目，**此后只读**——
+    # 此前 :320 补默认模型与 :384 写 pi-agent.json 各自再写一遍
+    # `models.get(p, (None, "max"))`（同层同义重复，值两处声明，e2e17
+    # 评审 §7.10）。
+    # default 模型 → 创建时实时获取 Pi 默认模型填入：pi-agent.json 带
+    # model 后，meeting_loop 才会传 --model；骨架期 models.md 仍写 default
+    # （--spec-gen 不获取），创建时（--spec）才解析。运行期固化不变。
+    dm = _default_model() if spec_dir else None
+    for p in participants:
+        m, v = models.get(p, (None, meeting_fs.DEFAULT_THINKING))
+        models[p] = (m or dm, v)
     # stance_ref（agent 定义"立场见 question.md"提示）：spec 模式一律保留
     # （设计 16.6：无法程序判断 question.md 有无立场节 → 一律提示；
     # 互斥下 CLI stances 必为 None，传占位 dict 触发生成）
@@ -381,14 +391,14 @@ def setup_environment(args, participants, base, spec_dir=None,
         with open(os.path.join(workdir, "AGENTS.md"), "w") as f:
             f.write(gen_agents_md(args, p, participants, spec_background,
                                  main_pi_cwd=os.getcwd()))
-        mv = models.get(p, (None, "max"))
+        mv = models[p]        # 归一后必有条目（见上方归一循环）
         with open(os.path.join(workdir, ".pi/agent", f"{p}.md"), "w") as f:
             f.write(gen_agent_def(p, participants, {p: mv[0]} if mv[0] else None,
                                   stances_arg, agent_extra.get(p)))
         with open(os.path.join(workdir, "pi-agent.json"), "w") as f:
             json.dump({
                 "model": mv[0] or "",
-                "thinking": mv[1] if mv[1] else "max",
+                "thinking": mv[1] or meeting_fs.DEFAULT_THINKING,
                 "prompt_file": f".pi/agent/{p}.md",
             }, f, indent=2, ensure_ascii=False)
 

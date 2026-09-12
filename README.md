@@ -102,7 +102,7 @@ scripts/mv.sh --view                          # 一次性增量查看（主 pi �
 # 插话 / 状态 / 收尾（目录可省略——自动定位本 session 当前分析）
 scripts/mv.sh --say "<文本>"                   # 插话（命令行形态；pi 内用 /multi-viewers-say）
 scripts/mv.sh --status                        # running / done / stalled / stopped（done 时附 [result] 路径）
-scripts/mv.sh --report                        # 只读报告（流程/配额/进程/LLM；冷路径，不持久化）
+scripts/mv.sh --report                        # 只读报告（流程/配额/进程/LLM/档位对照；冷路径，不持久化）
 scripts/mv.sh --cleanup                       # 收尾（result.md 自动留存到 <dir>-result.md）
 ```
 

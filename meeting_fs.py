@@ -50,6 +50,14 @@ def result_path(base):
 # protocol.json；engine/fake_agent 的签名默认与 CLI default 同源于此）。
 DEFAULT_STALL_TIMEOUT = 600
 
+# thinking 档位缺省值——**唯一声明点**：models.md 的 variant 槽（缺省）
+# 、CLI --models 路径、pi-agent.json 的写入与兑底都引用它。
+# 为什么是 max 而不是最便宜的档：兑底值是"没探测到就按主 pi 默认"的
+# 产物，翻到便宜侧会让"探测失败"以另一种姿态静默（e2e17 评审 §7.3）；
+# 正确的处方是**让失败可见**（探测失败时 spec_gen 打提示、spec 永远写
+# 显式档位），不是把默认值挪到便宜侧。
+DEFAULT_THINKING = "max"
+
 # ---------------------------------------------------------------
 # git 基础操作
 # ---------------------------------------------------------------
@@ -950,6 +958,18 @@ def build_fork_source(src_session, out_path, new_id, new_cwd,
     else:                                   # pragma: no cover
         # 值域守卫之后仍可达的只剩“新值已入 FORK_MODES 但分派未跟上”
         return 0, f"forkMode {mode!r} 尚未实现分派"
+    # **不携带旧会话的 thinking 档位条目**（三种模式统一，e2e17 评审后的
+    # 实现修正）：本场档位由 CLI 显式传入（`--thinking` 来自
+    # pi-agent.json，缺省也有 DEFAULT_THINKING 兜底 → 恒非空），旧条目
+    # 既不是本场生效值，又会让 pi **跳过**写自己的 `thinking_level_change`
+    # （pi 侧：`if (!hasThinkingEntry) append`）——于是 session 里没有"本场
+    # 生效档位"这个事实，报告无法把「声明值 vs 生效值」并列（只有旧会话的
+    # 值，在边界之前、按口径不可读）。剔除后 pi 会在边界之后补写。
+    # model_change **不剔除**：无 models.md 的路径（CLI 直用）不传 --model，
+    # pi 靠它回填主 pi 的模型——那是活配置，不是陈旧副本。
+    # 记账：配置条目**不计入** dropped（那不是上下文内容；dropped 的口径
+    # = 预算丢弃 + 规范化移除）。
+    body = [e for e in body if e.get("type") != "thinking_level_change"]
     new_header = {
         "type": "session",
         "version": header.get("version", 3),

@@ -48,8 +48,13 @@ fork 机制已让每个 agent 携带发起分析时的对话上下文（默认 b
 
 ## models.md —— 模型配置（可选）
 
-每行：`agent名: model[, variant]`。model 默认 default（继承本机默认），
-variant 默认 max。只有不用默认/-max 时才需要改。
+每行：`agent名: model, variant`（**两个槽都显式写出**，一眼可见本场跑在
+什么模型/档位上）。model 写 `default` = 继承本机默认；variant 不写 =
+`max`。想换档位（如 `high`）改这一行即可——**逐 agent 一行**，可以只改
+某一个视角。
+
+> 这里写的就是**声明值**；实际生效值由 pi 解析（它自己的优先级链）。
+> `--report` 会把声明值与 session 里的生效值对照列出。
 
 ## agents/X.md —— 视角任务书（每个 agent 一个）
 

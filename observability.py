@@ -9,6 +9,7 @@ human_viewer（observability 是"读"侧，human_viewer.incremental 是它
 的进展数据源）；不准 import 主文件。
 """
 
+import datetime
 import glob
 import json
 import os
@@ -329,22 +330,82 @@ def build_report(base):
     out.append("LLM（session 文档化字段）：")
     any_usage = False
     for a in agents:
-        u = _report_session_usage(base, a)
-        if not u:
+        m = _report_session_metrics(base, a)
+        if not m:
             out.append(f"  {a}: n/a")
             continue
         any_usage = True
-        out.append(f"  {a}: input {u['input']} | cacheRead "
-                   f"{u['cache_read']} | output {u['output']} | 响应 "
-                   f"{u['responses']} 次 | error {u['errors']} 次")
+        u = m["usage"]
+        # usage 合计：reasoning ⊂ output（**不可相加**）——缺席时省略该括注
+        # （缺席 ≠ 0），出现时即使为 0 也写出
+        rea = ("" if u["reasoning"] is None
+               else f"（reasoning {_num(u['reasoning'])}）")
+        out.append(f"  {a}: 响应 {m['responses']} 次 | input {_num(u['input'])}"
+                   f" | cacheRead {_num(u['cacheRead'])}"
+                   f" | output {_num(u['output'])}{rea}")
+        # 按 stopReason 原值分组：**键集固定，不随数据增长**——新同类数字
+        # 只多一个键。error 那笔账（计数 + 时长）就在这里，这是 provider
+        # 失败从"完全不可见"变为"一行可读"的落点。
+        # 键 = 原值（含 None）：解释性命名会因"长消息也是 toolUse"立刻过期。
+        parts = []
+        for k in sorted(m["stop"], key=lambda x: (x is None, x or "")):
+            d = m["stop"][k]
+            parts.append(f"{k if k is not None else '（无）'} "
+                         f"{d['n']}（{_dur(d['sec'])}）")
+        out.append(f"      stopReason：{' | '.join(parts)}")
     if not any_usage:
         out.append("  n/a（session 缺失，或无本轮数据——边界条目自 2026-09-11 "
                    "起写入，此前的老分析不适用）")
+    # ---- 档位对照：声明值（spec/pi-agent.json）vs 生效值（session） ----
+    out.append(_report_levels_line(base, agents))
     out.append("（口径：进程跨度=pi 进程生命周期；输出=prompt 分段合计；"
                "墙钟=commit 时间差——三者不可互替；"
+               "stopReason 括注 = **响应跨度合计**（不含工具执行/唤醒间隔）；"
                "消息数含流程信号（freezing/pass/concluded）与 human，"
                "配额只计 meeting 发言）")
     return out
+
+
+def _report_levels_line(base, agents):
+    """档位对照行：**声明值 vs 生效值**（e2e17 评审 §1）。
+
+    为什么需要：声明值（`pi-agent.json.thinking`）从来没人跟生效值对照过——
+    探测失败 → 静默取 DEFAULT_THINKING，spec 文件表面完全正常。这一行是那个
+    缺口的最小可见性形态：**零新增字段**（两个值都已有家，只是从没被并列读出）、
+    **零新增分支**（集合比较）。
+
+    生效值来源 = session 的 `thinking_level_change` 条目（pi 在会话缺该条目时
+    写入，位于边界之后）——**本仓只读，不复刻 pi 的解析链**（那是 pi 的配置）。
+    fail-open：任一侧读不到 → 显式 n/a（不猜、不写 0）。
+    """
+    declared, effective = {}, {}
+    for a in agents:
+        try:
+            with open(os.path.join(base, f"work-{a}", "pi-agent.json")) as f:
+                v = json.load(f).get("thinking") or ""
+            if v:
+                declared[a] = v
+        except (OSError, ValueError):
+            continue
+        levels = _report_session_levels(base, a)
+        effective[a] = levels
+    if not declared and not effective:
+        return "档位：n/a（无 pi-agent.json 且无 session 档位条目）"
+    d_set = set(declared.values())
+    e_set = {x for v in effective.values() for x in v}
+    d_txt = "、".join(sorted(d_set)) if d_set else "n/a"
+    e_txt = "、".join(sorted(e_set)) if e_set else "n/a"
+    if d_set and e_set:
+        same = (
+            f"✓ 一致" if d_set == e_set
+            # 不一致是两个方向的异常：声明了没生效（写错/被覆盖），或生效值
+            # 不在声明里（外部改档/会话遗留）——两种都要人看到
+            else f"⚠ 不一致（声明 {d_txt} / 生效 {e_txt}）")
+    else:
+        same = "（一侧 n/a，无法对照）"
+    detail = "、".join(f"{a} {v or 'n/a'}"
+                       for a, v in ((a, declared.get(a, "")) for a in agents))
+    return f"档位：声明 {d_txt}（{detail}）| 生效 {e_txt} | {same}"
 
 
 def _dur(sec):
@@ -390,48 +451,105 @@ def _report_wake_fields(base):
     return out
 
 
-def _report_session_usage(base, agent):
-    """从该 agent 的 session 文件取 usage（**单一适配器** + 流式预过滤）。
+def _report_session_metrics(base, agent):
+    """该 agent **本轮**（边界之后）的 session 运行事实——**单一适配器**。
 
     字段来源 = pi 的**文档化** session schema（`docs/session-format.md`：
-    `usage` / `stopReason`）。行级预过滤（`"usage" in line` 才 json.loads）
-    ——避免对 MB 级文件整解析（实测 json.loads 3MB ≈27ms，预过滤可省大部分）。
+    `usage` / `stopReason` / `timestamp`）——**只读已有家，不新增记录**
+    （同一事实两处 = 双写；loop log 的不变量是零判定输入）。
+
+    返回：{responses, usage: {input, cacheRead, output, reasoning},
+           stop: {stopReason 原值: {"n": 次数, "sec": 响应跨度合计}}}
+    `usage["reasoning"]` = None 表示**从未出现**（缺席 ≠ 0）。
+
+    响应跨度口径：`Δt = ts(本条) − ts(紧邻前一条事件)`——单次遍历顺序读取，
+    不需要随机访问。error 类单列（usage 全零）——不并入也不丢弃：
+    否则 provider 抖动会被算成"生成变慢"（e2e14 评审）。
     fail-open：文件缺失/字段变 → 返回 {}。
     """
+    fp = _agent_session_file(base, agent)
+    if not fp:
+        return {}
+    # **只统计边界之后的条目**（本轮运行事实）——fork 携带的历史条目里也
+    # 有大量 assistant+usage，全文件统计会把主 pi 的历史算成本次分析的
+    # 消耗（2026-09-11 实测：717 条 fork 历史被算成"本轮 367 次响应 /
+    # input 1.2M"）。边界由 append_handoff_turns 写入（显式登记，非推断）。
+    r = {"responses": 0,
+         "usage": {"input": 0, "cacheRead": 0, "output": 0,
+                   "reasoning": None},
+         "stop": {}}
+    prev_ts = None
+    for ev in meeting_fs.iter_after_boundary(fp):
+        m = ev.get("message") or {}
+        if m.get("role") != "assistant":
+            prev_ts = ev.get("timestamp") or prev_ts
+            continue
+        r["responses"] += 1
+        reason = m.get("stopReason")
+        dur = _delta_seconds(prev_ts, ev.get("timestamp"))
+        d = r["stop"].setdefault(reason, {"n": 0, "sec": 0})
+        d["n"] += 1
+        if dur is not None:
+            d["sec"] += dur
+        usage = m.get("usage") or {}
+        for k, key in (("input", "input"), ("cacheRead", "cacheRead"),
+                       ("output", "output")):
+            v = usage.get(k)
+            if isinstance(v, int):
+                r["usage"][key] += v
+        rv = usage.get("reasoning")
+        if isinstance(rv, int):
+            r["usage"]["reasoning"] = (r["usage"]["reasoning"] or 0) + rv
+        prev_ts = ev.get("timestamp") or prev_ts
+    if not r["responses"]:
+        return {}
+    return r
+
+
+def _delta_seconds(prev_iso, cur_iso):
+    """两个 ISO 时间戳的秒差；任一缺失/不可解析 → None（缺席 ≠ 0）。"""
+    if not prev_iso or not cur_iso:
+        return None
+    try:
+        a = datetime.datetime.fromisoformat(prev_iso.replace("Z", "+00:00"))
+        b = datetime.datetime.fromisoformat(cur_iso.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    d = (b - a).total_seconds()
+    return d if d >= 0 else None
+
+
+def _agent_session_file(base, agent):
+    """该 agent 的 fork 源 session 文件路径（找不到 → ""）。"""
     try:
         with open(os.path.join(base, f"status-{agent}.json")) as f:
             sid = json.load(f).get("sessionID") or ""
     except (OSError, ValueError):
         sid = ""
     if not sid:
-        return {}
+        return ""
     fp = os.path.join(base, "pi-sessions", f"fork-src-{sid}.jsonl")
-    if not os.path.isfile(fp):
-        return {}
-    # **只统计边界之后的条目**（本轮运行事实）——fork 携带的历史条目里也
-    # 有大量 assistant+usage，全文件统计会把主 pi 的历史算成本次分析的
-    # 消耗（2026-09-11 实测：717 条 fork 历史被算成"本轮 367 次响应 /
-    # input 1.2M"）。边界由 append_handoff_turns 写入（显式登记，非推断）。
-    u = {"input": 0, "cache_read": 0, "output": 0, "responses": 0, "errors": 0}
+    return fp if os.path.isfile(fp) else ""
+
+
+def _report_session_levels(base, agent):
+    """该 agent 本轮**生效的 thinking 档位**（去重、保序）——session 侧的家。
+
+    pi 在会话缺 `thinking_level_change` 条目时写入它（每次打开会话至多一次），
+    且位于我们的边界之后——所以边界过滤后读到的就是"本场生效值"。
+    **本仓只读，不复刻 pi 的解析链**（`modelThinkingLevels` →
+    `defaultThinkingLevel` 是 pi 的配置，复刻 = 两处实现/必漂移）。
+    """
+    fp = _agent_session_file(base, agent)
+    if not fp:
+        return []
+    out = []
     for ev in meeting_fs.iter_after_boundary(fp):
-        m = ev.get("message") or {}
-        if m.get("role") != "assistant":
-            continue
-        u["responses"] += 1
-        if m.get("stopReason") == "error":
-            u["errors"] += 1
-        usage = m.get("usage") or {}
-        for k, key in (("input", "input"), ("cacheRead", "cache_read"),
-                       ("output", "output")):
-            v = usage.get(k)
-            if isinstance(v, int):
-                u[key] += v
-    if not u["responses"]:
-        return {}
-    # 数字格式化（人读）：千分位缩写
-    for k in ("input", "cache_read", "output"):
-        u[k] = _num(u[k])
-    return u
+        if ev.get("type") == "thinking_level_change":
+            lv = ev.get("thinkingLevel")
+            if lv and lv not in out:
+                out.append(lv)
+    return out
 
 
 def _num(n):

@@ -98,9 +98,29 @@ compaction 的 `firstKeptEntryId` 起 + 其后的条目"——窗口内含 compa
 | `loop-<agent>.log` | loop + engine（stdout 重定向） | `[YYYY-MM-DDTHH:MM:SS.mmm] <agent>: <msg>` | 人（grep/肉眼）+ `--report`（**仅登记字段**） | **否** | O(1) 捕获 |
 | `wake-logs/<agent>-<epoch>.txt` | loop | `CMD: <shlex.quote 单行>` | 人（排错第一手段） | 否 | O(prompt) |
 | `status-<agent>.json` | loop | `{"sessionID": ...}` | 流程（崩溃恢复） | 是（恢复用） | O(1) |
-| `pi-sessions/fork-src-*.jsonl` | pi | 文档化 session schema | fork 构建 + `--report` | 否（报告用） | O(MB) 全量 → **禁轮询** |
+| `pi-sessions/fork-src-*.jsonl` | pi | 文档化 session schema（`usage`/`stopReason`/`timestamp`/`thinkingLevel`） | fork 构建 + `--report` | 否（报告用） | O(MB) 全量 → **禁轮询** |
 | `result.md`（固定位） | resultWriter loop | 结论文档 | 人 | 是（收尾判据） | — |
 | `--report`（视图） | observability | 文本行 | 人（**三个出口**，见下） | **否**（不得升级为验收 gate） | 冷路径一次性 —— **O(session 大小)**：每 agent 读整个 fork-src jsonl（实测 3 × 789KB ≈ 2.4MB/次、50–150ms/次，×3 出口 <0.3s/次分析），**不得进入任何轮询路径**（e2e16 评审量化） |
+
+**报告的字段集**（e2e17 评审后定稿）——**四组谓词分组 + 一组对照**，
+全部**只读已有家**（session 的文档化字段 + loop log 登记字段），不新增度量、
+不在 loop log 增记（同一事实两处 = 双写）：
+
+| 组 | 形状 | 落点 |
+|---|---|---|
+| `usage` 合计 | `{input, cacheRead, output, reasoning}` | 每 agent 一行；`reasoning ⊂ output`（**不可相加**），缺席省略括注 |
+| `requests_by_stopReason` | `{键=stopReason 原值: 计数}` | 与下一项同一行（`stopReason：toolUse 78（1234s）｜…`） |
+| `seconds_by_stopReason` | `{键=stopReason 原值: 响应跨度合计}` | 同上；**口径 = 响应跨度合计**（不含工具执行/唤醒间隔） |
+| `effective_levels` | `[thinkingLevel…]`（session 侧，去重保序） | `档位：声明 X ｜ 生效 Y ｜ ✓一致 / ⚠不一致` |
+| （对照）`declared` | `pi-agent.json.thinking` | 同上——声明值与生效值**并列**（此前从没人对照过：探测失败会静默取档，spec 表面正常） |
+
+两个设计要点：
+- **键 = `stopReason` 原值（含 `None`）**：名字即事实、不会过期——
+  `requests_tool/final` 这类解释性命名会因"长消息也是 `toolUse`"立刻过期。
+  键集合不随数据增长（新增同类数字只多一个键）；保留 `None` 键，否则
+  "计数相同、时长差两个数量级"的情形会静默丢失。
+- **provider 失败那笔账就在这里**：`error` 键同时给计数与时长——此前它
+  完全不可见（e2e13 实测 11% 墙钟零记录；e2e17 实测区间 11%–19%）。
 
 **报告的三个出口**（同一 `build_report`，同一份内容）：
 1. **`--follow` 结束**——viewer 在 done 分支自动附报告（`human_viewer._print_report`）。
@@ -322,7 +342,22 @@ commit 是溯源记录、本节是长期引用点——不并存两份权威值�
     多余参数响亮失败、`--say` 多于 2 个参数响亮失败（未加引号文本会被当成
     目录）、`--view` 的 viewer 失败透传 rc 且**不打印 HEAD 游标**（给失败的
     一轮发游标会让下一次 `--since` 静默跳过消息）。
-18. **git 守卫范围 = 从讨论 workdir 发起的操作**（`GIT_CEILING_DIRECTORIES`
+18. **配置自明性三件（e2e17 评审落地）**：
+    1. **spec 永远写显式 variant**——`models.md` 两个槽都显式（model 写
+       `default` = 继承本机；variant 缺省 = `DEFAULT_THINKING`）；探测失败
+       时打一行 stderr 提示（**可见**，不阻断——终端直用本就没有 `PI_*`），
+       而不是让 spec 表面正常、生效值静默取档。
+    2. **`variant` 槽没有 `default` 别名**——`default` 只在 model 槽有意义
+       （= 继承）。相邻两行同词反义会让读者必错，且别名不增加表达力
+       （空已是缺省）；写了 `default` 就按原值透传（可见失败）。
+       档位默认值单一声明点 = `meeting_fs.DEFAULT_THINKING`。
+    3. **fork 源不携带旧会话的 `thinking_level_change`**——本场档位由 CLI
+       显式传入（恒非空），旧条目既不是本场生效值、又会让 pi **跳过**写
+       自己的档位条目（`if (!hasThinkingEntry) append`）→ session 里没有
+       "本场生效档位"这个事实。剔除后 pi 在边界之后补写，报告才能并列
+       「声明值 vs 生效值」。`model_change` **不剔除**（无 `--model` 的路径
+       靠它回填主 pi 模型——活配置，不是陈旧副本）。
+19. **git 守卫范围 = 从讨论 workdir 发起的操作**（`GIT_CEILING_DIRECTORIES`
    注入于 spawn）；主项目仓库不在守卫范围（agent 的 cwd 就是主项目，其
    约束归指令层 + 主项目 `.gitignore`）。要拦主仓库需换机制类（沙箱/钩子），
    经评估收益不支撑扩面。
