@@ -357,7 +357,27 @@ commit 是溯源记录、本节是长期引用点——不并存两份权威值�
        "本场生效档位"这个事实。剔除后 pi 在边界之后补写，报告才能并列
        「声明值 vs 生效值」。`model_change` **不剔除**（无 `--model` 的路径
        靠它回填主 pi 模型——活配置，不是陈旧副本）。
-19. **git 守卫范围 = 从讨论 workdir 发起的操作**（`GIT_CEILING_DIRECTORIES`
+19. **agent 进程的作用域配置（XDG_CONFIG_HOME）——关 AFT 语义搜索**：
+    实测（2026-09-12）AFT 的**语义搜索**（本地 ONNX embedder
+    all-MiniLM-L6-v2）让每个 pi 进程多活约 **57 秒**：带语义搜索 61.0s、
+    关掉 3.3–4.4s、无扩展 2.2s（逐个扩展隔离 + 跨项目复现，非冷热/非竞争）；
+    而 agent 的 pi 进程退出**在唤醒关键路径上**（loop 等进程结束才继续）→
+    e2e17 那场 33 次唤醒 ≈ 墙钟 12 分钟 / 55 分钟（≈22%）。AFT 自己的日志
+    显示它在 ~2s 内已 shutdown 完毕，"多活的 57 秒"像 ONNX 运行时线程/句柄
+    残留（上游问题），我们不等它修。
+    **做法**：不改用户配置（**主 pi 完全不受影响**），而是在建环境时生成
+    `<base>/agent-config/`（`meeting_fs.build_agent_config`）——
+    `cortexkit/aft.jsonc` = 用户配置键原样保留 + 语义搜索关闭（新旧键名
+    都写）；`cortexkit/magic-context.jsonc` = 用户配置**逐字拷贝**（MC 行为
+    不变）；再由 `meeting_loop._spawn_env` 把该目录作为 agent 进程的
+    `XDG_CONFIG_HOME` 注入（**目录存在才注入**——老环境不改行为）。
+    影响面实测：pi 自身不读 XDG_CONFIG_HOME（dist 零命中）、mcp-adapter
+    不读、只有 MC 读（故拷贝）。副作用：agent 进程内
+    `$XDG_CONFIG_HOME/git/config` 也随之改变（协议本就禁止 agent 跑 git，
+    且有 GIT_CEILING_DIRECTORIES 兜底）。目录随讨论目录删除 → 零残留。
+    已知边界：AFT 还读项目级 `<project>/.cortexkit/aft.jsonc`，用户项目若
+    有该文件且显式开启语义搜索，可能覆盖本配置（本仓无该文件）。
+20. **git 守卫范围 = 从讨论 workdir 发起的操作**（`GIT_CEILING_DIRECTORIES`
    注入于 spawn）；主项目仓库不在守卫范围（agent 的 cwd 就是主项目，其
    约束归指令层 + 主项目 `.gitignore`）。要拦主仓库需换机制类（沙箱/钩子），
    经评估收益不支撑扩面。

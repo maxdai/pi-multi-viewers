@@ -18,6 +18,8 @@ import tempfile
 import unittest
 from unittest import mock
 
+import meeting_fs
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import meeting_loop  # noqa: E402
@@ -696,6 +698,45 @@ class TestMiscLoop(unittest.TestCase):
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
+
+
+class TestSpawnEnv(unittest.TestCase):
+    """`_spawn_env`：agent 进程环境的唯一构造点（e2e18）。
+
+    两个注入：GIT_CEILING_DIRECTORIES（git 上溯防护）与 XDG_CONFIG_HOME
+    （作用域配置 → 关 AFT 语义搜索，每进程 ~57s）。后者**目录存在才注入**
+    （老环境不改行为）。
+    """
+
+    def _env(self, tmp, with_cfg):
+        base = os.path.join(tmp, "mv-x-1")
+        workdir = os.path.join(base, "work-a")
+        os.makedirs(workdir)
+        if with_cfg:
+            os.makedirs(meeting_fs.agent_config_dir(base))
+        return workdir
+
+    def test_ceiling_always_and_config_when_present(self):
+        import meeting_loop
+        with tempfile.TemporaryDirectory() as tmp:
+            wd = self._env(tmp, with_cfg=True)
+            env = meeting_loop._spawn_env(wd)
+            self.assertEqual(env["GIT_CEILING_DIRECTORIES"],
+                             os.path.dirname(wd))
+            self.assertEqual(env["XDG_CONFIG_HOME"],
+                             meeting_fs.agent_config_dir(os.path.dirname(wd)))
+            # Popen 的 env 是整体替换 → 必须合并 os.environ（否则丢 PATH）
+            self.assertIn("PATH", env)
+
+    def test_no_injection_without_scope_dir(self):
+        import meeting_loop
+        with tempfile.TemporaryDirectory() as tmp:
+            wd = self._env(tmp, with_cfg=False)
+            env = meeting_loop._spawn_env(wd)
+            self.assertEqual(env["GIT_CEILING_DIRECTORIES"],
+                             os.path.dirname(wd))
+            self.assertNotIn("XDG_CONFIG_HOME", env,
+                             "未生成作用域配置时不得注入（不改老环境行为）")
 
 if __name__ == "__main__":
     unittest.main()

@@ -12,6 +12,7 @@
 
 import json
 import os
+import shutil
 import uuid
 import re
 import subprocess
@@ -57,6 +58,147 @@ DEFAULT_STALL_TIMEOUT = 600
 # 正确的处方是**让失败可见**（探测失败时 spec_gen 打提示、spec 永远写
 # 显式档位），不是把默认值挪到便宜侧。
 DEFAULT_THINKING = "max"
+
+# agent 进程的**作用域配置**目录名（relative to 讨论根目录）——由
+# `build_agent_config` 生成，作为 agent 进程的 XDG_CONFIG_HOME 注入
+# （`meeting_loop._spawn_env`）。为什么需要：见 `build_agent_config`。
+AGENT_CONFIG_DIR = "agent-config"
+
+
+def agent_config_dir(base):
+    """讨论根目录 → agent 进程的 XDG_CONFIG_HOME 目录（可能尚未生成）。
+
+    路径推导单点：`build_agent_config` 写入时与 `meeting_loop._spawn_env`
+    注入时用同一个函数（两边各拼一次路径就会漂）。
+    """
+    return os.path.join(base, AGENT_CONFIG_DIR)
+
+
+def _strip_jsonc(text):
+    """宽松 JSONC → JSON 文本：去 `//`、`/* */` 注释与尾逗号。
+
+    只做文本级清理（不引解析器）：要读的是**用户手写的** AFT 配置（可能带
+    注释），而我们要保留它的全部键、只覆盖一个。字符串里的 `//` 不能被当
+    注释 → 扫字符时跟踪引号与转义状态。
+    """
+    out = []
+    i, n = 0, len(text)
+    in_str = False
+    while i < n:
+        c = text[i]
+        if in_str:
+            out.append(c)
+            if c == "\\" and i + 1 < n:
+                out.append(text[i + 1])
+                i += 2
+                continue
+            if c == '"':
+                in_str = False
+            i += 1
+            continue
+        if c == '"':
+            in_str = True
+            out.append(c)
+            i += 1
+            continue
+        if c == "/" and i + 1 < n and text[i + 1] == "/":
+            while i < n and text[i] != "\n":
+                i += 1
+            continue
+        if c == "/" and i + 1 < n and text[i + 1] == "*":
+            i += 2
+            while i + 1 < n and not (text[i] == "*" and text[i + 1] == "/"):
+                i += 1
+            i += 2
+            continue
+        out.append(c)
+        i += 1
+    return re.sub(r",(\s*[}\]])", r"\1", "".join(out))
+
+
+def _read_jsonc(path):
+    """读 JSONC 文件 → dict。解析失败抛 ValueError（调用方决定降级）。"""
+    with open(path, encoding="utf-8") as f:
+        return json.loads(_strip_jsonc(f.read()))
+
+
+def _source_config_home():
+    """用户级配置根（与 AFT 自己的 `configHome()` 同规则）：XDG_CONFIG_HOME
+    （绝对路径时）优先，否则 `~/.config`。"""
+    xdg = os.environ.get("XDG_CONFIG_HOME") or ""
+    if xdg and os.path.isabs(xdg):
+        return xdg
+    return os.path.join(os.path.expanduser("~"), ".config")
+
+
+def build_agent_config(base, source_config_home=None):
+    """为 agent 进程写一份**作用域配置**（agent 进程的 XDG_CONFIG_HOME）。
+
+    **为什么需要**（2026-09-12 实测）：AFT 的**语义搜索**（本地 ONNX embedder
+    all-MiniLM-L6-v2）让每个 pi 进程多活约 **57 秒**——而 agent 的 pi 进程退出
+    在唤醒的关键路径上（loop 等进程结束才继续）。实测矩阵：AFT 带语义搜索
+    61.0s / 关闭后 3.3–4.4s / 无扩展 2.2s；跨项目复现（不是索引冷热、不是
+    并发竞争）。AFT 自己的日志显示它在 ~2s 内已 shutdown 完毕
+    （`Process exited during shutdown` / `Bridge pool shut down`），"多活的
+    57 秒"像是 ONNX 运行时线程/句柄残留（上游问题），但我们不必等它修。
+    量化：e2e17 那场 33 次唤醒 → 墙钟约 12 分钟 / 55 分钟（≈22%）。
+
+    **做法**：不改用户的配置（**主 pi 完全不受影响**——XDG_CONFIG_HOME 只注入
+    agent 进程），而是生成一份作用域配置：
+
+      <base>/agent-config/cortexkit/aft.jsonc           = 用户配置键原样保留
+                                                          + 语义搜索关闭
+      <base>/agent-config/cortexkit/magic-context.jsonc = 用户配置**逐字拷贝**
+                                                          （MC 行为保持不变）
+
+    影响面（实测）：pi 自身**不读** XDG_CONFIG_HOME（dist 零命中）；mcp-adapter
+    不读；**只有 MC 读** → 所以拷贝它的配置。副作用：agent 进程内
+    `$XDG_CONFIG_HOME/git/config` 也随之改变——协议本就禁止 agent 跑 git，
+    且有 GIT_CEILING_DIRECTORIES 兜底。目录随讨论目录删除 → 零残留。
+
+    已知边界：AFT 还读**项目级** `<project>/.cortexkit/aft.jsonc`，若用户项目
+    里有该文件且显式打开语义搜索，可能覆盖本配置（本仓无该文件）。
+
+    返回 (目录, 警告列表)；警告由调用方打（fail-open：配置不可读不影响建环境）。
+    """
+    src_home = source_config_home or _source_config_home()
+    src_root = os.path.join(src_home, "cortexkit")
+    dst_root = os.path.join(agent_config_dir(base), "cortexkit")
+    os.makedirs(dst_root, exist_ok=True)
+    warnings = []
+
+    # ---- AFT：保留用户全部键，只关语义搜索 ----
+    cfg = {}
+    src_aft = os.path.join(src_root, "aft.jsonc")
+    if os.path.isfile(src_aft):
+        try:
+            cfg = _read_jsonc(src_aft)
+        except (OSError, ValueError):
+            # 不静默：告知调用方"其余键没套用"（本配置的目标仍然达成）
+            warnings.append(
+                f"无法解析 AFT 配置 {src_aft}——agent 侧只写语义搜索开关，"
+                f"其余键不套用")
+            cfg = {}
+    cfg["experimental_semantic_search"] = False
+    # 旧键名：用户配置里出现过就一并关掉（AFT 对两个名字都认，但只写现行名
+    # 将来若移除旧名也仍是关的；写两个 = 不依赖它到底认哪个）
+    if "semantic_search" in cfg:
+        cfg["semantic_search"] = False
+    with open(os.path.join(dst_root, "aft.jsonc"), "w", encoding="utf-8") as f:
+        # 注释用 `//`（JSONC 规范；`#` 不是 JSONC 语法——第三方解析器可能
+        # 拒收，而我们这份文件的读者正是第三方）
+        f.write("// agent 进程作用域配置（XDG_CONFIG_HOME 注入；主 pi 不受影响）\n")
+        f.write("// 语义搜索关闭：实测每个 pi 进程多活 ~57s，而 agent 进程退出"
+                "在唤醒关键路径上\n")
+        f.write("// 其余键 = 用户配置原样保留\n")
+        json.dump(cfg, f, ensure_ascii=False, indent=2)
+        f.write("\n")
+
+    # ---- magic-context：逐字拷贝（行为与本机一致；不改它的配置） ----
+    src_mc = os.path.join(src_root, "magic-context.jsonc")
+    if os.path.isfile(src_mc):
+        shutil.copyfile(src_mc, os.path.join(dst_root, "magic-context.jsonc"))
+    return agent_config_dir(base), warnings
 
 # ---------------------------------------------------------------
 # git 基础操作

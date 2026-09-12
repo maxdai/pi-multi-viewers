@@ -52,6 +52,11 @@ tests/               测试（unittest discover tests）
 祖先发现）+ spec background.md（人工可选边界约定——prepare 蒸馏机制已
 移除，fork 使其冗余；background 只写显式边界，不复述对话）。
 
+**agent 进程环境**：`GIT_CEILING_DIRECTORIES`（git 上溯防护）+
+`XDG_CONFIG_HOME=<base>/agent-config`（作用域配置：关 AFT 语义搜索，每进程省
+~57s；主 pi 不受影响）——注入点 `meeting_loop._spawn_env`，配置生成
+`meeting_fs.build_agent_config`（见 design.md 决策记录 19）。
+
 **关键约定**：pi sessions 目录编码 = `--` + 去首尾斜杠内斜杠换 `-` + `--`
 （`/tmp` → `--tmp--`；wrapper 解析 fork 源依赖它，编码错一根横线 = 静默
 解析不到——已加显式报错）。**fork-only fail-fast**：缺 fork 源 = 明确报错

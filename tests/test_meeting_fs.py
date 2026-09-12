@@ -25,6 +25,7 @@ from meeting_fs import (
     serialize_message, list_my_messages, next_msg_id, commit_message,
     read_point, list_new_messages, new_messages_with_meta,
     is_message_file, parse_log_nameonly,
+    agent_config_dir, build_agent_config, _strip_jsonc,
 )
 
 
@@ -957,6 +958,114 @@ class TestBareOf(unittest.TestCase):
         self.assertEqual(bare_of_workdir("/tmp/disc/work-性能"),
                          "/tmp/disc/repo.git")
 
+
+
+class TestAgentConfig(unittest.TestCase):
+    """agent 进程的作用域配置（XDG_CONFIG_HOME）——AFT 语义搜索关闭。
+
+    e2e18 实测：AFT 语义搜索让每个 pi 进程多活 ~57s（61.0s vs 3.3–4.4s），
+    而 agent 进程退出在唤醒关键路径上。做法 = 不改用户配置，给 agent 一份
+    作用域配置（见 meeting_fs.build_agent_config）。
+    """
+
+    def _src(self, tmp, aft=None, mc=None):
+        """伪造"用户级配置目录"（XDG_CONFIG_HOME 的形状）。"""
+        home = os.path.join(tmp, "confighome")
+        d = os.path.join(home, "cortexkit")
+        os.makedirs(d, exist_ok=True)
+        if aft is not None:
+            with open(os.path.join(d, "aft.jsonc"), "w") as f:
+                f.write(aft)
+        if mc is not None:
+            with open(os.path.join(d, "magic-context.jsonc"), "w") as f:
+                f.write(mc)
+        return home
+
+    def test_disables_semantic_and_keeps_other_keys(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = self._src(tmp, aft='{"tool_surface": "all", '
+                                      '"experimental_search_index": true, '
+                                      '"experimental_semantic_search": true}')
+            base = os.path.join(tmp, "base")
+            cfg_dir, warns = build_agent_config(base, source_config_home=home)
+            self.assertEqual(cfg_dir, agent_config_dir(base))
+            self.assertEqual(warns, [])
+            with open(os.path.join(cfg_dir, "cortexkit", "aft.jsonc")) as f:
+                cfg = json.loads(_strip_jsonc(f.read()))
+            self.assertIs(cfg["experimental_semantic_search"], False)
+            self.assertIs(cfg["experimental_search_index"], True)   # 保留
+            self.assertEqual(cfg["tool_surface"], "all")            # 保留
+
+    def test_disables_legacy_key_too(self):
+        """用户配置用旧键名（semantic_search）时**一并关闭**：不依赖 AFT
+        到底认哪个名字。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            home = self._src(tmp, aft='{"semantic_search": true, '
+                                      '"search_index": true, "bash": false}')
+            base = os.path.join(tmp, "base")
+            cfg_dir, _ = build_agent_config(base, source_config_home=home)
+            with open(os.path.join(cfg_dir, "cortexkit", "aft.jsonc")) as f:
+                cfg = json.loads(_strip_jsonc(f.read()))
+            self.assertIs(cfg["semantic_search"], False)            # 旧名
+            self.assertIs(cfg["experimental_semantic_search"], False)
+            self.assertIs(cfg["search_index"], True)
+            self.assertIs(cfg["bash"], False)
+
+    def test_tolerates_jsonc_comments_and_trailing_comma(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = self._src(tmp, aft='{\n  // 用户注释\n'
+                                      '  "search_index": true, /* 块注释 */\n'
+                                      '  "note": "含 // 的字符串",\n}\n')
+            base = os.path.join(tmp, "base")
+            cfg_dir, warns = build_agent_config(base, source_config_home=home)
+            self.assertEqual(warns, [])
+            with open(os.path.join(cfg_dir, "cortexkit", "aft.jsonc")) as f:
+                cfg = json.loads(_strip_jsonc(f.read()))
+            self.assertEqual(cfg["note"], "含 // 的字符串")   # 字符串内 // 保留
+            self.assertIs(cfg["search_index"], True)
+
+    def test_unparsable_config_warns_but_still_disables(self):
+        """坏配置：**可见**警告 + 仍写出开关（目标达成，但如实告知其余键
+        没套用——不静默降级）。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            home = self._src(tmp, aft='{ 这不是 JSON')
+            base = os.path.join(tmp, "base")
+            cfg_dir, warns = build_agent_config(base, source_config_home=home)
+            self.assertTrue(warns and "无法解析" in warns[0])
+            with open(os.path.join(cfg_dir, "cortexkit", "aft.jsonc")) as f:
+                cfg = json.loads(_strip_jsonc(f.read()))
+            self.assertIs(cfg["experimental_semantic_search"], False)
+
+    def test_missing_user_configs_still_makes_switch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = os.path.join(tmp, "base")
+            cfg_dir, warns = build_agent_config(
+                base, source_config_home=os.path.join(tmp, "none"))
+            self.assertEqual(warns, [])
+            self.assertTrue(os.path.isfile(
+                os.path.join(cfg_dir, "cortexkit", "aft.jsonc")))
+            self.assertFalse(os.path.exists(
+                os.path.join(cfg_dir, "cortexkit", "magic-context.jsonc")))
+
+    def test_magic_context_copied_verbatim(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            body = '{"historian": {"pi": {"thinking_level": "low"}}}\n'
+            home = self._src(tmp, aft='{}', mc=body)
+            base = os.path.join(tmp, "base")
+            cfg_dir, _ = build_agent_config(base, source_config_home=home)
+            with open(os.path.join(cfg_dir, "cortexkit",
+                                   "magic-context.jsonc")) as f:
+                self.assertEqual(f.read(), body)      # 逐字（不解析、不改）
+
+    def test_user_config_not_modified(self):
+        """**主 pi 不受影响**：源配置必须逐字节不变（只读 + 拷贝）。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            aft = '{"semantic_search": true}'
+            home = self._src(tmp, aft=aft, mc="{}\n")
+            base = os.path.join(tmp, "base")
+            build_agent_config(base, source_config_home=home)
+            with open(os.path.join(home, "cortexkit", "aft.jsonc")) as f:
+                self.assertEqual(f.read(), aft)
 
 if __name__ == "__main__":
     unittest.main()

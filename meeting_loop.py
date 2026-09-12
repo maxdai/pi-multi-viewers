@@ -333,6 +333,24 @@ def _build_wake_cmd(workdir, agent, sid, cfg, fork_source, fork_cwd,
     return cmd, (fork_cwd or workdir)
 
 
+def _spawn_env(workdir):
+    """agent 进程的环境（Popen 的 env 是**整体替换** → 必须合并 os.environ，
+    否则丢 PATH）。
+
+    两个注入，各有理由：
+    - `GIT_CEILING_DIRECTORIES=<讨论目录>`：git 上溯防护（实现 A1）。
+    - `XDG_CONFIG_HOME=<base>/agent-config`：**作用域配置**——关掉 AFT 的
+      语义搜索（每进程 ~57s，唤醒关键路径；实测见
+      `meeting_fs.build_agent_config`）。目录**存在才注入**：老环境/未生成
+      配置时不改行为（不静默改变 agent 的运行条件）。
+    """
+    env = {**os.environ, "GIT_CEILING_DIRECTORIES": os.path.dirname(workdir)}
+    cfg = meeting_fs.agent_config_dir(os.path.dirname(workdir))
+    if os.path.isdir(cfg):
+        env["XDG_CONFIG_HOME"] = cfg
+    return env
+
+
 def _run_wake_proc(cmd, spawn_cwd, workdir, agent):
     """spawn + 分片等待（#3 拆分）：返回 CompletedProcess。
 
@@ -348,17 +366,12 @@ def _run_wake_proc(cmd, spawn_cwd, workdir, agent):
     # 成功）。性能实测 ≈150-200 KB/唤醒、峰值亚 MB（不构成风险）；
     # 若改为流式读取，必须让"谁读 session 头"同样显式可见（可读性保留票）。
     #
-    # GIT_CEILING_DIRECTORIES=<讨论目录>：**git 上溯防护**（实现 A1）。
-    # 本进程的 argv 就是 agent 会话里 bash 工具所继承的环境来源——
-    # 注入后，从 work-<agent> 发起的 git 不会上溯到主项目仓库。
-    # 为什么需要：_lock_git 把 work-<agent>/.git 改名后，git 的默认行为是
-    # **向上继续找仓库**——fork 模式下 cwd=主项目，实测锁态下
-    # `git rev-parse --git-dir` 从 workdir 发起会命中主项目 .git（rc=0），
-    # 守卫形同虚设（见 _lock_git docstring 的范围说明）。
-    # 注：Popen 的 env 是**整体替换**，必须合并 os.environ（否则丢 PATH）。
+    # 环境构造统一在 _spawn_env（GIT_CEILING_DIRECTORIES 的 git 上溯防护
+    # 理由见该函数；brief：本进程的 argv 就是 agent 会话里 bash 工具所继承的
+    # 环境来源，而 _lock_git 只锁 work-<agent>/.git、git 默认会向上找仓库）。
     proc = subprocess.Popen(cmd, cwd=spawn_cwd, stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE, text=True,
-                            env={**os.environ, "GIT_CEILING_DIRECTORIES": base})
+                            env=_spawn_env(workdir))
     _current_proc = proc
     try:
         # 分片等待：每片检查讨论目录是否被清理（cleanup 删目录）——
