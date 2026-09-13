@@ -29,7 +29,7 @@ class Args:
     """setup_environment 的 args 桩。"""
     def __init__(self, topic="t", background=None, questions=None, stances=None,
                  models=None, result_writer=None, max_meeting=10, max_rr=7,
-                 stall_timeout=600, pure=False):
+                 stall_timeout=600, extensions=False):
         self.topic = topic
         self.background = background
         self.questions = questions
@@ -39,7 +39,7 @@ class Args:
         self.max_meeting = max_meeting
         self.max_rr = max_rr
         self.stall_timeout = stall_timeout
-        self.pure = pure
+        self.extensions = extensions
 
 
 def make_spec(base, question="# question.md——说明行\n\n# 分析主题：spec 测试",

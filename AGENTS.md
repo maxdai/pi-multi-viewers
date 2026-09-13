@@ -54,12 +54,17 @@ tests/               测试（unittest discover tests）
 移除，fork 使其冗余；background 只写显式边界，不复述对话）。
 
 **agent 进程环境**：`GIT_CEILING_DIRECTORIES`（git 上溯防护）——注入点
-`meeting_loop._spawn_env`。**扩展策略（决策 20）**：默认**屏蔽 AFT、保留 MC**
-（`--no-extensions` + `-e <MC 入口>`，入口由 `meeting_fs.resolve_extension_entries`
-从 `settings.json` 推导）；理由 = AFT 在大 session 上让进程退出前多活数分钟
-（收尾占 66–78% 进程时间，实测 446s vs 仅 MC 0.5s），而 loop 等进程退出是
-关键路径。`--pure` 仍可连 MC 一起关。**主 pi 完全不受影响**（只改我们 spawn 的
-agent 进程命令行）。
+`meeting_loop._spawn_env`。**扩展策略（决策 20）：默认零扩展** ——
+`--no-extensions --no-skills --no-prompt-templates --no-themes`，只留 pi 内置
+工具与项目内 AGENTS.md。为什么：两类插件在**我们这种 session 形态**上都是分钟级
+负担、且都在关键路径上（loop 等进程退出才继续）——
+· **AFT**：大 session 上进程退出前多活数分钟（受控对照 445.9s → 0.5s）；
+· **MC**：它的 historian 对"带大段未处理历史"的 session **每次必失败并立刻重试**
+（受控对照：同输入 **447s → 10.3s，43 倍**）。
+零扩展**真场实测**：墙钟 12m31s / 每次唤醒 48.1s / 收尾≈0% / historian 0 次。
+加回扩展 = **显式 opt-in**（`--extensions` / 协议 `extensions: true`），且须自证
+净收益（design.md 决策 20 的门槛条款）。**主 pi 完全不受影响**（只改我们 spawn 的
+agent 进程命令行；主 pi 的 MC/历史学家照常）。
 
 **关键约定**：pi sessions 目录编码 = `--` + 去首尾斜杠内斜杠换 `-` + `--`
 （`/tmp` → `--tmp--`；wrapper 解析 fork 源依赖它，编码错一根横线 = 静默

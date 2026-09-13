@@ -370,7 +370,7 @@ def gen_question(topic, stances, background, questions):
     return "\n".join(lines)
 
 
-def gen_protocol(topic, participants, max_meeting, max_rr, pure=False,
+def gen_protocol(topic, participants, max_meeting, max_rr, extensions=False,
                  result_writer=None,
                  stall_timeout=DEFAULT_STALL_TIMEOUT,
                  fork_source=None, fork_cwd=None,
@@ -388,8 +388,8 @@ def gen_protocol(topic, participants, max_meeting, max_rr, pure=False,
         "stallTimeoutSeconds": stall_timeout,
         "commitPolicy": "one-message-per-commit",
     }
-    if pure:
-        proto["pure"] = True
+    # 显式写出扩展策略（默认零扩展 = agents 不加载任何外部扩展）
+    proto["extensions"] = bool(extensions)
     if fork_source:
         # fork 模式（多视角）：首唤挂载主 session + cwd=主项目
         # forkMode 取值域与默认值的定义在 meeting_fs（FORK_MODES /

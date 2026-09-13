@@ -505,7 +505,7 @@ class TestResponderAbsolutePaths(unittest.TestCase):
         captured = {}
         orig = meeting_loop.wake_llm
 
-        def fake_wake(workdir, agent, prompt, pure=False, **kw):
+        def fake_wake(workdir, agent, prompt, with_extensions=False, **kw):
             captured["prompt"] = prompt
             captured["workdir"] = workdir
             captured["kwargs"] = kw
@@ -539,7 +539,7 @@ class TestResponderAbsolutePaths(unittest.TestCase):
         captured = {}
         orig = meeting_loop.wake_llm
 
-        def fake_wake(workdir, agent, prompt, pure=False, **kw):
+        def fake_wake(workdir, agent, prompt, with_extensions=False, **kw):
             captured["prompt"] = prompt
             return "sid", 0
 
@@ -731,72 +731,17 @@ class TestSpawnEnv(unittest.TestCase):
 
 
 class TestExtensionPolicy(unittest.TestCase):
-    """agent 进程的扩展策略：默认**屏蔽 AFT、保留 MC**（design.md 决策 20）。
+    """agent 进程的扩展策略：**默认零扩展**（design.md 决策 20）。
 
-    实测动机：AFT 在大 session 上让进程退出前多花数分钟（收尾占 66–78%
-    进程时间；同输入仅留 MC 时 0.5s），而这段等待在 loop 里是**关键路径**。
+    实测动机（真场 + 受控对照）：
+      · AFT：大 session 上进程退出前多活数分钟（受控 445.9s → 0.5s）；
+      · MC：historian 对"带大段未处理历史"的 session 每次必失败并立刻重试
+        （受控：同输入 447s → 10.3s，43 倍）。
+    零扩展真场：墙钟 12m31s / 每次唤醒 48.1s / 收尾≈0% / historian 0 次。
+    加回扩展 = 显式 opt-in（`--extensions` / 协议 `extensions: true`）。
     """
 
-    def _cfg_dir(self, tmp, agent_dir):
-        os.makedirs(os.path.join(agent_dir, "npm", "node_modules",
-                                 "@cortexkit", "pi-magic-context"), exist_ok=True)
-        pkg = os.path.join(agent_dir, "npm", "node_modules", "@cortexkit",
-                           "pi-magic-context")
-        with open(os.path.join(pkg, "package.json"), "w") as f:
-            json.dump({"pi": {"extensions": ["./dist/index.js"]}}, f)
-        os.makedirs(os.path.join(pkg, "dist"), exist_ok=True)
-        with open(os.path.join(pkg, "dist", "index.js"), "w") as f:
-            f.write("// stub")
-        with open(os.path.join(agent_dir, "settings.json"), "w") as f:
-            json.dump({"packages": ["npm:@cortexkit/pi-magic-context"]}, f)
-        return agent_dir
-
-    def test_resolve_entries_from_registry(self):
-        """入口路径从 settings.json + 包的 pi.extensions 推导（不硬编码）。"""
-        import meeting_fs
-        with tempfile.TemporaryDirectory() as tmp:
-            agent_dir = self._cfg_dir(tmp, os.path.join(tmp, "agent"))
-            with mock.patch.dict(os.environ,
-                                 {"PI_CODING_AGENT_DIR": agent_dir}):
-                paths, missing = meeting_fs.resolve_extension_entries(
-                    meeting_fs.KEEP_EXTENSIONS)
-            self.assertEqual(missing, [])
-            self.assertEqual(len(paths), 1)
-            self.assertTrue(paths[0].endswith("dist/index.js"))
-
-    def test_missing_package_reported_not_silent(self):
-        import meeting_fs
-        with tempfile.TemporaryDirectory() as tmp:
-            agent_dir = self._cfg_dir(tmp, os.path.join(tmp, "agent"))
-            with mock.patch.dict(os.environ,
-                                 {"PI_CODING_AGENT_DIR": agent_dir}):
-                paths, missing = meeting_fs.resolve_extension_entries(
-                    ("不存在的包",))
-            self.assertEqual(paths, [])
-            self.assertEqual(missing, ["不存在的包"])
-
-    def test_wake_cmd_blocks_extensions_and_keeps_mc(self):
-        """默认命令：`--no-extensions` + `-e <MC 入口>`（不能只是关掉全部）。"""
-        import meeting_loop, meeting_fs
-        with tempfile.TemporaryDirectory() as tmp:
-            agent_dir = self._cfg_dir(tmp, os.path.join(tmp, "agent"))
-            base = os.path.join(tmp, "mv-x")
-            wd = os.path.join(base, "work-a")
-            os.makedirs(os.path.join(wd, "pi-sessions"), exist_ok=True)
-            cfg = {"model": "p/m", "thinking": "high", "prompt_file": ""}
-            with mock.patch.dict(os.environ,
-                                 {"PI_CODING_AGENT_DIR": agent_dir}):
-                cmd, _ = meeting_loop._build_wake_cmd(
-                    wd, "a", "sid", cfg, None, tmp,
-                    os.path.join(base, "pi-sessions"), False, False, "唤醒")
-            self.assertIn("--no-extensions", cmd)
-            self.assertIn("-e", cmd)
-            entry = cmd[cmd.index("-e") + 1]
-            self.assertTrue(entry.endswith("pi-magic-context/dist/index.js"))
-            # 只关扩展发现；skills/prompt-templates/themes 不在此档处理
-            self.assertNotIn("--no-skills", cmd)
-
-    def test_pure_still_disables_everything(self):
+    def _cmd(self, with_extensions):
         import meeting_loop
         with tempfile.TemporaryDirectory() as tmp:
             base = os.path.join(tmp, "mv-x")
@@ -804,11 +749,32 @@ class TestExtensionPolicy(unittest.TestCase):
             os.makedirs(wd)
             cmd, _ = meeting_loop._build_wake_cmd(
                 wd, "a", "sid", {"model": "", "thinking": "", "prompt_file": ""},
-                None, tmp, os.path.join(base, "pi-sessions"), False, True, "唤醒")
-            for flag in ("--no-extensions", "--no-skills",
-                         "--no-prompt-templates", "--no-themes"):
-                self.assertIn(flag, cmd)
-            self.assertNotIn("-e", cmd)
+                None, tmp, os.path.join(base, "pi-sessions"), False,
+                with_extensions, "唤醒")
+        return cmd
+
+    def test_default_is_zero_extensions(self):
+        """默认：四个 --no-* 都在，且**不**显式加载任何扩展。"""
+        cmd = self._cmd(False)
+        for flag in ("--no-extensions", "--no-skills",
+                     "--no-prompt-templates", "--no-themes"):
+            self.assertIn(flag, cmd)
+        self.assertNotIn("-e", cmd)
+        self.assertNotIn("--extension", cmd)
+
+    def test_opt_in_loads_extensions(self):
+        """显式 opt-in：不加任何 --no-*（走 pi 默认发现）。"""
+        cmd = self._cmd(True)
+        for flag in ("--no-extensions", "--no-skills",
+                     "--no-prompt-templates", "--no-themes"):
+            self.assertNotIn(flag, cmd)
+
+    def test_resolve_extension_entries_is_gone(self):
+        """配套机制已随零扩展退役（不留死代码）。"""
+        import meeting_fs
+        self.assertFalse(hasattr(meeting_fs, "resolve_extension_entries"))
+        self.assertFalse(hasattr(meeting_fs, "KEEP_EXTENSIONS"))
+
 
 if __name__ == "__main__":
     unittest.main()

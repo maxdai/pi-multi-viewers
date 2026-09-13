@@ -69,69 +69,6 @@ def pi_agent_dir():
     return os.environ.get("PI_CODING_AGENT_DIR") or os.path.expanduser("~/.pi/agent")
 
 
-def resolve_extension_entries(package_names):
-    """按包名解析扩展入口路径（**从 settings.json + 包的 pi.extensions 推导**）。
-
-    为什么要它：agent 进程默认屏蔽 AFT（实测：大 session 上进程退出前要多花
-    数分钟——见 design.md 决策 20），但**保留 magic-context**。屏蔽只能用
-    `--no-extensions`（pi 没有"只关某一个"的 CLI 开关），因此被保留的扩展要
-    用 `-e <入口>` 显式加载——入口路径必须**机械推导**而不是硬编码第三方目录
-    布局（换包管理器/换安装位置就漂）。
-
-    解析链：`settings.json.packages`（注册表）→ `npm:<pkg>` 或相对路径 →
-    `<PI_AGENT_DIR>/npm/node_modules/<pkg>/package.json` 的 `pi.extensions` →
-    逐个 os.path.isfile 校验。
-
-    返回 (paths, missing)：paths = 已存在的入口绝对路径（保序去重）；
-    missing = 想加载但解析不到的包名（调用方应**可见地**处理，不静默放弃）。
-    """
-    agent_dir = pi_agent_dir()
-    try:
-        with open(os.path.join(agent_dir, "settings.json")) as f:
-            packages = json.load(f).get("packages") or []
-    except (OSError, ValueError):
-        packages = []
-    # 包名 → 包目录（npm 注册名与相对路径两种形态）
-    dirs = {}
-    for entry in packages:
-        if not isinstance(entry, str):
-            continue
-        if entry.startswith("npm:"):
-            name = entry[4:]
-            dirs[name] = os.path.join(agent_dir, "npm", "node_modules", name)
-        else:
-            # 相对路径（如 ../../pi-multi-viewers）——相对 agent 目录解析
-            dirs.setdefault("", []).append(
-                os.path.abspath(os.path.join(agent_dir, entry)))
-    paths, missing = [], []
-    for name in package_names:
-        pkg_dir = dirs.get(name)
-        if not pkg_dir:
-            missing.append(name)
-            continue
-        try:
-            with open(os.path.join(pkg_dir, "package.json")) as f:
-                exts = (json.load(f).get("pi") or {}).get("extensions") or []
-        except (OSError, ValueError):
-            missing.append(name)
-            continue
-        found = False
-        for rel in exts:
-            path = os.path.normpath(os.path.join(pkg_dir, rel))
-            if os.path.isfile(path) and path not in paths:
-                paths.append(path)
-                found = True
-        if not found:
-            missing.append(name)
-    return paths, missing
-
-
-# agent 进程要**保留**的扩展（屏蔽 AFT 的同时留下它们；见 design.md 决策 20）。
-# 用包名（`settings.json.packages` 里的注册名）表达意图——具体入口由
-# `resolve_extension_entries` 推导。
-KEEP_EXTENSIONS = ("@cortexkit/pi-magic-context",)
-
-
 # ---------------------------------------------------------------
 # git 基础操作
 # ---------------------------------------------------------------

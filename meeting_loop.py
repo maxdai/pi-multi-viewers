@@ -4,7 +4,7 @@
 复用 meeting_engine 的唯一状态机，只注入"唤醒 pi"的 responder。
 协议逻辑（锁/配额/级联/信号）全在引擎，此处只做 LLM 交互。
 
-用法：python3 meeting_loop.py <workdir> <agent> [--pure]
+用法：python3 meeting_loop.py <workdir> <agent> [--extensions]
 （配额/超时从 protocol.json 读——单一事实源；无 CLI 覆盖）
 """
 
@@ -289,7 +289,7 @@ def _prepare_fork_session(workdir, agent, sid, fork_source, fork_cwd,
 
 
 def _build_wake_cmd(workdir, agent, sid, cfg, fork_source, fork_cwd,
-                    session_dir, first_wake, pure, prompt,
+                    session_dir, first_wake, with_extensions, prompt,
                     fork_mode=meeting_fs.DEFAULT_FORK_MODE, topic=""):
     """组装唤醒命令（#3 拆分，e2e7 评审）：返回 (cmd, spawn_cwd)。
 
@@ -310,29 +310,18 @@ def _build_wake_cmd(workdir, agent, sid, cfg, fork_source, fork_cwd,
         cmd = ["pi", "--mode", "json", "--session-id", sid,
                "--session-dir", session_dir]
     # ---- agent 进程的扩展策略（design.md 决策 20）----
-    # 默认 = **屏蔽 AFT，保留 MC**：pi 没有"只关某一个扩展"的 CLI 开关，所以
-    # 用 `--no-extensions` 关掉扩展发现，再把要保留的用 `-e <入口>` 显式加载
-    # （入口由 `meeting_fs.resolve_extension_entries` 从 settings.json 的注册表
-    # 推导，不硬编码第三方目录布局）。
-    # 为什么屏蔽 AFT：实测它在**大 session** 上让进程退出前多花数分钟——收尾段
-    # 占 agent 进程时间的 66–78%（1.9MB session 实测 446s；同输入仅留 MC 时
-    # 0.5s），而这段等待在我们的 loop 里是**关键路径**（等进程退出才继续）。
-    # pure = 连 MC 一起关（保留给需要"零扩展"的场景）。
-    if pure:
-        # Pi 的 pure 近似：关闭外部扩展/技能/prompt-template/主题加载，
-        # 保留内置工具（read/bash/edit/write）与项目内 AGENTS.md。
+    # **默认 = 零扩展**（关扩展/技能/prompt-template/主题；保留内置工具与项目内
+    # AGENTS.md）。为什么：两类插件在**我们这种 session 形态**上都是分钟级负担，
+    # 且都在关键路径上（loop 等进程退出才继续）——
+    #   · AFT：大 session 上进程退出前多活数分钟（受控对照 445.9s → 0.5s）；
+    #   · MC：它的 historian 对"带着大段未处理历史"的 session **每次必失败并立刻
+    #     重试**（受控对照：同输入 447s → 10.3s，43 倍）。
+    # 零扩展实测（真场）：墙钟 12m31s / 每次唤醒 48.1s / 收尾≈0% / historian 0 次。
+    # 加回扩展属**显式 opt-in**（`--extensions`，协议字段 `extensions: true`），
+    # 且应有净收益账（见 design.md 决策 20 的门槛条款）。
+    if not with_extensions:
         cmd += ["--no-extensions", "--no-skills", "--no-prompt-templates",
                 "--no-themes"]
-    else:
-        keep, missing = meeting_fs.resolve_extension_entries(
-            meeting_fs.KEEP_EXTENSIONS)
-        cmd += ["--no-extensions"]
-        for path in keep:
-            cmd += ["-e", path]
-        if missing:
-            # 不静默：说清"想留谁、为什么没留住"
-            log(agent, f"保留扩展解析失败（{ '、'.join(missing) }）——"
-                       f"本次唤醒未加载它们；检查 settings.json 的 packages")
     model = cfg.get("model") or ""
     if model:
         cmd += ["--model", model]
@@ -417,7 +406,8 @@ def _run_wake_proc(cmd, spawn_cwd, workdir, agent):
                                        err or "")
 
 
-def wake_llm(workdir, agent, prompt, pure=False, fork_source=None, fork_cwd=None,
+def wake_llm(workdir, agent, prompt, with_extensions=False, fork_source=None,
+             fork_cwd=None,
              fork_mode=meeting_fs.DEFAULT_FORK_MODE, topic=""):
     """唤醒 pi（fork-only：首唤由本地生成 fork 源 + `--session` 打开，
     后续 `--session-id` 续接）。返回 (sessionID, returncode)。
@@ -442,7 +432,7 @@ def wake_llm(workdir, agent, prompt, pure=False, fork_source=None, fork_cwd=None
         sid = str(uuid.uuid4())
     cmd, spawn_cwd = _build_wake_cmd(workdir, agent, sid, cfg, fork_source,
                                      fork_cwd, session_dir, first_wake,
-                                     pure, prompt, fork_mode, topic)
+                                     with_extensions, prompt, fork_mode, topic)
 
     log_dir = os.path.join(base, "wake-logs")
     os.makedirs(log_dir, exist_ok=True)
@@ -519,7 +509,7 @@ def _read_perspective_brief(workdir, agent):
     return brief or None
 
 
-def make_responder(pure, fork_source=None, fork_cwd=None,
+def make_responder(with_extensions, fork_source=None, fork_cwd=None,
                    fork_mode=meeting_fs.DEFAULT_FORK_MODE, topic=""):
     """构造真实 LLM responder：唤醒 pi，LLM 写内容文件。
 
@@ -544,7 +534,7 @@ def make_responder(pure, fork_source=None, fork_cwd=None,
             if mem_available_mb() < MIN_MEM_MB:
                 log(agent, "内存不足——抛可恢复异常（不代写 freezing，下轮重试）")
                 raise RecoverableWakeError("内存不足")
-            wake_llm(workdir, agent, prompt, pure,
+            wake_llm(workdir, agent, prompt, with_extensions,
                      fork_source=fork_source, fork_cwd=fork_cwd)
             return True
         if rr_turn:
@@ -564,7 +554,7 @@ def make_responder(pure, fork_source=None, fork_cwd=None,
         if mem_available_mb() < MIN_MEM_MB:
             log(agent, "内存不足——抛可恢复异常（不代写 freezing，下轮重试）")
             raise RecoverableWakeError("内存不足")
-        wake_llm(workdir, agent, prompt, pure,
+        wake_llm(workdir, agent, prompt, with_extensions,
                  fork_source=fork_source, fork_cwd=fork_cwd,
                  fork_mode=fork_mode, topic=topic)
         return True
@@ -583,11 +573,13 @@ def _preserve_result_md(workdir):
 if __name__ == "__main__":
     if len(sys.argv) < 3:
         print("用法: python3 meeting_loop.py <workdir> <agent> "
-              "[--max-meeting N] [--max-rr N] [--stall-timeout S] [--pure]")
+              "[--max-meeting N] [--max-rr N] [--stall-timeout S]"
+              " [--extensions]")
         sys.exit(1)
     workdir, agent = sys.argv[1], sys.argv[2]
     recover_git_lock(workdir, agent)
-    pure = "--pure" in sys.argv
+    # 默认零扩展；`--extensions` 显式 opt-in（协议字段优先）
+    with_extensions = "--extensions" in sys.argv
     mm, mr, st = 10, 7, 600
     # 协议从 **bare HEAD** 读（单一来源 = 共享事实；本地副本 LLM 可改）——
     # 与 engine participants()/check_status 同一原语
@@ -597,8 +589,8 @@ if __name__ == "__main__":
         print(f"[fatal] protocol.json 读取失败（bare HEAD 无有效内容）: {bare}",
               flush=True)
         sys.exit(1)
-    if proto.get("pure"):
-        pure = True
+    if proto.get("extensions"):
+        with_extensions = True
     if proto.get("maxMeetingRounds"):
         mm = proto["maxMeetingRounds"]
     if proto.get("maxRRRounds"):
@@ -623,7 +615,7 @@ if __name__ == "__main__":
         sys.exit(1)
     try:
         agent_loop(workdir, agent,
-                   make_responder(pure,
+                   make_responder(with_extensions,
                                   fork_source=fork_source,
                                   fork_cwd=proto.get("forkCwd") or "",
                                   fork_mode=fork_mode_cfg,

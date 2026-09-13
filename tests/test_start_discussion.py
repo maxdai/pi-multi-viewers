@@ -38,12 +38,12 @@ class TestGenProtocol(unittest.TestCase):
         p = gen_protocol("t", ["a", "b", "c"], 5, 5, result_writer="a")
         self.assertEqual(p["resultWriter"], "a")
 
-    def test_pure_flag(self):
-        p = gen_protocol("t", ["a", "b"], 5, 5, pure=True)
-        self.assertEqual(p.get("pure"), True)
+    def test_extensions_flag(self):
+        """协议**恒**显式写出扩展策略；默认零扩展（False）。"""
+        p = gen_protocol("t", ["a", "b"], 5, 5, extensions=True)
+        self.assertEqual(p.get("extensions"), True)
         p2 = gen_protocol("t", ["a", "b"], 5, 5)
-        self.assertNotIn("pure", p2)
-
+        self.assertEqual(p2.get("extensions"), False)
 
     def test_fork_fields(self):
         """fork 模式（多视角）：--fork-source → protocol.json 写入

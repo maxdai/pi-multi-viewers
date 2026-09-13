@@ -38,7 +38,7 @@ class Args:
 
     def __init__(self, topic="组合测试主题", agents="a,b",
                  stances=None, background=None, questions=None,
-                 models=None, max_meeting=10, max_rr=7, pure=False,
+                 models=None, max_meeting=10, max_rr=7, extensions=False,
                  result_writer=None, stall_timeout=600):
         self.topic = topic
         self.agents = agents
@@ -48,7 +48,7 @@ class Args:
         self.models = models
         self.max_meeting = max_meeting
         self.max_rr = max_rr
-        self.pure = pure
+        self.extensions = extensions
         self.result_writer = result_writer
         self.stall_timeout = stall_timeout
 
