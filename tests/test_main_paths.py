@@ -414,11 +414,13 @@ class TestBuildReport(unittest.TestCase):
             self.assertIn("三者不可互替", txt)     # 跨度分标
             # 建议 1（e2e17 评审）：按 stopReason 原值分组——键 = 原值
             self.assertIn("stopReason：", txt)
-            # 计数 + **同一唤醒内 Δ 合计**（B 方案）：
-            #   toolUse 2 次 → 只计第 2 条的 40s（12:09:40→12:10:20）
-            #   首条响应相对唤醒 prompt 的 9 分钟**不计**（那是跨唤醒空闲）
-            self.assertIn("toolUse 2（40s）", txt)
-            self.assertIn("error 1（40s）", txt)   # 12:10:20→12:11:00
+            # 计数 + **相邻条目 Δ 合计**（B 已撤回，e2e20 评审）：
+            #   首响也计入——唤醒 prompt 本身是一条 user 条目，跨唤醒空闲
+            #   落在"上一唤醒末条 → 本次 user 条目"之间，不进入任何 Δ
+            #   toolUse：12:09:00→12:09:40 = 40s + 12:09:40→12:10:20 = 40s
+            #   error：  12:10:20→12:11:00 = 40s
+            self.assertIn("toolUse 2（1m20s）", txt)
+            self.assertIn("error 1（40s）", txt)
             self.assertIn("响应 3 次", txt)            # toolUse×2 + error
             # usage 合计：reasoning ⊂ output（同一行可见，不相加）
             self.assertIn("output 1.2k（reasoning 900）", txt)
@@ -426,7 +428,7 @@ class TestBuildReport(unittest.TestCase):
             self.assertIn("档位：声明 high", txt)
             self.assertIn("生效 high", txt)
             self.assertIn("✓ 一致", txt)
-            self.assertIn("同一唤醒内响应 Δ 合计", txt)   # 口径标注（B 方案）
+            self.assertIn("相邻条目 Δ 合计", txt)   # 口径标注
             # 边界之前的历史 usage 不得计入本轮（999999 应被排除）
             self.assertNotIn("999,999", txt)
             self.assertNotIn("999.9k", txt)

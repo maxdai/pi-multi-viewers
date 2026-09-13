@@ -333,15 +333,14 @@ def _build_wake_cmd(workdir, agent, sid, cfg, fork_source, fork_cwd,
     return cmd, (fork_cwd or workdir)
 
 
-def _spawn_env(workdir):
+def _spawn_env(workdir, agent):
     """agent 进程的环境（Popen 的 env 是**整体替换** → 必须合并 os.environ，
     否则丢 PATH）。
 
     两个注入，各有理由：
     - `GIT_CEILING_DIRECTORIES=<讨论目录>`：git 上溯防护（实现 A1）。
-    - `XDG_CONFIG_HOME=<base>/agent-config`：**作用域配置**——关掉 AFT 的
-      语义搜索（每进程 ~57s，唤醒关键路径；见
-      `meeting_fs.build_agent_config`）。
+    - `XDG_CONFIG_HOME=<base>/agent-config`：**作用域配置**（动机与实测见
+      `meeting_fs.build_agent_config`——唯一权威解释处）。
 
     门判**恒写的那个配置文件**（不是目录）：目录在、文件缺的半成品状态若照
     注入，AFT 会静默回落默认配置（= 57s 回吐）。未注入时记一行**事实**
@@ -354,8 +353,7 @@ def _spawn_env(workdir):
     if os.path.isfile(cfg_file):
         env["XDG_CONFIG_HOME"] = meeting_fs.agent_config_dir(base)
     else:
-        log(os.path.basename(workdir).removeprefix("work-"),
-            f"作用域配置缺失，未注入 XDG_CONFIG_HOME（{cfg_file}）")
+        log(agent, f"作用域配置缺失，未注入 XDG_CONFIG_HOME（{cfg_file}）")
     return env
 
 
@@ -379,7 +377,7 @@ def _run_wake_proc(cmd, spawn_cwd, workdir, agent):
     # 环境来源，而 _lock_git 只锁 work-<agent>/.git、git 默认会向上找仓库）。
     proc = subprocess.Popen(cmd, cwd=spawn_cwd, stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE, text=True,
-                            env=_spawn_env(workdir))
+                            env=_spawn_env(workdir, agent))
     _current_proc = proc
     try:
         # 分片等待：每片检查讨论目录是否被清理（cleanup 删目录）——

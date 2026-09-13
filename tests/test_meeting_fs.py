@@ -25,6 +25,7 @@ from meeting_fs import (
     serialize_message, list_my_messages, next_msg_id, commit_message,
     read_point, list_new_messages, new_messages_with_meta,
     is_message_file, parse_log_nameonly,
+    iter_after_boundary, BOUNDARY_TYPE,
     agent_config_dir, agent_config_aft_file, build_agent_config,
     _strip_jsonc, af_resolution_notes,
 )
@@ -1021,6 +1022,32 @@ class TestAgentConfig(unittest.TestCase):
             self.assertNotIn("experimental_semantic_search", cfg)
             self.assertIs(cfg["bash"], False)
 
+    def test_comments_with_quotes(self):
+        """**回归**（e2e20 评审批 S1）：注释里含引号时，单趟"按字符串切分 +
+        奇偶下标"方案会配对错位 → 注释剥离失效。两趟法必须都过。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            base, warns = self._build(
+                tmp, aft='{"a": 1, /* say "hi" */ "b": 2}')
+            self.assertEqual(warns, [])
+            cfg = self._aft_json(base)
+            self.assertEqual(cfg["a"], 1)
+            self.assertEqual(cfg["b"], 2)
+
+    def test_line_comment_with_quotes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base, warns = self._build(
+                tmp, aft='{"a": 1, // see "docs"\n"b": 2}')
+            self.assertEqual(warns, [])
+            cfg = self._aft_json(base)
+            self.assertEqual(cfg["b"], 2)
+
+    def test_odd_quote_in_comment_does_not_touch_value(self):
+        """注释里**奇数**引号 + 真串值含 `, }`：串值必须逐字保留。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            base, _ = self._build(
+                tmp, aft='{ // it\'s "odd\n"key": "v, }" }')
+            self.assertEqual(self._aft_json(base)["key"], "v, }")
+
     def test_tolerates_jsonc_comments_and_trailing_comma(self):
         with tempfile.TemporaryDirectory() as tmp:
             base, warns = self._build(
@@ -1053,6 +1080,13 @@ class TestAgentConfig(unittest.TestCase):
             base, warns = self._build(tmp, aft="{ 这不是 JSON")
             self.assertTrue(warns and "无法解析" in warns[0])
             self.assertIs(self._aft_json(base)["semantic_search"], False)
+
+    def test_write_side_uses_named_derivation(self):
+        """写入的文件必须是具名推导给出的那个（S2：docstring 声明的
+        "写入侧与判定侧共用"必须为真，不能靠两处各拼一次恰好相同）。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            base, _ = self._build(tmp)
+            self.assertTrue(os.path.isfile(agent_config_aft_file(base)))
 
     def test_missing_user_configs_still_makes_switch(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1098,12 +1132,17 @@ class TestAgentConfigDerivations(unittest.TestCase):
 class TestAfResolutionNotes(unittest.TestCase):
     """AFT 语义搜索**关不掉/有副作用**的条件清单（只陈述事实）。"""
 
+    def _home(self, path):
+        return mock.patch.dict(os.environ, {"HOME": path,
+                                            "XDG_CONFIG_HOME": ""})
+
     def test_no_hits(self):
         with tempfile.TemporaryDirectory() as tmp:
             proj = os.path.join(tmp, "p")
             home = os.path.join(tmp, "h")
             os.makedirs(proj), os.makedirs(home)
-            self.assertEqual(af_resolution_notes(proj, home), [])
+            with self._home(home):
+                self.assertEqual(af_resolution_notes(proj), [])
 
     def test_project_config_hit(self):
         """项目级配置**确定覆盖**（不是"可能"）。"""
@@ -1113,7 +1152,11 @@ class TestAfResolutionNotes(unittest.TestCase):
             os.makedirs(home)
             with open(os.path.join(proj, ".cortexkit", "aft.jsonc"), "w") as f:
                 f.write("{}")
-            out = af_resolution_notes(proj, home)
+            # 上游只读 .jsonc → .json 是死检查，不得误报（铁律 #5）
+            with open(os.path.join(proj, ".cortexkit", "aft.json"), "w") as f:
+                f.write("{}")
+            with self._home(home):
+                out = af_resolution_notes(proj)
             self.assertEqual(len(out), 1)
             self.assertIn("覆盖", out[0])
             self.assertIn("aft.jsonc", out[0])
@@ -1127,10 +1170,72 @@ class TestAfResolutionNotes(unittest.TestCase):
                       os.path.join(proj, ".opencode", "aft", "aft.jsonc")):
                 with open(p, "w") as f:
                     f.write("{}")
-            out = af_resolution_notes(proj, home)
-            self.assertEqual(len(out), 2)
+            # 用户级 OpenCode 根是 `configHome()/opencode`（不是 `~/.opencode`）
+            os.makedirs(os.path.join(home, ".opencode", "aft"))
+            with open(os.path.join(home, ".opencode", "aft", "aft.jsonc"),
+                      "w") as f:
+                f.write("{}")
+            with self._home(home):
+                out = af_resolution_notes(proj)
+            self.assertEqual(len(out), 2)        # 旧误报路径不计入
             self.assertTrue(all("MOVED_READPLEASE" in x for x in out))
 
+
+
+class TestBoundaryDetection(unittest.TestCase):
+    """`iter_after_boundary` 必须**按字段**判定边界（e2e20 评审 F1）。
+
+    子串判定会让历史里任何含字面量的条目（fixture 文本、讨论它的消息）
+    被当成边界 → 其后全部历史被算进"本轮"（实测：误判早约 490 行 → 报告
+    数字虚高 ~4 倍；也是 e2e19 "Δ 合计 > 进程跨度" 之谜的根因）。
+    """
+
+    def _write(self, tmp, lines):
+        p = os.path.join(tmp, "s.jsonl")
+        with open(p, "w", encoding="utf-8") as f:
+            for e in lines:
+                f.write(json.dumps(e, ensure_ascii=False) + "\n")
+        return p
+
+    def test_history_line_mentioning_literal_is_not_boundary(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p = self._write(tmp, [
+                {"type": "message", "message": {"role": "assistant", "content": [
+                    {"type": "text",
+                     "text": f"我写了引用 {BOUNDARY_TYPE} 的 fixture"}]}},
+                {"type": "message", "message": {"role": "assistant",
+                                                "content": []}},
+                {"type": "custom_message", "customType": BOUNDARY_TYPE,
+                 "display": False},
+                {"type": "message", "message": {"role": "assistant",
+                                                "content": []}},
+            ])
+            got = list(iter_after_boundary(p))
+            self.assertEqual(len(got), 1, "只应产出真实边界之后的条目")
+            self.assertEqual(got[0]["type"], "message")
+
+    def test_other_custom_type_not_boundary(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p = self._write(tmp, [
+                {"type": "custom_message", "customType": "other.type"},
+                {"type": "message", "message": {"role": "assistant",
+                                                "content": []}},
+            ])
+            self.assertEqual(list(iter_after_boundary(p)), [],
+                             "无真实边界 → fail-safe 空迭代（不得退回全文）")
+
+    def test_boundary_by_field_even_without_literal_order(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p = self._write(tmp, [
+                {"type": "message", "message": {"role": "assistant",
+                                                "content": []}},
+                {"type": "custom_message", "customType": BOUNDARY_TYPE},
+                {"type": "message", "message": {"role": "assistant",
+                                                "content": []}},
+                {"type": "message", "message": {"role": "assistant",
+                                                "content": []}},
+            ])
+            self.assertEqual(len(list(iter_after_boundary(p))), 2)
 
 if __name__ == "__main__":
     unittest.main()

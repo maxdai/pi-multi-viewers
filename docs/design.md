@@ -110,7 +110,7 @@ compaction 的 `firstKeptEntryId` 起 + 其后的条目"——窗口内含 compa
 |---|---|---|
 | `usage` 合计 | `{input, cacheRead, output, reasoning}` | 每 agent 一行；`reasoning ⊂ output`（**不可相加**），缺席省略括注 |
 | `requests_by_stopReason` | `{键=stopReason 原值: 计数}` | 与下一项同一行（`stopReason：toolUse 78（1234s）｜…`） |
-| `seconds_by_stopReason` | `{键=stopReason 原值: Δ 合计}` | 同上；**口径 = 同一唤醒内响应 Δ 合计**——每次唤醒的**首条响应不计时**（其上一条是唤醒 prompt，之间的间隔是跨唤醒空闲，不是生成；e2e19 实测反例：某 agent Δ 合计 33 分钟 > 进程跨度 13 分钟） |
+| `seconds_by_stopReason` | `{键=stopReason 原值: Δ 合计}` | 同上；**口径 = 相邻条目 Δ 合计**（每次唤醒首条响应**也计入**；跨唤醒空闲不进入 Δ——唤醒 prompt 本身是一条 user 条目，空闲落在"上一唤醒末条 → 本次 user 条目"之间）。⚠️ 曾短暂采用"首响不计时"，理由（跨唤醒空闲）经 e2e20 评审批证伪后**已撤回**，见决策 19 末条 |
 | `effective_levels` | `[thinkingLevel…]`（session 侧，去重保序） | `档位：声明 X ｜ 生效 Y ｜ ✓一致 / ⚠不一致` |
 | （对照）`declared` | `pi-agent.json.thinking` | 同上——声明值与生效值**并列**（此前从没人对照过：探测失败会静默取档，spec 表面正常） |
 
@@ -420,7 +420,23 @@ commit 是溯源记录、本节是长期引用点——不并存两份权威值�
          建环境时**命中才打印事实**（四条路径 × json/jsonc + `OPENCODE_CONFIG_DIR`
          条件项），不判定、不评级、不进 `--report`；影响面（谁读 XDG）写成
          **快照 + 重核动作**而非不变量。
-    4. **gate 判配置文件而非目录**：目录在、文件缺的半成品状态照注入会让 AFT
+    4. **（e2e20 评审批修正，撤回两处错误）**：
+       - **边界判定改按字段**（`meeting_fs.iter_after_boundary`）：此前用子串
+         `BOUNDARY_TYPE in line` → 主 session 历史里含该字面量的普通条目
+         （引用它的 fixture 文本等）被当成边界 → **其后全部历史算进"本轮"**，
+         报告 LLM 段虚高 ~4 倍（实测：误判起点早 490 行；assistant 310→66、
+         Δ 40.7→9.8 分）。这也正是"Δ 合计 > 进程跨度"之谜的根因。
+       - **Δ 口径"首响不计时"撤回**：该方案基于上述错误归因（以为超量 Δ 来自
+         跨唤醒空闲）。实测证伪——每次唤醒都写 user 条目，空闲从不进入 Δ；
+         被排除的是每次唤醒首条响应的真实耗时。现恢复"相邻条目 Δ 合计"。
+       - **`_strip_jsonc` 改两趟法**：单趟"按字符串切分 + 奇偶下标"假设注释里
+         无引号 → `/* say "hi" */` 这类输入解析失败（**功能回归**，旧状态机
+         本是正确的）。现为"状态机只去注释 → 对无注释文本切分去尾逗号"。
+       - 其余：写入侧改用具名推导（S2）· 清单对齐上游 `paths.js`（用户级
+         OpenCode 根 = `configHome()/opencode` 非 `~/.opencode`；`.cortexkit`
+         上游只读 `.jsonc`）· 删测试专用参数 `home_dir` 与 `proj` 别名 ·
+         测试改强断言（不依赖进程环境变量）。
+    5. **gate 判配置文件而非目录**：目录在、文件缺的半成品状态照注入会让 AFT
        静默回落默认（= 57s 回吐）。现判 `agent-config/cortexkit/aft.jsonc`
        （具名推导 `agent_config_aft_file`，写入侧与判定侧共用），未注入时打一行
        **事实**日志；`build_agent_config` 只返回 warnings（目录不再返回——

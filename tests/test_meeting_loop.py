@@ -724,7 +724,7 @@ class TestSpawnEnv(unittest.TestCase):
         import meeting_loop
         with tempfile.TemporaryDirectory() as tmp:
             wd = self._wd(tmp, "file")
-            env = meeting_loop._spawn_env(wd)
+            env = meeting_loop._spawn_env(wd, 'a')
             base = os.path.dirname(wd)
             self.assertEqual(env["GIT_CEILING_DIRECTORIES"], base)
             self.assertEqual(env["XDG_CONFIG_HOME"],
@@ -738,12 +738,16 @@ class TestSpawnEnv(unittest.TestCase):
             with self.subTest(state=state):
                 with tempfile.TemporaryDirectory() as tmp:
                     wd = self._wd(tmp, state)
-                    env = meeting_loop._spawn_env(wd)
+                    env = meeting_loop._spawn_env(wd, 'a')
                     self.assertEqual(env["GIT_CEILING_DIRECTORIES"],
                                      os.path.dirname(wd))
-                    self.assertNotIn("XDG_CONFIG_HOME", env,
-                                     "半成品/缺失时不得注入（否则 AFT 静默"
-                                     "回落默认配置）")
+                    # 不用 assertNotIn：`_spawn_env` 合并 os.environ，
+                    # 进程本就有该变量时是**环境依赖弱断言**（铁律 #4）；
+                    # 要断言的是"没有指向作用域配置"
+                    self.assertNotEqual(
+                        env.get("XDG_CONFIG_HOME"),
+                        meeting_fs.agent_config_dir(os.path.dirname(wd)),
+                        "半成品/缺失时不得注入作用域配置")
 
 
 if __name__ == "__main__":

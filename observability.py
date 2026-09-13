@@ -360,8 +360,8 @@ def build_report(base):
     out.append(_report_levels_line(base, agents))
     out.append("（口径：进程跨度=pi 进程生命周期；输出=prompt 分段合计；"
                "墙钟=commit 时间差——三者不可互替；"
-               "stopReason 括注 = **同一唤醒内响应 Δ 合计**（每次唤醒的首条"
-               "响应不计时——它与上一条之间隔着跨唤醒空闲）；"
+               "stopReason 括注 = **相邻条目 Δ 合计**（含每次唤醒首条响应；"
+               "跨唤醒空闲不进入 Δ——唤醒 prompt 本身是一条 user 条目）；"
                "消息数含流程信号（freezing/pass/concluded）与 human，"
                "配额只计 meeting 发言）")
     return out
@@ -463,12 +463,15 @@ def _report_session_metrics(base, agent):
            stop: {stopReason 原值: {"n": 次数, "sec": 响应跨度合计}}}
     `usage["reasoning"]` = None 表示**从未出现**（缺席 ≠ 0）。
 
-    响应跨度口径（**B 方案**，e2e19 定）：`Δt = ts(本条) − ts(紧邻前一条事件)`，
-    **但上一条是 user 消息时不计本次 Δ**——那条 user 就是唤醒 prompt，它前面
-    是**跨唤醒的空闲**（可能几分钟），算进去会把空闲记成"生成变慢"（实测：
-    某 agent 的 Δ 合计 33 分钟 > 其进程跨度 13 分钟，矛盾即来自此）。
-    这样每次唤醒的**首条响应只计数、不计时**（其 Δ 是空闲，不是生成）。
-    单次遍历顺序读取，不需要随机访问。
+    响应跨度口径：`Δt = ts(本条) − ts(紧邻前一条事件)`——单次遍历顺序读取，
+    不需要随机访问。**每次唤醒的首条响应也计入**：每次唤醒都会在 session 里
+    写入 user 条目（唤醒 prompt），跨唤醒空闲落在"上一唤醒末条 → 本次 user
+    条目"之间，**从不进入任何 Δ**（e2e20 评审批实测：本场 7 个唤醒 user 条目
+    每个后面直接跟 assistant；首响 Δ 与非首响同量级，无分钟级样本）。
+    **不做"首响不计时"**：那是基于错误归因的排除——当时以为 e2e19 的
+    "Δ 合计 33m09s > 进程跨度 13m09s"来自跨唤醒空闲，实际根因是边界子串
+    误判（`iter_after_boundary` 把历史条目算进本轮；修好后 ΣΔ ≤ 墙钟成立），
+    排除掉的是真数据里常最贵的那条。
     error 类单列（usage 全零）——不并入也不丢弃：否则 provider 抖动会被算成
     "生成变慢"（e2e14 评审）。
     fail-open：文件缺失/字段变 → 返回 {}。
@@ -485,20 +488,14 @@ def _report_session_metrics(base, agent):
                    "reasoning": None},
          "stop": {}}
     prev_ts = None
-    prev_is_user = False        # 唤醒边界标记（user 消息 = 唤醒 prompt）
     for ev in meeting_fs.iter_after_boundary(fp):
         m = ev.get("message") or {}
-        role = m.get("role")
-        if role != "assistant":
+        if m.get("role") != "assistant":
             prev_ts = ev.get("timestamp") or prev_ts
-            prev_is_user = (role == "user")
             continue
         r["responses"] += 1
         reason = m.get("stopReason")
-        # 跨唤醒空闲不算生成时长（本轮首条响应：上一条是唤醒 prompt）
-        dur = None if prev_is_user else _delta_seconds(
-            prev_ts, ev.get("timestamp"))
-        prev_is_user = False
+        dur = _delta_seconds(prev_ts, ev.get("timestamp"))
         d = r["stop"].setdefault(reason, {"n": 0, "sec": 0})
         d["n"] += 1
         if dur is not None:

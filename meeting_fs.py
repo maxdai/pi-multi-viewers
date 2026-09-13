@@ -78,23 +78,65 @@ def agent_config_aft_file(base):
     return os.path.join(agent_config_dir(base), "cortexkit", "aft.jsonc")
 
 
+def _strip_jsonc_comments(text):
+    """第一趟：只去 `//`、`/* */` 注释（逐字符状态机，跟踪字符串与转义）。
+
+    注释里的引号**不影响**本趟：进入注释后不再看引号（`//` 跳到行尾、
+    `/* */` 跳到闭合），字符串里的 `//` 也不会被当注释。
+    """
+    out = []
+    i, n = 0, len(text)
+    in_str = False
+    while i < n:
+        c = text[i]
+        if in_str:
+            out.append(c)
+            if c == "\\" and i + 1 < n:
+                out.append(text[i + 1])
+                i += 2
+                continue
+            if c == '"':
+                in_str = False
+            i += 1
+            continue
+        if c == '"':
+            in_str = True
+            out.append(c)
+            i += 1
+            continue
+        if c == "/" and i + 1 < n and text[i + 1] == "/":
+            while i < n and text[i] != "\n":
+                i += 1
+            continue
+        if c == "/" and i + 1 < n and text[i + 1] == "*":
+            i += 2
+            while i + 1 < n and not (text[i] == "*" and text[i + 1] == "/"):
+                i += 1
+            i += 2
+            continue
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
 def _strip_jsonc(text):
     """宽松 JSONC → JSON 文本：去 `//`、`/* */` 注释与尾逗号。
 
     只做文本级清理（不引解析器）：要读的是**用户手写的** AFT 配置（可能带
     注释），而我们要保留它的全部键、只覆盖一个。
 
-    **按字符串切分**：`re.split` 保留分隔串 → 偶数下标 = 字符串外的文本
-    （注释与尾逗号只可能在这里），奇数下标 = 字符串字面量（**逐字保留**）。
-    此前版本用逐字符状态机跟踪字符串、却把尾逗号正则作用于整段拼接文本 →
-    字符串值里的 `", }"` / `", ]"` 被静默改写（结果仍是合法 JSON，
-    `json.loads` 挡不住；e2e19 评审 #4 复现）。
+    **两趟，各管一件事**（e2e20 评审批：单趟方案两个方向都错过）：
+    1. `_strip_jsonc_comments` 去注释——它能正确处理**注释里含引号**的情形
+       （进入注释后不再看引号）；
+    2. 对**已无注释**的文本按字符串切分（`re.split` 保留分隔串，正则只作用
+       于偶数下标 = 串外），去尾逗号——不会误改字符串值里的 `", }"`。
+    上一版把两件事压进一趟"按字符串切分 + 奇偶下标"：注释里的引号会让配对
+    错位，于是 `{"a": 1, /* say "hi" */ "b": 2}` 解析失败、奇数引号注释还会
+    让真串值被改写（旧状态机这两例本是正确的 → 功能回归）。
     """
-    parts = re.split(r'("(?:[^"\\]|\\.)*")', text)
+    parts = re.split(r'("(?:[^"\\]|\\.)*")', _strip_jsonc_comments(text))
     for i in range(0, len(parts), 2):
-        seg = re.sub(r"/\*.*?\*/", "", parts[i], flags=re.S)
-        seg = re.sub(r"//[^\n]*", "", seg)
-        parts[i] = re.sub(r",(\s*[}\]])", r"\1", seg)
+        parts[i] = re.sub(r",(\s*[}\]])", r"\1", parts[i])
     return "".join(parts)
 
 
@@ -189,7 +231,10 @@ def build_agent_config(base):
     # （`Config migration conflict … ignored`）——我们没有任何理由制造它。
     cfg["semantic_search"] = False
     cfg.pop("experimental_semantic_search", None)
-    with open(os.path.join(dst_root, "aft.jsonc"), "w", encoding="utf-8") as f:
+    # 写入侧用**同一具名推导**（docstring 承诺的"写入侧与判定侧共用"必须为真；
+    # 此前本地拼 os.path.join(dst_root, "aft.jsonc")——今日逐字相同，但漂了就
+    # 是静默失效，e2e20 评审 S2）
+    with open(agent_config_aft_file(base), "w", encoding="utf-8") as f:
         # 注释用 `//`（JSONC 规范；`#` 不是 JSONC 语法——第三方解析器可能
         # 拒收，而我们这份文件的读者正是第三方）
         f.write("// agent 进程作用域配置（XDG_CONFIG_HOME 注入；主 pi 不受影响）\n")
@@ -205,48 +250,58 @@ def build_agent_config(base):
         shutil.copyfile(src_mc, os.path.join(dst_root, "magic-context.jsonc"))
     return warnings
 
-def af_resolution_notes(project_dir, home_dir=None):
+def af_resolution_notes(project_dir):
     """AFT 语义搜索**关不掉**或产生副作用的条件清单——命中才打印事实。
 
     （e2e19 评审 #2/#3。）本函数只陈述**事实**（哪个文件在、后果是什么），
     不判定、不做风险评级、不进 `--report`（观测面契约：报告是唯一机器出口
     且不得升级为验收 gate）。
 
-    为什么需要：作用域配置在三种情况下确定失效或产生副作用，而它们都不在
-    我们控制内 → 至少让人看见。本仓四条路径恰好都不存在（本机免疫），正是
+    为什么需要：作用域配置在几种情况下确定失效或产生副作用，而它们都不在
+    我们控制内 → 至少让人看见。本仓这些路径恰好都不存在（本机免疫），正是
     "只在别人的项目里才暴露"的那类问题。
 
-    规则出处：`@cortexkit/aft-pi` + `@cortexkit/aft-bridge`
+    **清单 = 上游 5 组路径**（用户级 Pi / 用户级 OpenCode(configHome/opencode) /
+    项目级 .cortexkit(仅 .jsonc) / 项目级 .pi / 项目级 .opencode），另加
+    `OPENCODE_CONFIG_DIR` 条件项。规则出处：`@cortexkit/aft-pi` + `@cortexkit/aft-bridge`
     （`PROJECT_SAFE_TOP_LEVEL_FIELDS` / `resolveLegacyAftConfigSources` /
     `migrateAftConfigFile`）。**重核触发条件**：升级 AFT 后重跑本函数 +
     对路径规则复读其 `dist/paths.js`。
     """
-    proj = project_dir
-    home = home_dir or os.path.expanduser("~")
+    home = os.path.expanduser("~")     # 受 $HOME 影响（测试用 patch 注入）
     note_project = (
-        "项目级 AFT 配置：其中的 semantic_search 会**覆盖**本作用域配置"
-        "（AFT 层级合并 PROJECT_SAFE_TOP_LEVEL_FIELDS，且不打警告）——"
-        "若它开启语义搜索，本次分析每次唤醒多约 57s")
+        "项目级 AFT 配置：其中 semantic_search 会覆盖本作用域配置（层级合并、"
+        "无警告）→ 本次分析每次唤醒多约 57s（机理见 design.md 决策 19）")
     note_legacy = (
-        "AFT legacy 配置源：其迁移目标被本作用域配置顶替——AFT 会删除该"
-        "文件、原地留 <名>.MOVED_READPLEASE（含原文），指针指向本分析目录"
-        "（将被 cleanup 删除）")
+        "AFT legacy 配置源：迁移目标被本作用域配置顶替→ AFT 会删除该文件、"
+        "原地留 <名>.MOVED_READPLEASE（含原文），指针指向将被 cleanup 删除的"
+        "分析目录")
+    # 5 组路径，逐条对齐上游 `paths.js`（e2e20 评审 铁律#5 修正两处偏差）：
+    #  - 用户级 OpenCode 根 = `configHome()/opencode`（**不是** `~/.opencode`）
+    #  - 项目级 `.cortexkit` 上游**只读 `.jsonc`**（`.json` 是死检查）
+    # `configHome()` 与 `_source_config_home()` 同规则（XDG 绝对路径优先）。
     groups = [
-        (os.path.join(proj, ".cortexkit"), note_project),
-        (os.path.join(home, ".pi", "agent", "aft"), note_legacy),
-        (os.path.join(proj, ".pi", "aft"), note_legacy),
-        (os.path.join(proj, ".opencode", "aft"), note_legacy),
-        (os.path.join(home, ".opencode", "aft"), note_legacy),
+        (os.path.join(project_dir, ".cortexkit"), ("aft.jsonc",),
+         note_project),
+        (os.path.join(home, ".pi", "agent", "aft"), ("aft.json", "aft.jsonc"),
+         note_legacy),
+        (os.path.join(project_dir, ".pi", "aft"), ("aft.json", "aft.jsonc"),
+         note_legacy),
+        (os.path.join(project_dir, ".opencode", "aft"), ("aft.json", "aft.jsonc"),
+         note_legacy),
+        (os.path.join(_source_config_home(), "opencode", "aft"),
+         ("aft.json", "aft.jsonc"), note_legacy),
     ]
-    # 条件项：OPENCODE_CONFIG_DIR 会绕过 XDG 重定向（AFT 的
+    # 条件项：OPENCODE_CONFIG_DIR 会**替换**用户级 OpenCode 根（上游
     # legacyOpenCodeConfigDir 优先读它）→ 指向另一个 legacy 根
-    ocd = os.environ.get("OPENCODE_CONFIG_DIR") or ""
+    ocd = (os.environ.get("OPENCODE_CONFIG_DIR") or "").strip()
     if ocd:
-        groups.append((os.path.join(ocd, "aft"),
-                       note_legacy + "（经 OPENCODE_CONFIG_DIR 定位，绕过 XDG）"))
+        groups.append((os.path.join(os.path.abspath(ocd), "aft"),
+                       ("aft.json", "aft.jsonc"),
+                       note_legacy + "（经 OPENCODE_CONFIG_DIR 定位）"))
     out = []
-    for d, note in groups:
-        for name in ("aft.json", "aft.jsonc"):
+    for d, names, note in groups:
+        for name in names:
             path = os.path.join(d, name)
             if os.path.isfile(path):
                 out.append(f"{path}：{note}")
@@ -317,6 +372,12 @@ def iter_after_boundary(session_file):
     append_handoff_turns 写）。未找到边界（老产物/手工 session）→ 返回
     空迭代：**调用方按"无本轮数据"处理（n/a），不得退回全文扫描**——
     那正是修掉的口径错误（把 fork 携带的历史算成本轮）。
+    **边界按字段判定**（`type == custom_message` 且 `customType ==
+    BOUNDARY_TYPE`）——不能只看子串：主 session 历史里**可能有含该字面量的
+    普通条目**（例如引用它的 fixture 文本、讨论它的 assistant 消息），子串
+    命中即早退会让其后全部历史被当成"本轮"（e2e20 评审批实测：误判起点早
+    约 490 行 → 报告的数字虚高 ~4 倍；也是 e2e19"Δ 合计 > 进程跨度"之谜的
+    根因）。子串仅作**便宜预筛**（命中才解析 JSON），既有性能也有正确性。
     fail-open：文件不可读/JSON 坏行跳过。
     """
     seen = False
@@ -324,9 +385,16 @@ def iter_after_boundary(session_file):
         with open(session_file, encoding="utf-8", errors="replace") as f:
             for line in f:
                 if not seen:
-                    if BOUNDARY_TYPE in line:
-                        # 边界行本身不产出（它没有 message 字段）
-                        seen = True
+                    # 预筛：不含字面量的行不可能是边界（省一次 json.loads）
+                    if BOUNDARY_TYPE not in line:
+                        continue
+                    try:
+                        ev = json.loads(line)
+                    except ValueError:
+                        continue
+                    if (ev.get("type") == "custom_message"
+                            and ev.get("customType") == BOUNDARY_TYPE):
+                        seen = True        # 边界行本身不产出（无 message 字段）
                     continue
                 try:
                     yield json.loads(line)

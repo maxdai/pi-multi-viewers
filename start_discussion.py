@@ -413,10 +413,10 @@ def setup_environment(args, participants, base, spec_dir=None,
     _clone_work(base, "human")
 
     # agent 进程的**作用域配置**（XDG_CONFIG_HOME → <base>/agent-config）：
-    # 关掉 AFT 语义搜索（每进程 ~57s，唤醒关键路径；实测与理由见
-    # meeting_fs.build_agent_config）。**主 pi 不受影响**——该环境变量只注入
-    # agent 进程（meeting_loop._spawn_env）。警告 fail-open（配置读不动不该
-    # 阻断建环境），但要可见。
+    # 关掉 AFT 语义搜索。**主 pi 不受影响**——该环境变量只注入 agent 进程
+    # （meeting_loop._spawn_env）。动机与实测数据见
+    # meeting_fs.build_agent_config（唯一权威解释处）；警告 fail-open
+    # （配置读不动不该阻断建环境），但要可见。
     for w in meeting_fs.build_agent_config(base):
         print(f"[setup] 警告: {w}")
     # AFT 语义搜索**关不掉**或产生副作用的条件（只陈述事实，不判定）
