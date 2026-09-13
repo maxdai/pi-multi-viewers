@@ -2,3 +2,6 @@ tests/.cache/
 __pycache__/
 *.pyc
 mv-*/
+
+# 分析产物（result.md 固定位：<分析目录>-result.md）——供人读取/归档，不进仓库
+mv-*-result.md
