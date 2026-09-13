@@ -805,7 +805,7 @@ def new_messages_with_meta(workdir, since_ref, me=None):
 def is_message_file(path):
     """判断路径是否为消息文件（作者/NNNN.md）。
 
-    作者目录不限 ASCII：viewers 中文视角名是产品核心（可读性/性能/…）。
+    作者目录不限 ASCII：viewers 中文视角名是产品核心（可读性/效率/…）。
     约束对齐 agent 名校验（禁 / 与空白；目录名不匹配即非消息文件——
     human/、protocol.json 等天然排除）。
     """
