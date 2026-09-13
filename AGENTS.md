@@ -53,10 +53,13 @@ tests/               测试（unittest discover tests）
 祖先发现）+ spec background.md（人工可选边界约定——prepare 蒸馏机制已
 移除，fork 使其冗余；background 只写显式边界，不复述对话）。
 
-**agent 进程环境**：`GIT_CEILING_DIRECTORIES`（git 上溯防护）+
-`XDG_CONFIG_HOME=<base>/agent-config`（作用域配置：关 AFT 语义搜索，每进程省
-~57s；主 pi 不受影响）——注入点 `meeting_loop._spawn_env`，配置生成
-`meeting_fs.build_agent_config`（见 design.md 决策记录 19）。
+**agent 进程环境**：`GIT_CEILING_DIRECTORIES`（git 上溯防护）——注入点
+`meeting_loop._spawn_env`。**扩展策略（决策 20）**：默认**屏蔽 AFT、保留 MC**
+（`--no-extensions` + `-e <MC 入口>`，入口由 `meeting_fs.resolve_extension_entries`
+从 `settings.json` 推导）；理由 = AFT 在大 session 上让进程退出前多活数分钟
+（收尾占 66–78% 进程时间，实测 446s vs 仅 MC 0.5s），而 loop 等进程退出是
+关键路径。`--pure` 仍可连 MC 一起关。**主 pi 完全不受影响**（只改我们 spawn 的
+agent 进程命令行）。
 
 **关键约定**：pi sessions 目录编码 = `--` + 去首尾斜杠内斜杠换 `-` + `--`
 （`/tmp` → `--tmp--`；wrapper 解析 fork 源依赖它，编码错一根横线 = 静默

@@ -309,11 +309,30 @@ def _build_wake_cmd(workdir, agent, sid, cfg, fork_source, fork_cwd,
     else:
         cmd = ["pi", "--mode", "json", "--session-id", sid,
                "--session-dir", session_dir]
+    # ---- agent 进程的扩展策略（design.md 决策 20）----
+    # 默认 = **屏蔽 AFT，保留 MC**：pi 没有"只关某一个扩展"的 CLI 开关，所以
+    # 用 `--no-extensions` 关掉扩展发现，再把要保留的用 `-e <入口>` 显式加载
+    # （入口由 `meeting_fs.resolve_extension_entries` 从 settings.json 的注册表
+    # 推导，不硬编码第三方目录布局）。
+    # 为什么屏蔽 AFT：实测它在**大 session** 上让进程退出前多花数分钟——收尾段
+    # 占 agent 进程时间的 66–78%（1.9MB session 实测 446s；同输入仅留 MC 时
+    # 0.5s），而这段等待在我们的 loop 里是**关键路径**（等进程退出才继续）。
+    # pure = 连 MC 一起关（保留给需要"零扩展"的场景）。
     if pure:
         # Pi 的 pure 近似：关闭外部扩展/技能/prompt-template/主题加载，
         # 保留内置工具（read/bash/edit/write）与项目内 AGENTS.md。
         cmd += ["--no-extensions", "--no-skills", "--no-prompt-templates",
                 "--no-themes"]
+    else:
+        keep, missing = meeting_fs.resolve_extension_entries(
+            meeting_fs.KEEP_EXTENSIONS)
+        cmd += ["--no-extensions"]
+        for path in keep:
+            cmd += ["-e", path]
+        if missing:
+            # 不静默：说清"想留谁、为什么没留住"
+            log(agent, f"保留扩展解析失败（{ '、'.join(missing) }）——"
+                       f"本次唤醒未加载它们；检查 settings.json 的 packages")
     model = cfg.get("model") or ""
     if model:
         cmd += ["--model", model]
@@ -333,27 +352,19 @@ def _build_wake_cmd(workdir, agent, sid, cfg, fork_source, fork_cwd,
     return cmd, (fork_cwd or workdir)
 
 
-def _spawn_env(workdir, agent):
+def _spawn_env(workdir):
     """agent 进程的环境（Popen 的 env 是**整体替换** → 必须合并 os.environ，
     否则丢 PATH）。
 
-    两个注入，各有理由：
-    - `GIT_CEILING_DIRECTORIES=<讨论目录>`：git 上溯防护（实现 A1）。
-    - `XDG_CONFIG_HOME=<base>/agent-config`：**作用域配置**（动机与实测见
-      `meeting_fs.build_agent_config`——唯一权威解释处）。
-
-    门判**恒写的那个配置文件**（不是目录）：目录在、文件缺的半成品状态若照
-    注入，AFT 会静默回落默认配置（= 57s 回吐）。未注入时记一行**事实**
-    （路径 + 未注入）——不设 once 标记：重复只发生在异常态，且落在每 agent
-    各自的 loop 日志里（e2e19 评审 #5）。
+    只注入 `GIT_CEILING_DIRECTORIES=<讨论目录>`：**git 上溯防护**（实现 A1）。
+    为什么需要：`_lock_git` 把 work-<agent>/.git 改名后，git 的默认行为是
+    **向上继续找仓库**——fork 模式下 cwd = 主项目，实测锁态下
+    `git rev-parse --git-dir` 从 workdir 发起会命中主项目 .git（rc=0），守卫
+    形同虚设（见 `_lock_git` docstring 的范围说明）。本进程的 argv 就是 agent
+    会话里 bash 工具所继承的环境来源。
+    （此前还注入 XDG_CONFIG_HOME 做作用域配置——随"屏蔽 AFT"整块退役。）
     """
-    base = os.path.dirname(workdir)
-    env = {**os.environ, "GIT_CEILING_DIRECTORIES": base}
-    cfg_file = meeting_fs.agent_config_aft_file(base)
-    if os.path.isfile(cfg_file):
-        env["XDG_CONFIG_HOME"] = meeting_fs.agent_config_dir(base)
-    else:
-        log(agent, f"作用域配置缺失，未注入 XDG_CONFIG_HOME（{cfg_file}）")
+    env = {**os.environ, "GIT_CEILING_DIRECTORIES": os.path.dirname(workdir)}
     return env
 
 
@@ -377,7 +388,7 @@ def _run_wake_proc(cmd, spawn_cwd, workdir, agent):
     # 环境来源，而 _lock_git 只锁 work-<agent>/.git、git 默认会向上找仓库）。
     proc = subprocess.Popen(cmd, cwd=spawn_cwd, stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE, text=True,
-                            env=_spawn_env(workdir, agent))
+                            env=_spawn_env(workdir))
     _current_proc = proc
     try:
         # 分片等待：每片检查讨论目录是否被清理（cleanup 删目录）——

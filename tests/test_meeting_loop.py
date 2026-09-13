@@ -703,52 +703,112 @@ class TestMiscLoop(unittest.TestCase):
 class TestSpawnEnv(unittest.TestCase):
     """`_spawn_env`：agent 进程环境的唯一构造点。
 
-    两个注入：GIT_CEILING_DIRECTORIES（git 上溯防护）与 XDG_CONFIG_HOME
-    （作用域配置 → 关 AFT 语义搜索，每进程 ~57s）。后者**目录存在才注入**
-    （老环境不改行为）；e2e19 评审 #5 修正为判**配置文件**而非目录——
-    半成品（目录在、文件缺）照注入会让 AFT 静默回落默认（57s 回吐）。
+    注入 GIT_CEILING_DIRECTORIES（git 上溯防护）。此前还注入 XDG_CONFIG_HOME
+    做作用域配置——随"屏蔽 AFT"整块退役（2026-09-13）。
     """
 
-    def _wd(self, tmp, state):
-        base = os.path.join(tmp, "mv-x-1")
-        wd = os.path.join(base, "work-a")
-        os.makedirs(wd)
-        if state in ("file", "dir-only"):
-            os.makedirs(os.path.dirname(meeting_fs.agent_config_aft_file(base)))
-        if state == "file":
-            with open(meeting_fs.agent_config_aft_file(base), "w") as f:
-                f.write("{}")
-        return wd
-
-    def test_injects_when_config_file_present(self):
+    def test_ceiling_and_environ_merged(self):
         import meeting_loop
         with tempfile.TemporaryDirectory() as tmp:
-            wd = self._wd(tmp, "file")
-            env = meeting_loop._spawn_env(wd, 'a')
-            base = os.path.dirname(wd)
+            base = os.path.join(tmp, "mv-x-1")
+            wd = os.path.join(base, "work-a")
+            os.makedirs(wd)
+            env = meeting_loop._spawn_env(wd)
             self.assertEqual(env["GIT_CEILING_DIRECTORIES"], base)
-            self.assertEqual(env["XDG_CONFIG_HOME"],
-                             meeting_fs.agent_config_dir(base))
             # Popen 的 env 是整体替换 → 必须合并 os.environ（否则丢 PATH）
             self.assertIn("PATH", env)
 
-    def test_no_injection_for_dir_only_or_absent(self):
+    def test_no_xdg_injection(self):
+        """不再注入 XDG_CONFIG_HOME 指向代理配置（机制已退役）。"""
         import meeting_loop
-        for state in ("dir-only", "absent"):
-            with self.subTest(state=state):
-                with tempfile.TemporaryDirectory() as tmp:
-                    wd = self._wd(tmp, state)
-                    env = meeting_loop._spawn_env(wd, 'a')
-                    self.assertEqual(env["GIT_CEILING_DIRECTORIES"],
-                                     os.path.dirname(wd))
-                    # 不用 assertNotIn：`_spawn_env` 合并 os.environ，
-                    # 进程本就有该变量时是**环境依赖弱断言**（铁律 #4）；
-                    # 要断言的是"没有指向作用域配置"
-                    self.assertNotEqual(
-                        env.get("XDG_CONFIG_HOME"),
-                        meeting_fs.agent_config_dir(os.path.dirname(wd)),
-                        "半成品/缺失时不得注入作用域配置")
+        with tempfile.TemporaryDirectory() as tmp:
+            base = os.path.join(tmp, "mv-x-1")
+            wd = os.path.join(base, "work-a")
+            os.makedirs(os.path.join(wd, "agent-config", "cortexkit"))
+            env = meeting_loop._spawn_env(wd)
+            self.assertNotEqual(env.get("XDG_CONFIG_HOME"),
+                                os.path.join(base, "agent-config"))
 
+
+class TestExtensionPolicy(unittest.TestCase):
+    """agent 进程的扩展策略：默认**屏蔽 AFT、保留 MC**（design.md 决策 20）。
+
+    实测动机：AFT 在大 session 上让进程退出前多花数分钟（收尾占 66–78%
+    进程时间；同输入仅留 MC 时 0.5s），而这段等待在 loop 里是**关键路径**。
+    """
+
+    def _cfg_dir(self, tmp, agent_dir):
+        os.makedirs(os.path.join(agent_dir, "npm", "node_modules",
+                                 "@cortexkit", "pi-magic-context"), exist_ok=True)
+        pkg = os.path.join(agent_dir, "npm", "node_modules", "@cortexkit",
+                           "pi-magic-context")
+        with open(os.path.join(pkg, "package.json"), "w") as f:
+            json.dump({"pi": {"extensions": ["./dist/index.js"]}}, f)
+        os.makedirs(os.path.join(pkg, "dist"), exist_ok=True)
+        with open(os.path.join(pkg, "dist", "index.js"), "w") as f:
+            f.write("// stub")
+        with open(os.path.join(agent_dir, "settings.json"), "w") as f:
+            json.dump({"packages": ["npm:@cortexkit/pi-magic-context"]}, f)
+        return agent_dir
+
+    def test_resolve_entries_from_registry(self):
+        """入口路径从 settings.json + 包的 pi.extensions 推导（不硬编码）。"""
+        import meeting_fs
+        with tempfile.TemporaryDirectory() as tmp:
+            agent_dir = self._cfg_dir(tmp, os.path.join(tmp, "agent"))
+            with mock.patch.dict(os.environ,
+                                 {"PI_CODING_AGENT_DIR": agent_dir}):
+                paths, missing = meeting_fs.resolve_extension_entries(
+                    meeting_fs.KEEP_EXTENSIONS)
+            self.assertEqual(missing, [])
+            self.assertEqual(len(paths), 1)
+            self.assertTrue(paths[0].endswith("dist/index.js"))
+
+    def test_missing_package_reported_not_silent(self):
+        import meeting_fs
+        with tempfile.TemporaryDirectory() as tmp:
+            agent_dir = self._cfg_dir(tmp, os.path.join(tmp, "agent"))
+            with mock.patch.dict(os.environ,
+                                 {"PI_CODING_AGENT_DIR": agent_dir}):
+                paths, missing = meeting_fs.resolve_extension_entries(
+                    ("不存在的包",))
+            self.assertEqual(paths, [])
+            self.assertEqual(missing, ["不存在的包"])
+
+    def test_wake_cmd_blocks_extensions_and_keeps_mc(self):
+        """默认命令：`--no-extensions` + `-e <MC 入口>`（不能只是关掉全部）。"""
+        import meeting_loop, meeting_fs
+        with tempfile.TemporaryDirectory() as tmp:
+            agent_dir = self._cfg_dir(tmp, os.path.join(tmp, "agent"))
+            base = os.path.join(tmp, "mv-x")
+            wd = os.path.join(base, "work-a")
+            os.makedirs(os.path.join(wd, "pi-sessions"), exist_ok=True)
+            cfg = {"model": "p/m", "thinking": "high", "prompt_file": ""}
+            with mock.patch.dict(os.environ,
+                                 {"PI_CODING_AGENT_DIR": agent_dir}):
+                cmd, _ = meeting_loop._build_wake_cmd(
+                    wd, "a", "sid", cfg, None, tmp,
+                    os.path.join(base, "pi-sessions"), False, False, "唤醒")
+            self.assertIn("--no-extensions", cmd)
+            self.assertIn("-e", cmd)
+            entry = cmd[cmd.index("-e") + 1]
+            self.assertTrue(entry.endswith("pi-magic-context/dist/index.js"))
+            # 只关扩展发现；skills/prompt-templates/themes 不在此档处理
+            self.assertNotIn("--no-skills", cmd)
+
+    def test_pure_still_disables_everything(self):
+        import meeting_loop
+        with tempfile.TemporaryDirectory() as tmp:
+            base = os.path.join(tmp, "mv-x")
+            wd = os.path.join(base, "work-a")
+            os.makedirs(wd)
+            cmd, _ = meeting_loop._build_wake_cmd(
+                wd, "a", "sid", {"model": "", "thinking": "", "prompt_file": ""},
+                None, tmp, os.path.join(base, "pi-sessions"), False, True, "唤醒")
+            for flag in ("--no-extensions", "--no-skills",
+                         "--no-prompt-templates", "--no-themes"):
+                self.assertIn(flag, cmd)
+            self.assertNotIn("-e", cmd)
 
 if __name__ == "__main__":
     unittest.main()

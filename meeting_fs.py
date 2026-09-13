@@ -59,253 +59,77 @@ DEFAULT_STALL_TIMEOUT = 600
 # 显式档位），不是把默认值挪到便宜侧。
 DEFAULT_THINKING = "max"
 
-def agent_config_dir(base):
-    """讨论根目录 → agent 进程的 XDG_CONFIG_HOME 目录（可能尚未生成）。
 
-    路径推导单点：`build_agent_config` 写入时与 `meeting_loop._spawn_env`
-    判定/注入时用**同一批具名推导**（两边各拼一次路径就会漂）。为什么需要
-    这层作用域配置：见 `build_agent_config`。
+def pi_agent_dir():
+    """pi 的 agent 目录（`$PI_CODING_AGENT_DIR` 或 `~/.pi/agent`）——**单一实现**。
+
+    与 spec_gen.PI_AGENT_DIR 同规则；本模块需要它的地方（会话登记日志、
+    扩展入口解析）都走本函数，避免两处各拼一次。
     """
-    return os.path.join(base, "agent-config")
+    return os.environ.get("PI_CODING_AGENT_DIR") or os.path.expanduser("~/.pi/agent")
 
 
-def agent_config_aft_file(base):
-    """作用域配置里**恒写**的那个文件（`agent-config/cortexkit/aft.jsonc`）。
+def resolve_extension_entries(package_names):
+    """按包名解析扩展入口路径（**从 settings.json + 包的 pi.extensions 推导**）。
 
-    `_spawn_env` 的注入门判**这个文件**而不是目录：目录在、文件缺的半成品
-    状态若照注入，AFT 会静默回落默认配置（= 57s 回吐）。与写入侧共用本推导。
+    为什么要它：agent 进程默认屏蔽 AFT（实测：大 session 上进程退出前要多花
+    数分钟——见 design.md 决策 20），但**保留 magic-context**。屏蔽只能用
+    `--no-extensions`（pi 没有"只关某一个"的 CLI 开关），因此被保留的扩展要
+    用 `-e <入口>` 显式加载——入口路径必须**机械推导**而不是硬编码第三方目录
+    布局（换包管理器/换安装位置就漂）。
+
+    解析链：`settings.json.packages`（注册表）→ `npm:<pkg>` 或相对路径 →
+    `<PI_AGENT_DIR>/npm/node_modules/<pkg>/package.json` 的 `pi.extensions` →
+    逐个 os.path.isfile 校验。
+
+    返回 (paths, missing)：paths = 已存在的入口绝对路径（保序去重）；
+    missing = 想加载但解析不到的包名（调用方应**可见地**处理，不静默放弃）。
     """
-    return os.path.join(agent_config_dir(base), "cortexkit", "aft.jsonc")
-
-
-def _strip_jsonc_comments(text):
-    """第一趟：只去 `//`、`/* */` 注释（逐字符状态机，跟踪字符串与转义）。
-
-    注释里的引号**不影响**本趟：进入注释后不再看引号（`//` 跳到行尾、
-    `/* */` 跳到闭合），字符串里的 `//` 也不会被当注释。
-    """
-    out = []
-    i, n = 0, len(text)
-    in_str = False
-    while i < n:
-        c = text[i]
-        if in_str:
-            out.append(c)
-            if c == "\\" and i + 1 < n:
-                out.append(text[i + 1])
-                i += 2
-                continue
-            if c == '"':
-                in_str = False
-            i += 1
+    agent_dir = pi_agent_dir()
+    try:
+        with open(os.path.join(agent_dir, "settings.json")) as f:
+            packages = json.load(f).get("packages") or []
+    except (OSError, ValueError):
+        packages = []
+    # 包名 → 包目录（npm 注册名与相对路径两种形态）
+    dirs = {}
+    for entry in packages:
+        if not isinstance(entry, str):
             continue
-        if c == '"':
-            in_str = True
-            out.append(c)
-            i += 1
+        if entry.startswith("npm:"):
+            name = entry[4:]
+            dirs[name] = os.path.join(agent_dir, "npm", "node_modules", name)
+        else:
+            # 相对路径（如 ../../pi-multi-viewers）——相对 agent 目录解析
+            dirs.setdefault("", []).append(
+                os.path.abspath(os.path.join(agent_dir, entry)))
+    paths, missing = [], []
+    for name in package_names:
+        pkg_dir = dirs.get(name)
+        if not pkg_dir:
+            missing.append(name)
             continue
-        if c == "/" and i + 1 < n and text[i + 1] == "/":
-            while i < n and text[i] != "\n":
-                i += 1
-            continue
-        if c == "/" and i + 1 < n and text[i + 1] == "*":
-            i += 2
-            while i + 1 < n and not (text[i] == "*" and text[i + 1] == "/"):
-                i += 1
-            i += 2
-            continue
-        out.append(c)
-        i += 1
-    return "".join(out)
-
-
-def _strip_jsonc(text):
-    """宽松 JSONC → JSON 文本：去 `//`、`/* */` 注释与尾逗号。
-
-    只做文本级清理（不引解析器）：要读的是**用户手写的** AFT 配置（可能带
-    注释），而我们要保留它的全部键、只覆盖一个。
-
-    **两趟，各管一件事**（e2e20 评审批：单趟方案两个方向都错过）：
-    1. `_strip_jsonc_comments` 去注释——它能正确处理**注释里含引号**的情形
-       （进入注释后不再看引号）；
-    2. 对**已无注释**的文本按字符串切分（`re.split` 保留分隔串，正则只作用
-       于偶数下标 = 串外），去尾逗号——不会误改字符串值里的 `", }"`。
-    上一版把两件事压进一趟"按字符串切分 + 奇偶下标"：注释里的引号会让配对
-    错位，于是 `{"a": 1, /* say "hi" */ "b": 2}` 解析失败、奇数引号注释还会
-    让真串值被改写（旧状态机这两例本是正确的 → 功能回归）。
-    """
-    parts = re.split(r'("(?:[^"\\]|\\.)*")', _strip_jsonc_comments(text))
-    for i in range(0, len(parts), 2):
-        parts[i] = re.sub(r",(\s*[}\]])", r"\1", parts[i])
-    return "".join(parts)
-
-
-def _read_jsonc(path):
-    """读 JSONC 文件 → dict。解析失败抛 ValueError（调用方决定降级）。"""
-    with open(path, encoding="utf-8") as f:
-        return json.loads(_strip_jsonc(f.read()))
-
-
-def _source_config_home():
-    """用户级配置根（与 AFT 自己的 `configHome()` 同规则）：XDG_CONFIG_HOME
-    （绝对路径时）优先，否则 `~/.config`。"""
-    xdg = os.environ.get("XDG_CONFIG_HOME") or ""
-    if xdg and os.path.isabs(xdg):
-        return xdg
-    return os.path.join(os.path.expanduser("~"), ".config")
-
-
-def build_agent_config(base):
-    """为 agent 进程写一份**作用域配置**（agent 进程的 XDG_CONFIG_HOME）。
-
-    **为什么需要**（2026-09-12 实测）：AFT 的**语义搜索**（本地 ONNX embedder
-    all-MiniLM-L6-v2）让每个 pi 进程多活约 **57 秒**——而 agent 的 pi 进程退出
-    在唤醒的关键路径上（loop 等进程结束才继续）。实测矩阵：AFT 带语义搜索
-    61.0s / 关闭后 3.3–4.4s / 无扩展 2.2s；跨项目复现（不是索引冷热、不是
-    并发竞争）。AFT 自己的日志显示它在 ~2s 内已 shutdown 完毕
-    （`Process exited during shutdown` / `Bridge pool shut down`），"多活的
-    57 秒"像是 ONNX 运行时线程/句柄残留（上游问题），但我们不必等它修。
-    量化：e2e17 那场 33 次唤醒 → 墙钟约 12 分钟 / 55 分钟（≈22%）。
-
-    **做法**：不改用户的配置（**主 pi 完全不受影响**——XDG_CONFIG_HOME 只注入
-    agent 进程），而是生成一份作用域配置：
-
-      <base>/agent-config/cortexkit/aft.jsonc           = 用户配置键原样保留
-                                                          + 语义搜索关闭
-      <base>/agent-config/cortexkit/magic-context.jsonc = 用户配置**逐字拷贝**
-                                                          （MC 行为保持不变）
-
-    影响面（实测）：pi 自身**不读** XDG_CONFIG_HOME（dist 零命中）；mcp-adapter
-    不读；**只有 MC 读** → 所以拷贝它的配置。副作用：agent 进程内
-    `$XDG_CONFIG_HOME/git/config` 也随之改变——协议本就禁止 agent 跑 git，
-    且有 GIT_CEILING_DIRECTORIES 兜底。目录随讨论目录删除 → 零残留。
-
-    **已知边界（e2e19 评审 #2/#3 核到源码，此前写"可能覆盖"是弱化）**：
-
-    1. 项目级 `<project>/.cortexkit/aft.jsonc` 对本配置**确定覆盖**（不是
-       "可能"）：AFT 的 `mergeConfigs(user, project)` 让
-       `PROJECT_SAFE_TOP_LEVEL_FIELDS` 里的键（含 `semantic_search`）**压过
-       用户层/作用域层**，且**不为此打警告**。所以"在别人的项目里跑分析"
-       这个主场景会暴露：目标项目自己开了语义搜索 → 我们关不掉（回到 57s）。
-       `start_discussion` 在建环境时检测并打印事实（见
-       `af_resolution_notes`）。
-    2. AFT 每个 pi 进程启动都跑一次 `migrateAftConfigLocations()`：它把
-       **legacy 配置源**并入 `configHome()/cortexkit/aft.jsonc` —— 而
-       `configHome()` 被我们的 XDG 注入换成了讨论目录里的**临时副本**。
-       legacy 源 = `~/.opencode/aft/aft.json[c]`、`~/.pi/agent/aft/aft.json[c]`
-       （用户级）、`<proj>/.opencode/aft/…`、`<proj>/.pi/aft/…`（项目级）。
-       目标已存在且语义不同时：`unlinkSync` 掉 legacy 源文件、原地留
-       `<名>.MOVED_READPLEASE`（内含原文）+ 指向**我们的临时目标**——而讨论
-       目录会被 cleanup 删除（指针随之失效）。本机四条路径全无 → 暴露为零，
-       但这是真实的**用户侧副作用**，因此同样进检测清单。
-    3. 影响面是**快照 + 重核动作**，不是不变量：读取 XDG_CONFIG_HOME 的
-       第三方只有 AFT（含传递依赖 `@cortexkit/aft-bridge`，读同一份文件）与
-       `magic-context`（已逐字拷贝）。装新扩展后重跑
-       `grep -rl XDG_CONFIG_HOME <包 dist/>` 复核。
-
-    返回警告列表（fail-open：配置不可读不影响建环境；调用方打印）。
-    目录/文件路径不在这里返回——判定侧用上面的具名推导自己算（唯一来源）。
-    """
-    src_root = os.path.join(_source_config_home(), "cortexkit")
-    dst_root = os.path.join(agent_config_dir(base), "cortexkit")
-    os.makedirs(dst_root, exist_ok=True)
-    warnings = []
-
-    # ---- AFT：保留用户全部键，只关语义搜索 ----
-    cfg = {}
-    src_aft = os.path.join(src_root, "aft.jsonc")
-    if os.path.isfile(src_aft):
         try:
-            cfg = _read_jsonc(src_aft)
+            with open(os.path.join(pkg_dir, "package.json")) as f:
+                exts = (json.load(f).get("pi") or {}).get("extensions") or []
         except (OSError, ValueError):
-            # 不静默：告知调用方"其余键没套用"（本配置的目标仍然达成）
-            warnings.append(
-                f"无法解析 AFT 配置 {src_aft}——agent 侧只写语义搜索开关，"
-                f"其余键不套用")
-            cfg = {}
-    # **恒写现行键名**（`semantic_search`）——AFT 源码 `CONFIG_MIGRATIONS` 里
-    # 它是 `newPath`、`experimental_semantic_search` 是 `oldKey`，读取端
-    # `semantic_search ?? experimental_semantic_search`（e2e19 评审 #1 核出，
-    # 此前写反：恒写旧名靠迁移生效，上游一旦移除旧名就**静默回吐 57s**）。
-    # 旧名**删掉**而不是也写 false：两个键并存会触发迁移冲突警告
-    # （`Config migration conflict … ignored`）——我们没有任何理由制造它。
-    cfg["semantic_search"] = False
-    cfg.pop("experimental_semantic_search", None)
-    # 写入侧用**同一具名推导**（docstring 承诺的"写入侧与判定侧共用"必须为真；
-    # 此前本地拼 os.path.join(dst_root, "aft.jsonc")——今日逐字相同，但漂了就
-    # 是静默失效，e2e20 评审 S2）
-    with open(agent_config_aft_file(base), "w", encoding="utf-8") as f:
-        # 注释用 `//`（JSONC 规范；`#` 不是 JSONC 语法——第三方解析器可能
-        # 拒收，而我们这份文件的读者正是第三方）
-        f.write("// agent 进程作用域配置（XDG_CONFIG_HOME 注入；主 pi 不受影响）\n")
-        f.write("// 语义搜索关闭：实测每个 pi 进程多活 ~57s，而 agent 进程退出"
-                "在唤醒关键路径上\n")
-        f.write("// 其余键 = 用户配置原样保留\n")
-        json.dump(cfg, f, ensure_ascii=False, indent=2)
-        f.write("\n")
+            missing.append(name)
+            continue
+        found = False
+        for rel in exts:
+            path = os.path.normpath(os.path.join(pkg_dir, rel))
+            if os.path.isfile(path) and path not in paths:
+                paths.append(path)
+                found = True
+        if not found:
+            missing.append(name)
+    return paths, missing
 
-    # ---- magic-context：逐字拷贝（行为与本机一致；不改它的配置） ----
-    src_mc = os.path.join(src_root, "magic-context.jsonc")
-    if os.path.isfile(src_mc):
-        shutil.copyfile(src_mc, os.path.join(dst_root, "magic-context.jsonc"))
-    return warnings
 
-def af_resolution_notes(project_dir):
-    """AFT 语义搜索**关不掉**或产生副作用的条件清单——命中才打印事实。
-
-    （e2e19 评审 #2/#3。）本函数只陈述**事实**（哪个文件在、后果是什么），
-    不判定、不做风险评级、不进 `--report`（观测面契约：报告是唯一机器出口
-    且不得升级为验收 gate）。
-
-    为什么需要：作用域配置在几种情况下确定失效或产生副作用，而它们都不在
-    我们控制内 → 至少让人看见。本仓这些路径恰好都不存在（本机免疫），正是
-    "只在别人的项目里才暴露"的那类问题。
-
-    **清单 = 上游 5 组路径**（用户级 Pi / 用户级 OpenCode(configHome/opencode) /
-    项目级 .cortexkit(仅 .jsonc) / 项目级 .pi / 项目级 .opencode），另加
-    `OPENCODE_CONFIG_DIR` 条件项。规则出处：`@cortexkit/aft-pi` + `@cortexkit/aft-bridge`
-    （`PROJECT_SAFE_TOP_LEVEL_FIELDS` / `resolveLegacyAftConfigSources` /
-    `migrateAftConfigFile`）。**重核触发条件**：升级 AFT 后重跑本函数 +
-    对路径规则复读其 `dist/paths.js`。
-    """
-    home = os.path.expanduser("~")     # 受 $HOME 影响（测试用 patch 注入）
-    note_project = (
-        "项目级 AFT 配置：其中 semantic_search 会覆盖本作用域配置（层级合并、"
-        "无警告）→ 本次分析每次唤醒多约 57s（机理见 design.md 决策 19）")
-    note_legacy = (
-        "AFT legacy 配置源：迁移目标被本作用域配置顶替→ AFT 会删除该文件、"
-        "原地留 <名>.MOVED_READPLEASE（含原文），指针指向将被 cleanup 删除的"
-        "分析目录")
-    # 5 组路径，逐条对齐上游 `paths.js`（e2e20 评审 铁律#5 修正两处偏差）：
-    #  - 用户级 OpenCode 根 = `configHome()/opencode`（**不是** `~/.opencode`）
-    #  - 项目级 `.cortexkit` 上游**只读 `.jsonc`**（`.json` 是死检查）
-    # `configHome()` 与 `_source_config_home()` 同规则（XDG 绝对路径优先）。
-    groups = [
-        (os.path.join(project_dir, ".cortexkit"), ("aft.jsonc",),
-         note_project),
-        (os.path.join(home, ".pi", "agent", "aft"), ("aft.json", "aft.jsonc"),
-         note_legacy),
-        (os.path.join(project_dir, ".pi", "aft"), ("aft.json", "aft.jsonc"),
-         note_legacy),
-        (os.path.join(project_dir, ".opencode", "aft"), ("aft.json", "aft.jsonc"),
-         note_legacy),
-        (os.path.join(_source_config_home(), "opencode", "aft"),
-         ("aft.json", "aft.jsonc"), note_legacy),
-    ]
-    # 条件项：OPENCODE_CONFIG_DIR 会**替换**用户级 OpenCode 根（上游
-    # legacyOpenCodeConfigDir 优先读它）→ 指向另一个 legacy 根
-    ocd = (os.environ.get("OPENCODE_CONFIG_DIR") or "").strip()
-    if ocd:
-        groups.append((os.path.join(os.path.abspath(ocd), "aft"),
-                       ("aft.json", "aft.jsonc"),
-                       note_legacy + "（经 OPENCODE_CONFIG_DIR 定位）"))
-    out = []
-    for d, names, note in groups:
-        for name in names:
-            path = os.path.join(d, name)
-            if os.path.isfile(path):
-                out.append(f"{path}：{note}")
-    return out
+# agent 进程要**保留**的扩展（屏蔽 AFT 的同时留下它们；见 design.md 决策 20）。
+# 用包名（`settings.json.packages` 里的注册名）表达意图——具体入口由
+# `resolve_extension_entries` 推导。
+KEEP_EXTENSIONS = ("@cortexkit/pi-magic-context",)
 
 
 # ---------------------------------------------------------------
@@ -1260,7 +1084,7 @@ def build_fork_source(src_session, out_path, new_id, new_cwd,
 # 才删，未登记 = 非本流程创建（真实会话），不得删。路径与
 # scripts/check-residue.sh 的对照逻辑共享。
 SESSION_REGISTRY = os.path.join(
-    os.path.expanduser("~/.pi"), "pi-multi-viewers-test-sessions.log")
+    pi_agent_dir(), "..", "pi-multi-viewers-test-sessions.log")
 
 
 def _registry_log(session_id, out_path, cwd):

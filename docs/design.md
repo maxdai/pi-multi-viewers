@@ -110,7 +110,7 @@ compaction 的 `firstKeptEntryId` 起 + 其后的条目"——窗口内含 compa
 |---|---|---|
 | `usage` 合计 | `{input, cacheRead, output, reasoning}` | 每 agent 一行；`reasoning ⊂ output`（**不可相加**），缺席省略括注 |
 | `requests_by_stopReason` | `{键=stopReason 原值: 计数}` | 与下一项同一行（`stopReason：toolUse 78（1234s）｜…`） |
-| `seconds_by_stopReason` | `{键=stopReason 原值: Δ 合计}` | 同上；**口径 = 相邻条目 Δ 合计**（每次唤醒首条响应**也计入**；跨唤醒空闲不进入 Δ——唤醒 prompt 本身是一条 user 条目，空闲落在"上一唤醒末条 → 本次 user 条目"之间）。⚠️ 曾短暂采用"首响不计时"，理由（跨唤醒空闲）经 e2e20 评审批证伪后**已撤回**，见决策 19 末条 |
+| `seconds_by_stopReason` | `{键=stopReason 原值: Δ 合计}` | 同上；**口径 = 相邻条目 Δ 合计**（每次唤醒首条响应**也计入**；跨唤醒空闲不进入 Δ——唤醒 prompt 本身是一条 user 条目，空闲落在"上一唤醒末条 → 本次 user 条目"之间）。⚠️ 曾短暂采用"首响不计时"，理由（跨唤醒空闲）经 e2e20 评审批证伪后**已撤回**（见决策 19 的 e2e20 修正段） |
 | `effective_levels` | `[thinkingLevel…]`（session 侧，去重保序） | `档位：声明 X ｜ 生效 Y ｜ ✓一致 / ⚠不一致` |
 | （对照）`declared` | `pi-agent.json.thinking` | 同上——声明值与生效值**并列**（此前从没人对照过：探测失败会静默取档，spec 表面正常） |
 
@@ -357,7 +357,7 @@ commit 是溯源记录、本节是长期引用点——不并存两份权威值�
        "本场生效档位"这个事实。剔除后 pi 在边界之后补写，报告才能并列
        「声明值 vs 生效值」。`model_change` **不剔除**（无 `--model` 的路径
        靠它回填主 pi 模型——活配置，不是陈旧副本）。
-19. **agent 进程的作用域配置（XDG_CONFIG_HOME）——关 AFT 语义搜索**：
+19. **[已被决策 20 取代] agent 进程的作用域配置（XDG_CONFIG_HOME）——关 AFT 语义搜索**：
     实测（2026-09-12）AFT 的**语义搜索**（本地 ONNX embedder
     all-MiniLM-L6-v2）让每个 pi 进程多活约 **57 秒**：带语义搜索 61.0s、
     关掉 3.3–4.4s、无扩展 2.2s（逐个扩展隔离 + 跨项目复现，非冷热/非竞争）；
@@ -441,7 +441,37 @@ commit 是溯源记录、本节是长期引用点——不并存两份权威值�
        （具名推导 `agent_config_aft_file`，写入侧与判定侧共用），未注入时打一行
        **事实**日志；`build_agent_config` 只返回 warnings（目录不再返回——
        生产端本来就不用），并删掉只有测试在用的 `source_config_home` 参数。
-20. **git 守卫范围 = 从讨论 workdir 发起的操作**（`GIT_CEILING_DIRECTORIES`
+20. **agent 进程默认屏蔽 AFT（保留 MC）**（2026-09-13 用户定；取代决策 19）：
+
+    **证据**：AFT 在**大 session** 上让 pi 进程"干完活后"还要活很久才退出——
+    这段收尾占 agent 进程时间的 **66–78%**（e2e21 实测：11–12 次唤醒共
+    3676/3681/3709s，其中收尾 2769/2881/2437s）。直接对照（同一份 1.9MB
+    session、同一模型）：**全扩展收尾 445.9s vs 只留 MC 收尾 0.5s**。并且它
+    **长在增长**：同一天里 AFT 的开销从早上 ~4s → 下午 10–84s → 晚上数百秒
+    （AFT 自己的存储同步在涨：artifact-owners 121 目录、aft.db 15MB+WAL）。
+    因为 loop 必须等进程退出（关键路径），这段等待全部计入用户感知的墙钟。
+    注：决策 19 关掉的"语义搜索 57s/进程"是**另一笔**开销，已由本决策一并
+    消除（AFT 整个不加载）；两笔数字不可合并计。
+
+    **做法**：pi 没有"只关某一个扩展"的开关 → 用 `--no-extensions` 关闭扩展
+    发现，再用 `-e <入口>` 显式加载要保留的（`meeting_fs.KEEP_EXTENSIONS` =
+    `@cortexkit/pi-magic-context`）。入口路径由
+    `meeting_fs.resolve_extension_entries()` **从 `settings.json.packages` +
+    包的 `pi.extensions` 推导**（不硬编码第三方目录布局；解析失败时 loop 日志
+    一行**可见**提示）。`--pure` 语义不变（连 MC 一起关）。
+
+    **代价**：agents 用 pi 原生 read/write/edit/bash/grep/glob（不再有 AFT 的
+    结构化工具；某场 `--pure` 的自述反馈：这类审阅任务"完全胜任、没放弃任何
+    检查，只是符号导航每文件多 2–3 步"——**自述，非测量**）；agents 的工具
+    行为与主 pi 不再一致。
+
+    **随此退役的机制**（净删 ~250 行 + 测试）：`build_agent_config` /
+    `agent_config_dir` / `agent_config_aft_file` / `_strip_jsonc(_comments)` /
+    `_read_jsonc` / `_source_config_home` / `af_resolution_notes` / `_spawn_env`
+    的 XDG 注入 + setup 接线。它们的 bug（键名方向、清单与上游路径不符、
+    strip 改写字符串值）随之**结构性消失**——这是"删机制"比"修机制"更值的地方。
+
+21. **git 守卫范围 = 从讨论 workdir 发起的操作**（`GIT_CEILING_DIRECTORIES`
    注入于 spawn）；主项目仓库不在守卫范围（agent 的 cwd 就是主项目，其
    约束归指令层 + 主项目 `.gitignore`）。要拦主仓库需换机制类（沙箱/钩子），
    经评估收益不支撑扩面。
