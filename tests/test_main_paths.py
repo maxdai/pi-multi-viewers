@@ -337,10 +337,13 @@ class TestBuildReport(unittest.TestCase):
         subprocess.run(["git", "push", "-q", "origin", "HEAD"], cwd=w,
                        check=True, capture_output=True)
         if with_loop_log:
+            # 日志时间戳是**本地无时区**，session 是 UTC——装置必须让两者
+            # 指同一时刻（本机 UTC+8：本地 20:09 == 12:09Z），否则唤醒窗口
+            # 与 session 事件对不上（构成表会读不到事件）。
             with open(os.path.join(base, "loop-a.log"), "w") as f:
-                f.write("[2026-09-11T12:00:00.000] a: 唤醒 pi (session=s1)\n")
-                f.write("[2026-09-11T12:00:42.100] a: pi 完成"
-                        "（session=s1 elapsed_ms=42100 rc=0）\n")
+                f.write("[2026-09-11T20:09:00.000] a: 唤醒 pi (session=s1)\n")
+                f.write("[2026-09-11T20:11:00.000] a: pi 完成"
+                        "（session=s1 elapsed_ms=120000 rc=0）\n")
         if with_session:
             with open(os.path.join(base, "status-a.json"), "w") as f:
                 json.dump({"sessionID": "sid-a"}, f)
@@ -408,10 +411,19 @@ class TestBuildReport(unittest.TestCase):
             self.assertIn("a 1 / b 1", txt)
             self.assertIn("human 插话 1 条", txt)
             # 登记字段 elapsed_ms=42100 → 人类可读"进程跨度 总 42s"
-            self.assertIn("进程跨度 总 42s", txt)
+            self.assertIn("进程跨度 总 2m00s", txt)
             self.assertIn("rc≠0 0 次", txt)
             self.assertIn("cacheRead 183.6k", txt)
             self.assertIn("三者不可互替", txt)     # 跨度分标
+            # 终止原因（只报事实与计数；本 fixture 无 pass/freezing → "未完成"）
+            self.assertIn("终止：", txt)
+            self.assertIn("freezing 0", txt)
+            # 每次唤醒构成表（四端点 + 往返 + Δ + 合计）
+            self.assertIn("唤醒构成（每次一行", txt)
+            self.assertIn("a # 1", txt)
+            self.assertIn("往返", txt)
+            self.assertIn("a 合计：1 唤", txt)
+            self.assertIn("收尾", txt)
             # 建议 1（e2e17 评审）：按 stopReason 原值分组——键 = 原值
             self.assertIn("stopReason：", txt)
             # 计数 + **相邻条目 Δ 合计**（B 已撤回，e2e20 评审）：
@@ -439,6 +451,46 @@ class TestBuildReport(unittest.TestCase):
             # 三样观测面（第二批）：冻结集合 + 阶段
             self.assertIn("冻结：0/2 已冻结；未冻结 a、b", txt)
             self.assertIn("阶段：meeting", txt)
+
+    def test_wake_table_multi_wake_and_retry(self):
+        """多次唤醒分别成行；"无产出重试"归入所属唤醒；合计行给出三段分解。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            base = self._env(tmp, commits=[("a/0001", "message", "meeting")])
+            with open(os.path.join(base, "loop-a.log"), "w") as f:
+                f.write("[2026-09-11T20:09:00.000] a: 唤醒 pi (session=s1)\n")
+                f.write("[2026-09-11T20:09:30.000] a: 无产出（无静默铁律）——重试\n")
+                f.write("[2026-09-11T20:11:00.000] a: pi 完成"
+                        "（session=s1 elapsed_ms=120000 rc=0）\n")
+                f.write("[2026-09-11T20:12:00.000] a: 唤醒 pi (session=s1)\n")
+                f.write("[2026-09-11T20:12:30.000] a: pi 完成"
+                        "（session=s1 elapsed_ms=30000 rc=1）\n")
+            import observability
+            txt = "\n".join(observability.build_report(base))
+            self.assertIn("a # 1", txt)
+            self.assertIn("a # 2", txt)
+            self.assertIn("retry×1", txt)          # 第 1 次里记的重试
+            self.assertIn("rc≠0", txt)             # 第 2 次 rc=1
+            self.assertIn("a 合计：2 唤", txt)
+
+    def test_termination_consensus_with_pass(self):
+        """有 pass 消息 → 终止原因判为共识（只报事实与计数）。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            base = self._env(tmp, commits=[("a/0001", "message", "meeting"),
+                                           ("a/0002", "pass", "round-robin")])
+            import observability
+            txt = "\n".join(observability.build_report(base))
+            self.assertIn("终止：共识", txt)
+            self.assertIn("pass 1", txt)
+
+    def test_termination_stall_takeover_from_log(self):
+        """日志有"超时兜底"字样 → 终止原因报 stall 接管（读既有事实）。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            base = self._env(tmp, commits=[("a/0001", "message", "meeting")])
+            with open(os.path.join(base, "loop-a.log"), "a") as f:
+                f.write("[2026-09-11T20:15:00.000] a: 无进展超过 600s——超时兜底\n")
+            import observability
+            txt = "\n".join(observability.build_report(base))
+            self.assertIn("终止：stall 接管", txt)
 
     def test_level_mismatch_visible(self):
         """声明值 ≠ 生效值 → 报告显式 ⚠ 不一致（这是 e2e17 §1 要的可见性：

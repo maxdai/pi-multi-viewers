@@ -327,6 +327,12 @@ def build_report(base):
                    f"{_dur(d['max_ms'] // 1000)} | rc≠0 {d['fails']} 次")
 
     # ---- LLM 运行事实（session 文档化字段；流式预过滤，不整文件解析） ----
+    # ---- 终止原因（只报事实与计数）----
+    _report_termination(base, agents, out)
+
+    # ---- 每次唤醒构成表（零插桩事后推导）----
+    _report_wake_table(base, agents, out)
+
     out.append("LLM（session 文档化字段）：")
     any_usage = False
     for a in agents:
@@ -421,6 +427,188 @@ def _dur(sec):
 
 def _hhmm(ts):
     return time.strftime("%H:%M:%S", time.localtime(ts))
+
+
+def _parse_wake_windows(base, agent):
+    """从一个 agent 的 loop log 解析每次唤醒的窗口（零判定输入——只读登记行）。
+
+    返回 [(spawn_epoch, exit_epoch, elapsed_ms, rc, retries)]；日志时间戳是
+    **本地无时区**（`[2026-09-13T19:43:10.123]`）→ 转 epoch 再与 session 的
+    UTC 时间戳 / git 的 epoch 对齐。fail-open：文件缺失 → []。
+    """
+    path = os.path.join(base, f"loop-{agent}.log")
+    wakes, cur = [], None
+    try:
+        lines = open(path, encoding="utf-8", errors="replace").read().splitlines()
+    except OSError:
+        return []
+    for line in lines:
+        m = re.match(r"\[([^\]]+)\]\s+\S+:\s+(.*)$", line)
+        if not m:
+            continue
+        try:
+            dt = datetime.datetime.fromisoformat(m.group(1))
+        except ValueError:
+            continue
+        epoch = time.mktime(dt.timetuple()) + dt.microsecond / 1e6
+        body = m.group(2)
+        if body.startswith("唤醒 pi"):
+            cur = [epoch, None, 0, 0, 0]
+        elif cur is not None and body.startswith("pi 完成"):
+            mm = re.search(r"elapsed_ms=(\d+) rc=(-?\d+)", body)
+            if mm:
+                cur[1] = epoch
+                cur[2] = int(mm.group(1))
+                cur[3] = int(mm.group(2))
+                wakes.append(tuple(cur))
+            cur = None
+        elif cur is not None and "无产出" in body and "重试" in body:
+            cur[4] += 1
+    return wakes
+
+
+def _agent_event_roles(base, agent):
+    """该 agent 本轮（边界之后）的事件流：[(epoch, role)]——顺序读取，fail-open。"""
+    fp = _agent_session_file(base, agent)
+    if not fp:
+        return []
+    out = []
+    for ev in meeting_fs.iter_after_boundary(fp):
+        m = ev.get("message") or {}
+        role, ts = m.get("role"), ev.get("timestamp")
+        if not role or not ts:
+            continue
+        try:
+            out.append((datetime.datetime.fromisoformat(
+                ts.replace("Z", "+00:00")).timestamp(), role))
+        except ValueError:
+            continue
+    return out
+
+
+def _wake_rows(base, agent, commits):
+    """每次唤醒的构成记录（零插桩事后推导；精度契约见 design.md 观测面契约）。
+
+    每条 = 四端点（spawn / 首事件 / 末事件 / exit）+ 往返数 + assistant Δ +
+    toolResult Δ + retry + 本唤醒内的 commit。**不承诺**单次调用内的
+    TTFT/生成拆分（session 只有完成时间戳）。
+    """
+    wakes = _parse_wake_windows(base, agent)
+    if not wakes:
+        return []
+    events = _agent_event_roles(base, agent)
+    rows = []
+    for i, (t0, t1, ms, rc, retries) in enumerate(wakes, 1):
+        t1 = t1 or (t0 + ms / 1000)
+        row = {"n": i, "spawn": t0, "exit": t1, "ms": ms, "rc": rc,
+               "retries": retries, "rounds": 0, "d_assist": 0.0,
+               "d_tool": 0.0, "first": None, "last": None, "commit": None}
+        prev = None
+        for t, role in events:
+            if not (t0 - 2 <= t <= t1 + 2):
+                continue
+            if role == "assistant":
+                row["rounds"] += 1
+                if prev is not None and t >= prev:
+                    row["d_assist"] += t - prev
+            elif role == "toolResult" and prev is not None and t >= prev:
+                row["d_tool"] += t - prev
+            if row["first"] is None:
+                row["first"] = t
+            row["last"] = t
+            prev = t
+        for c in commits:
+            if t0 <= c <= t1:
+                row["commit"] = c
+                break
+        rows.append(row)
+    return rows
+
+
+def _report_wake_table(base, agents, out):
+    """每次唤醒构成表 + 聚合（只读 loop log / session / bare 三处已有事实）。"""
+    r = meeting_fs.run_git(meeting_fs.bare_of_base(base), "log",
+                           "--format=%ct", check=False)
+    commits = sorted(int(x) for x in r.stdout.split() if x.isdigit())
+    any_row = False
+    for agent in agents:
+        rows = _wake_rows(base, agent, commits)
+        if not rows:
+            continue
+        if not any_row:
+            out.append("唤醒构成（每次一行；Δ 助手/Δ 工具 = 相邻条目差，"
+                       "不含跨唤醒空闲）：")
+            any_row = True
+        start = tail = inner = 0.0
+        for row in rows:
+            pre = (row["first"] - row["spawn"]) if row["first"] else 0.0
+            post = (row["exit"] - row["last"]) if row["last"] else 0.0
+            inner += (row["last"] - row["first"]) if row["first"] else 0.0
+            start += pre
+            tail += post
+            retry = f" retry×{row['retries']}" if row["retries"] else ""
+            commit = _hhmm(row["commit"]) if row["commit"] else "—"
+            out.append(
+                f"  {agent} #{row['n']:>2} {_hhmm(row['spawn'])}"
+                f" 启动{pre:4.1f}s"
+                f" 内{_dur(row['last'] - row['first']) if row['first'] else 'n/a':>7}"
+                f" 收尾{post:4.1f}s | 往返 {row['rounds']:>2}"
+                f" | Δ助手 {_dur(row['d_assist']):>6} Δ工具 {_dur(row['d_tool']):>6}"
+                f" | commit {commit}{retry}"
+                + ("  rc≠0" if row["rc"] else ""))
+        total = sum(x["ms"] for x in rows) / 1000
+        out.append(f"  {agent} 合计：{len(rows)} 唤 | 跨度 {_dur(total)} = "
+                   f"启动前 {_dur(start)} + 事件内 {_dur(inner)} + 收尾 {_dur(tail)}"
+                   f" | 平均 {total / len(rows):.1f}s"
+                   f" | 往返 {sum(x['rounds'] for x in rows)}"
+                   f" | retry {sum(x['retries'] for x in rows)}")
+        # 对账恒等式（e2e23 分析产出）：Σ四段 应等于 Σ进程跨度；差>2s 说明
+        # 时间源没对齐（loop 日志=本地无时区 / session=UTC）——只报告事实，
+        # 不进任何代码分支（跨度阈值不得参与判定，观测面契约）。
+        diff = abs((start + inner + tail) - total)
+        if diff > 2:
+            out.append(f"    恒等校验：Σ(启动+事件内+收尾) 与 Σ进程跨度 差 "
+                       f"{diff:.1f}s——时间源未对齐（日志=本地时区，"
+                       f"session=UTC）")
+    if not any_row:
+        out.append("唤醒构成：n/a（无 loop log 或无登记行）")
+
+
+def _report_termination(base, agents, out):
+    """终止原因——**只报事实与计数**（不做评分/判定；观测面契约）。"""
+    bare = meeting_fs.bare_of_base(base)
+    msgs = meeting_engine.each_agent_messages(bare, agents)
+    types = {}
+    for a in agents:
+        for fm in msgs.get(a, []):        # each_agent_messages → frontmatter dict 列表
+            t = (fm or {}).get("type")
+            types[t] = types.get(t, 0) + 1
+    has_result = bool(meeting_fs.run_git(bare, "show", "HEAD:result.md",
+                                        check=False).stdout.strip())
+    stalls = 0
+    for f in glob.glob(os.path.join(base, "loop-*.log")):
+        try:
+            txt = open(f, encoding="utf-8", errors="replace").read()
+        except OSError:
+            continue
+        stalls += txt.count("超时兜底") + txt.count("声明接管")
+    if not meeting_fs.read_protocol(bare).get("participants"):
+        out.append("终止：n/a（协议不可读）")
+        return
+    if stalls:
+        why = "stall 接管"
+    elif types.get("pass"):
+        why = "共识（RR 全体 pass）"
+    elif types.get("freezing") or types.get("all-freezing"):
+        why = "配额耗尽（冻结，无 pass）"
+    elif has_result:
+        why = "已收尾（无 pass/冻结记录）"
+    else:
+        why = "未完成"
+    out.append(f"终止：{why} | freezing {types.get('freezing', 0)}"
+               f" / all-freezing {types.get('all-freezing', 0)}"
+               f" / pass {types.get('pass', 0)} / stall 接管行 {stalls}"
+               + (" | result.md 已提交" if has_result else ""))
 
 
 def _report_wake_fields(base):
