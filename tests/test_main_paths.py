@@ -471,6 +471,9 @@ class TestBuildReport(unittest.TestCase):
             self.assertIn("retry×1", txt)          # 第 1 次里记的重试
             self.assertIn("rc≠0", txt)             # 第 2 次 rc=1
             self.assertIn("a 合计：2 唤", txt)
+            # 第 2 次唤醒窗口内没有 session 事件 → 不冒充 0，计"未分解"
+            self.assertIn("未分解 1 次", txt)
+            self.assertNotIn("恒等校验", txt)      # 不误报时间源问题
 
     def test_termination_consensus_with_pass(self):
         """有 pass 消息 → 终止原因判为共识（只报事实与计数）。"""

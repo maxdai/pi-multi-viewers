@@ -540,12 +540,17 @@ def _report_wake_table(base, agents, out):
                        "不含跨唤醒空闲）：")
             any_row = True
         start = tail = inner = 0.0
+        decomposed = no_ev = 0      # 无 session 事件的唤醒无法分解（不冒充 0）
         for row in rows:
             pre = (row["first"] - row["spawn"]) if row["first"] else 0.0
             post = (row["exit"] - row["last"]) if row["last"] else 0.0
             inner += (row["last"] - row["first"]) if row["first"] else 0.0
             start += pre
             tail += post
+            if row["first"]:
+                decomposed += row["ms"] / 1000
+            else:
+                no_ev += 1
             retry = f" retry×{row['retries']}" if row["retries"] else ""
             commit = _hhmm(row["commit"]) if row["commit"] else "—"
             out.append(
@@ -561,13 +566,15 @@ def _report_wake_table(base, agents, out):
                    f"启动前 {_dur(start)} + 事件内 {_dur(inner)} + 收尾 {_dur(tail)}"
                    f" | 平均 {total / len(rows):.1f}s"
                    f" | 往返 {sum(x['rounds'] for x in rows)}"
-                   f" | retry {sum(x['retries'] for x in rows)}")
-        # 对账恒等式（e2e23 分析产出）：Σ四段 应等于 Σ进程跨度；差>2s 说明
-        # 时间源没对齐（loop 日志=本地无时区 / session=UTC）——只报告事实，
-        # 不进任何代码分支（跨度阈值不得参与判定，观测面契约）。
-        diff = abs((start + inner + tail) - total)
+                   f" | retry {sum(x['retries'] for x in rows)}"
+                   + (f" | 未分解 {no_ev} 次（无 session 事件）" if no_ev else ""))
+        # 对账恒等式（e2e23 分析产出）：**仅有事件的那部分**应满足
+        # Σ(启动+事件内+收尾) = Σ进程跨度；差>2s 说明时间源没对齐
+        # （loop 日志=本地无时区 / session=UTC）。只报告事实，不进任何代码
+        # 分支（跨度阈值不得参与判定，观测面契约）。
+        diff = abs((start + inner + tail) - decomposed)
         if diff > 2:
-            out.append(f"    恒等校验：Σ(启动+事件内+收尾) 与 Σ进程跨度 差 "
+            out.append(f"    恒等校验：Σ(启动+事件内+收尾) 与可分解跨度 差 "
                        f"{diff:.1f}s——时间源未对齐（日志=本地时区，"
                        f"session=UTC）")
     if not any_row:
