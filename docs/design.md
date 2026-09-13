@@ -377,6 +377,23 @@ commit 是溯源记录、本节是长期引用点——不并存两份权威值�
     且有 GIT_CEILING_DIRECTORIES 兜底）。目录随讨论目录删除 → 零残留。
     已知边界：AFT 还读项目级 `<project>/.cortexkit/aft.jsonc`，用户项目若
     有该文件且显式开启语义搜索，可能覆盖本配置（本仓无该文件）。
+
+    **「完全屏蔽 AFT」——已评估，暂不做（用户 2026-09-12 定：先保持现状，
+    以后单独测试）**。事实与口径：
+    - 现状只关**语义搜索**，AFT 仍加载（trigram 索引、LSP、工具集、每 agent
+      一个 `aft` 索引服务）。剩余实测成本：无扩展 2.2s / 仅 MC 2.8s /
+      AFT（语义关）3.3–4.5s → **~1–2s/唤醒 ≈ 2% 墙钟**（33 唤醒 ≈ 1 分钟
+      / 55 分钟）。最初那 57s 已经拿回，**速度上几乎无剩余收益**。
+    - 三种屏蔽方式：`--no-extensions` + `-e <MC 扩展入口>`（AFT 不加载、
+      MC 保留；入口可从 `~/.pi/agent/settings.json` 的 `packages` + 包的
+      `pi.extensions` 解析，不硬编码）；`--pure`（全关，已实现）；现状。
+    - 保留 AFT 的两个非速度理由：① AFT 默认 `hoist_builtin_tools` →
+      agents 的 read/write/edit/bash 用的是 AFT 实现（**与主 pi 一致**），
+      屏蔽后行为会变；② 每 agent 一个 `aft` 索引服务并发访问主项目索引。
+    - **重估触发条件**：动机从“更快”变为“隔离/行为一致性”（如验证纯 pi
+      工具下 agents 表现、或担心并发索引）；届时做成**协议层开关**
+      （如 `agentsExtensions: default | no-aft | pure`）而非硬编码，保留
+      两种形态可 A/B。
 20. **git 守卫范围 = 从讨论 workdir 发起的操作**（`GIT_CEILING_DIRECTORIES`
    注入于 spawn）；主项目仓库不在守卫范围（agent 的 cwd 就是主项目，其
    约束归指令层 + 主项目 `.gitignore`）。要拦主仓库需换机制类（沙箱/钩子），
