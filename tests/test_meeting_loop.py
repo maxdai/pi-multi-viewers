@@ -701,42 +701,50 @@ class TestMiscLoop(unittest.TestCase):
 
 
 class TestSpawnEnv(unittest.TestCase):
-    """`_spawn_env`：agent 进程环境的唯一构造点（e2e18）。
+    """`_spawn_env`：agent 进程环境的唯一构造点。
 
     两个注入：GIT_CEILING_DIRECTORIES（git 上溯防护）与 XDG_CONFIG_HOME
     （作用域配置 → 关 AFT 语义搜索，每进程 ~57s）。后者**目录存在才注入**
-    （老环境不改行为）。
+    （老环境不改行为）；e2e19 评审 #5 修正为判**配置文件**而非目录——
+    半成品（目录在、文件缺）照注入会让 AFT 静默回落默认（57s 回吐）。
     """
 
-    def _env(self, tmp, with_cfg):
+    def _wd(self, tmp, state):
         base = os.path.join(tmp, "mv-x-1")
-        workdir = os.path.join(base, "work-a")
-        os.makedirs(workdir)
-        if with_cfg:
-            os.makedirs(meeting_fs.agent_config_dir(base))
-        return workdir
+        wd = os.path.join(base, "work-a")
+        os.makedirs(wd)
+        if state in ("file", "dir-only"):
+            os.makedirs(os.path.dirname(meeting_fs.agent_config_aft_file(base)))
+        if state == "file":
+            with open(meeting_fs.agent_config_aft_file(base), "w") as f:
+                f.write("{}")
+        return wd
 
-    def test_ceiling_always_and_config_when_present(self):
+    def test_injects_when_config_file_present(self):
         import meeting_loop
         with tempfile.TemporaryDirectory() as tmp:
-            wd = self._env(tmp, with_cfg=True)
+            wd = self._wd(tmp, "file")
             env = meeting_loop._spawn_env(wd)
-            self.assertEqual(env["GIT_CEILING_DIRECTORIES"],
-                             os.path.dirname(wd))
+            base = os.path.dirname(wd)
+            self.assertEqual(env["GIT_CEILING_DIRECTORIES"], base)
             self.assertEqual(env["XDG_CONFIG_HOME"],
-                             meeting_fs.agent_config_dir(os.path.dirname(wd)))
+                             meeting_fs.agent_config_dir(base))
             # Popen 的 env 是整体替换 → 必须合并 os.environ（否则丢 PATH）
             self.assertIn("PATH", env)
 
-    def test_no_injection_without_scope_dir(self):
+    def test_no_injection_for_dir_only_or_absent(self):
         import meeting_loop
-        with tempfile.TemporaryDirectory() as tmp:
-            wd = self._env(tmp, with_cfg=False)
-            env = meeting_loop._spawn_env(wd)
-            self.assertEqual(env["GIT_CEILING_DIRECTORIES"],
-                             os.path.dirname(wd))
-            self.assertNotIn("XDG_CONFIG_HOME", env,
-                             "未生成作用域配置时不得注入（不改老环境行为）")
+        for state in ("dir-only", "absent"):
+            with self.subTest(state=state):
+                with tempfile.TemporaryDirectory() as tmp:
+                    wd = self._wd(tmp, state)
+                    env = meeting_loop._spawn_env(wd)
+                    self.assertEqual(env["GIT_CEILING_DIRECTORIES"],
+                                     os.path.dirname(wd))
+                    self.assertNotIn("XDG_CONFIG_HOME", env,
+                                     "半成品/缺失时不得注入（否则 AFT 静默"
+                                     "回落默认配置）")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -59,61 +59,43 @@ DEFAULT_STALL_TIMEOUT = 600
 # 显式档位），不是把默认值挪到便宜侧。
 DEFAULT_THINKING = "max"
 
-# agent 进程的**作用域配置**目录名（relative to 讨论根目录）——由
-# `build_agent_config` 生成，作为 agent 进程的 XDG_CONFIG_HOME 注入
-# （`meeting_loop._spawn_env`）。为什么需要：见 `build_agent_config`。
-AGENT_CONFIG_DIR = "agent-config"
-
-
 def agent_config_dir(base):
     """讨论根目录 → agent 进程的 XDG_CONFIG_HOME 目录（可能尚未生成）。
 
     路径推导单点：`build_agent_config` 写入时与 `meeting_loop._spawn_env`
-    注入时用同一个函数（两边各拼一次路径就会漂）。
+    判定/注入时用**同一批具名推导**（两边各拼一次路径就会漂）。为什么需要
+    这层作用域配置：见 `build_agent_config`。
     """
-    return os.path.join(base, AGENT_CONFIG_DIR)
+    return os.path.join(base, "agent-config")
+
+
+def agent_config_aft_file(base):
+    """作用域配置里**恒写**的那个文件（`agent-config/cortexkit/aft.jsonc`）。
+
+    `_spawn_env` 的注入门判**这个文件**而不是目录：目录在、文件缺的半成品
+    状态若照注入，AFT 会静默回落默认配置（= 57s 回吐）。与写入侧共用本推导。
+    """
+    return os.path.join(agent_config_dir(base), "cortexkit", "aft.jsonc")
 
 
 def _strip_jsonc(text):
     """宽松 JSONC → JSON 文本：去 `//`、`/* */` 注释与尾逗号。
 
     只做文本级清理（不引解析器）：要读的是**用户手写的** AFT 配置（可能带
-    注释），而我们要保留它的全部键、只覆盖一个。字符串里的 `//` 不能被当
-    注释 → 扫字符时跟踪引号与转义状态。
+    注释），而我们要保留它的全部键、只覆盖一个。
+
+    **按字符串切分**：`re.split` 保留分隔串 → 偶数下标 = 字符串外的文本
+    （注释与尾逗号只可能在这里），奇数下标 = 字符串字面量（**逐字保留**）。
+    此前版本用逐字符状态机跟踪字符串、却把尾逗号正则作用于整段拼接文本 →
+    字符串值里的 `", }"` / `", ]"` 被静默改写（结果仍是合法 JSON，
+    `json.loads` 挡不住；e2e19 评审 #4 复现）。
     """
-    out = []
-    i, n = 0, len(text)
-    in_str = False
-    while i < n:
-        c = text[i]
-        if in_str:
-            out.append(c)
-            if c == "\\" and i + 1 < n:
-                out.append(text[i + 1])
-                i += 2
-                continue
-            if c == '"':
-                in_str = False
-            i += 1
-            continue
-        if c == '"':
-            in_str = True
-            out.append(c)
-            i += 1
-            continue
-        if c == "/" and i + 1 < n and text[i + 1] == "/":
-            while i < n and text[i] != "\n":
-                i += 1
-            continue
-        if c == "/" and i + 1 < n and text[i + 1] == "*":
-            i += 2
-            while i + 1 < n and not (text[i] == "*" and text[i + 1] == "/"):
-                i += 1
-            i += 2
-            continue
-        out.append(c)
-        i += 1
-    return re.sub(r",(\s*[}\]])", r"\1", "".join(out))
+    parts = re.split(r'("(?:[^"\\]|\\.)*")', text)
+    for i in range(0, len(parts), 2):
+        seg = re.sub(r"/\*.*?\*/", "", parts[i], flags=re.S)
+        seg = re.sub(r"//[^\n]*", "", seg)
+        parts[i] = re.sub(r",(\s*[}\]])", r"\1", seg)
+    return "".join(parts)
 
 
 def _read_jsonc(path):
@@ -131,7 +113,7 @@ def _source_config_home():
     return os.path.join(os.path.expanduser("~"), ".config")
 
 
-def build_agent_config(base, source_config_home=None):
+def build_agent_config(base):
     """为 agent 进程写一份**作用域配置**（agent 进程的 XDG_CONFIG_HOME）。
 
     **为什么需要**（2026-09-12 实测）：AFT 的**语义搜索**（本地 ONNX embedder
@@ -156,13 +138,33 @@ def build_agent_config(base, source_config_home=None):
     `$XDG_CONFIG_HOME/git/config` 也随之改变——协议本就禁止 agent 跑 git，
     且有 GIT_CEILING_DIRECTORIES 兜底。目录随讨论目录删除 → 零残留。
 
-    已知边界：AFT 还读**项目级** `<project>/.cortexkit/aft.jsonc`，若用户项目
-    里有该文件且显式打开语义搜索，可能覆盖本配置（本仓无该文件）。
+    **已知边界（e2e19 评审 #2/#3 核到源码，此前写"可能覆盖"是弱化）**：
 
-    返回 (目录, 警告列表)；警告由调用方打（fail-open：配置不可读不影响建环境）。
+    1. 项目级 `<project>/.cortexkit/aft.jsonc` 对本配置**确定覆盖**（不是
+       "可能"）：AFT 的 `mergeConfigs(user, project)` 让
+       `PROJECT_SAFE_TOP_LEVEL_FIELDS` 里的键（含 `semantic_search`）**压过
+       用户层/作用域层**，且**不为此打警告**。所以"在别人的项目里跑分析"
+       这个主场景会暴露：目标项目自己开了语义搜索 → 我们关不掉（回到 57s）。
+       `start_discussion` 在建环境时检测并打印事实（见
+       `af_resolution_notes`）。
+    2. AFT 每个 pi 进程启动都跑一次 `migrateAftConfigLocations()`：它把
+       **legacy 配置源**并入 `configHome()/cortexkit/aft.jsonc` —— 而
+       `configHome()` 被我们的 XDG 注入换成了讨论目录里的**临时副本**。
+       legacy 源 = `~/.opencode/aft/aft.json[c]`、`~/.pi/agent/aft/aft.json[c]`
+       （用户级）、`<proj>/.opencode/aft/…`、`<proj>/.pi/aft/…`（项目级）。
+       目标已存在且语义不同时：`unlinkSync` 掉 legacy 源文件、原地留
+       `<名>.MOVED_READPLEASE`（内含原文）+ 指向**我们的临时目标**——而讨论
+       目录会被 cleanup 删除（指针随之失效）。本机四条路径全无 → 暴露为零，
+       但这是真实的**用户侧副作用**，因此同样进检测清单。
+    3. 影响面是**快照 + 重核动作**，不是不变量：读取 XDG_CONFIG_HOME 的
+       第三方只有 AFT（含传递依赖 `@cortexkit/aft-bridge`，读同一份文件）与
+       `magic-context`（已逐字拷贝）。装新扩展后重跑
+       `grep -rl XDG_CONFIG_HOME <包 dist/>` 复核。
+
+    返回警告列表（fail-open：配置不可读不影响建环境；调用方打印）。
+    目录/文件路径不在这里返回——判定侧用上面的具名推导自己算（唯一来源）。
     """
-    src_home = source_config_home or _source_config_home()
-    src_root = os.path.join(src_home, "cortexkit")
+    src_root = os.path.join(_source_config_home(), "cortexkit")
     dst_root = os.path.join(agent_config_dir(base), "cortexkit")
     os.makedirs(dst_root, exist_ok=True)
     warnings = []
@@ -179,11 +181,14 @@ def build_agent_config(base, source_config_home=None):
                 f"无法解析 AFT 配置 {src_aft}——agent 侧只写语义搜索开关，"
                 f"其余键不套用")
             cfg = {}
-    cfg["experimental_semantic_search"] = False
-    # 旧键名：用户配置里出现过就一并关掉（AFT 对两个名字都认，但只写现行名
-    # 将来若移除旧名也仍是关的；写两个 = 不依赖它到底认哪个）
-    if "semantic_search" in cfg:
-        cfg["semantic_search"] = False
+    # **恒写现行键名**（`semantic_search`）——AFT 源码 `CONFIG_MIGRATIONS` 里
+    # 它是 `newPath`、`experimental_semantic_search` 是 `oldKey`，读取端
+    # `semantic_search ?? experimental_semantic_search`（e2e19 评审 #1 核出，
+    # 此前写反：恒写旧名靠迁移生效，上游一旦移除旧名就**静默回吐 57s**）。
+    # 旧名**删掉**而不是也写 false：两个键并存会触发迁移冲突警告
+    # （`Config migration conflict … ignored`）——我们没有任何理由制造它。
+    cfg["semantic_search"] = False
+    cfg.pop("experimental_semantic_search", None)
     with open(os.path.join(dst_root, "aft.jsonc"), "w", encoding="utf-8") as f:
         # 注释用 `//`（JSONC 规范；`#` 不是 JSONC 语法——第三方解析器可能
         # 拒收，而我们这份文件的读者正是第三方）
@@ -198,7 +203,55 @@ def build_agent_config(base, source_config_home=None):
     src_mc = os.path.join(src_root, "magic-context.jsonc")
     if os.path.isfile(src_mc):
         shutil.copyfile(src_mc, os.path.join(dst_root, "magic-context.jsonc"))
-    return agent_config_dir(base), warnings
+    return warnings
+
+def af_resolution_notes(project_dir, home_dir=None):
+    """AFT 语义搜索**关不掉**或产生副作用的条件清单——命中才打印事实。
+
+    （e2e19 评审 #2/#3。）本函数只陈述**事实**（哪个文件在、后果是什么），
+    不判定、不做风险评级、不进 `--report`（观测面契约：报告是唯一机器出口
+    且不得升级为验收 gate）。
+
+    为什么需要：作用域配置在三种情况下确定失效或产生副作用，而它们都不在
+    我们控制内 → 至少让人看见。本仓四条路径恰好都不存在（本机免疫），正是
+    "只在别人的项目里才暴露"的那类问题。
+
+    规则出处：`@cortexkit/aft-pi` + `@cortexkit/aft-bridge`
+    （`PROJECT_SAFE_TOP_LEVEL_FIELDS` / `resolveLegacyAftConfigSources` /
+    `migrateAftConfigFile`）。**重核触发条件**：升级 AFT 后重跑本函数 +
+    对路径规则复读其 `dist/paths.js`。
+    """
+    proj = project_dir
+    home = home_dir or os.path.expanduser("~")
+    note_project = (
+        "项目级 AFT 配置：其中的 semantic_search 会**覆盖**本作用域配置"
+        "（AFT 层级合并 PROJECT_SAFE_TOP_LEVEL_FIELDS，且不打警告）——"
+        "若它开启语义搜索，本次分析每次唤醒多约 57s")
+    note_legacy = (
+        "AFT legacy 配置源：其迁移目标被本作用域配置顶替——AFT 会删除该"
+        "文件、原地留 <名>.MOVED_READPLEASE（含原文），指针指向本分析目录"
+        "（将被 cleanup 删除）")
+    groups = [
+        (os.path.join(proj, ".cortexkit"), note_project),
+        (os.path.join(home, ".pi", "agent", "aft"), note_legacy),
+        (os.path.join(proj, ".pi", "aft"), note_legacy),
+        (os.path.join(proj, ".opencode", "aft"), note_legacy),
+        (os.path.join(home, ".opencode", "aft"), note_legacy),
+    ]
+    # 条件项：OPENCODE_CONFIG_DIR 会绕过 XDG 重定向（AFT 的
+    # legacyOpenCodeConfigDir 优先读它）→ 指向另一个 legacy 根
+    ocd = os.environ.get("OPENCODE_CONFIG_DIR") or ""
+    if ocd:
+        groups.append((os.path.join(ocd, "aft"),
+                       note_legacy + "（经 OPENCODE_CONFIG_DIR 定位，绕过 XDG）"))
+    out = []
+    for d, note in groups:
+        for name in ("aft.json", "aft.jsonc"):
+            path = os.path.join(d, name)
+            if os.path.isfile(path):
+                out.append(f"{path}：{note}")
+    return out
+
 
 # ---------------------------------------------------------------
 # git 基础操作

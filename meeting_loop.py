@@ -340,14 +340,22 @@ def _spawn_env(workdir):
     两个注入，各有理由：
     - `GIT_CEILING_DIRECTORIES=<讨论目录>`：git 上溯防护（实现 A1）。
     - `XDG_CONFIG_HOME=<base>/agent-config`：**作用域配置**——关掉 AFT 的
-      语义搜索（每进程 ~57s，唤醒关键路径；实测见
-      `meeting_fs.build_agent_config`）。目录**存在才注入**：老环境/未生成
-      配置时不改行为（不静默改变 agent 的运行条件）。
+      语义搜索（每进程 ~57s，唤醒关键路径；见
+      `meeting_fs.build_agent_config`）。
+
+    门判**恒写的那个配置文件**（不是目录）：目录在、文件缺的半成品状态若照
+    注入，AFT 会静默回落默认配置（= 57s 回吐）。未注入时记一行**事实**
+    （路径 + 未注入）——不设 once 标记：重复只发生在异常态，且落在每 agent
+    各自的 loop 日志里（e2e19 评审 #5）。
     """
-    env = {**os.environ, "GIT_CEILING_DIRECTORIES": os.path.dirname(workdir)}
-    cfg = meeting_fs.agent_config_dir(os.path.dirname(workdir))
-    if os.path.isdir(cfg):
-        env["XDG_CONFIG_HOME"] = cfg
+    base = os.path.dirname(workdir)
+    env = {**os.environ, "GIT_CEILING_DIRECTORIES": base}
+    cfg_file = meeting_fs.agent_config_aft_file(base)
+    if os.path.isfile(cfg_file):
+        env["XDG_CONFIG_HOME"] = meeting_fs.agent_config_dir(base)
+    else:
+        log(os.path.basename(workdir).removeprefix("work-"),
+            f"作用域配置缺失，未注入 XDG_CONFIG_HOME（{cfg_file}）")
     return env
 
 

@@ -110,7 +110,7 @@ compaction 的 `firstKeptEntryId` 起 + 其后的条目"——窗口内含 compa
 |---|---|---|
 | `usage` 合计 | `{input, cacheRead, output, reasoning}` | 每 agent 一行；`reasoning ⊂ output`（**不可相加**），缺席省略括注 |
 | `requests_by_stopReason` | `{键=stopReason 原值: 计数}` | 与下一项同一行（`stopReason：toolUse 78（1234s）｜…`） |
-| `seconds_by_stopReason` | `{键=stopReason 原值: 响应跨度合计}` | 同上；**口径 = 响应跨度合计**（不含工具执行/唤醒间隔） |
+| `seconds_by_stopReason` | `{键=stopReason 原值: Δ 合计}` | 同上；**口径 = 同一唤醒内响应 Δ 合计**——每次唤醒的**首条响应不计时**（其上一条是唤醒 prompt，之间的间隔是跨唤醒空闲，不是生成；e2e19 实测反例：某 agent Δ 合计 33 分钟 > 进程跨度 13 分钟） |
 | `effective_levels` | `[thinkingLevel…]`（session 侧，去重保序） | `档位：声明 X ｜ 生效 Y ｜ ✓一致 / ⚠不一致` |
 | （对照）`declared` | `pi-agent.json.thinking` | 同上——声明值与生效值**并列**（此前从没人对照过：探测失败会静默取档，spec 表面正常） |
 
@@ -394,6 +394,37 @@ commit 是溯源记录、本节是长期引用点——不并存两份权威值�
       工具下 agents 表现、或担心并发索引）；届时做成**协议层开关**
       （如 `agentsExtensions: default | no-aft | pure`）而非硬编码，保留
       两种形态可 A/B。
+
+    **e2e19 自审（多视角审阅本次实现）修正三处**：
+    1. **键名方向写反**：AFT 现行键是 `semantic_search`，`experimental_
+       semantic_search` 是旧名（上游 `CONFIG_MIGRATIONS` 的 `oldKey`；读取端
+       `semantic_search ?? experimental_semantic_search`）。此前恒写**旧名**
+       → 靠迁移生效，上游一旦移除旧名即**静默回吐 57s**。现恒写现行名 +
+       **删除**旧名（并存会触发上游 migration-conflict 警告，我们没理由制造）。
+    2. **`_strip_jsonc` 会改写字符串值**（活着的 bug）：旧实现用逐字符状态机
+       跟踪字符串、却把尾逗号正则作用于整段拼接文本 → 字符串里的 `", }"` /
+       `", ]"` 被静默改写（结果仍是合法 JSON，`json.loads` 挡不住）。现按
+       **字符串切分**（`re.split` 保留分隔串，正则只作用于偶数下标 = 串外文本），
+       新增两条回归用例（先红后绿验证过：旧实现下红）。
+    3. **AFT 关不掉/有副作用的条件**（评审核到源码，此前 docstring 把
+       **确定覆盖**写成“可能覆盖”，并漏了用户侧副作用）：
+       - 项目级 `<project>/.cortexkit/aft.json[c]` 对安全名单键（含
+         `semantic_search`）**确定覆盖**作用域层，且上游**不打警告** → 目标
+         项目自己开了语义搜索时我们关不掉（主场景暴露，本机免疫）；
+       - 上游每个 pi 进程跑 `migrateAftConfigLocations()`，目标 =
+         `configHome()/cortexkit/aft.jsonc`——被我们的 XDG 注入换成**临时
+         副本**；legacy 源（`~/.pi/agent/aft/aft.json[c]`、`~/.opencode/aft/…`、
+         项目级 .pi/.opencode 同形）会因语义不同被 **`unlinkSync` 删除**并留
+         `.MOVED_READPLEASE`（指针指向将被 cleanup 删除的临时路径）；
+       - 新增 `meeting_fs.af_resolution_notes(project_dir, home_dir=None)`：
+         建环境时**命中才打印事实**（四条路径 × json/jsonc + `OPENCODE_CONFIG_DIR`
+         条件项），不判定、不评级、不进 `--report`；影响面（谁读 XDG）写成
+         **快照 + 重核动作**而非不变量。
+    4. **gate 判配置文件而非目录**：目录在、文件缺的半成品状态照注入会让 AFT
+       静默回落默认（= 57s 回吐）。现判 `agent-config/cortexkit/aft.jsonc`
+       （具名推导 `agent_config_aft_file`，写入侧与判定侧共用），未注入时打一行
+       **事实**日志；`build_agent_config` 只返回 warnings（目录不再返回——
+       生产端本来就不用），并删掉只有测试在用的 `source_config_home` 参数。
 20. **git 守卫范围 = 从讨论 workdir 发起的操作**（`GIT_CEILING_DIRECTORIES`
    注入于 spawn）；主项目仓库不在守卫范围（agent 的 cwd 就是主项目，其
    约束归指令层 + 主项目 `.gitignore`）。要拦主仓库需换机制类（沙箱/钩子），

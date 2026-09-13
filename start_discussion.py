@@ -417,9 +417,11 @@ def setup_environment(args, participants, base, spec_dir=None,
     # meeting_fs.build_agent_config）。**主 pi 不受影响**——该环境变量只注入
     # agent 进程（meeting_loop._spawn_env）。警告 fail-open（配置读不动不该
     # 阻断建环境），但要可见。
-    _, cfg_warnings = meeting_fs.build_agent_config(base)
-    for w in cfg_warnings:
+    for w in meeting_fs.build_agent_config(base):
         print(f"[setup] 警告: {w}")
+    # AFT 语义搜索**关不掉**或产生副作用的条件（只陈述事实，不判定）
+    for note in meeting_fs.af_resolution_notes(os.getcwd()):
+        print(f"[setup] 注意: {note}")
 
     # 复制 meeting_loop.py + 依赖模块（脚本同目录，自包含）
     for mod in ["meeting_loop.py", "meeting_fs.py", "meeting_core.py",

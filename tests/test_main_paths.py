@@ -364,18 +364,31 @@ class TestBuildReport(unittest.TestCase):
                     "type": "thinking_level_change",
                     "timestamp": "2026-09-11T12:00:00.000Z",
                     "thinkingLevel": "high"}) + "\n")
-                # 一条正常响应（span 40s，含 reasoning——⊂ output 不可相加）
+                # 唤醒 prompt（user 消息 = 唤醒边界；其前的空闲不算生成）
                 f.write(json.dumps({
                     "type": "message",
-                    "timestamp": "2026-09-11T12:00:40.000Z",
+                    "timestamp": "2026-09-11T12:09:00.000Z",
+                    "message": {"role": "user", "content": [
+                        {"type": "text", "text": "唤醒"}]}}) + "\n")
+                # 首条响应：Δ 相对唤醒 prompt 有 9 分钟间隔 → **不计时**
+                f.write(json.dumps({
+                    "type": "message",
+                    "timestamp": "2026-09-11T12:09:40.000Z",
                     "message": {
                         "role": "assistant", "stopReason": "toolUse",
                         "usage": {"input": 274, "cacheRead": 183552,
                                   "output": 1200, "reasoning": 900}}}) + "\n")
-                # 一次 provider 失败（error 单列；usage 全零，不污染生成时长）
+                # 第二条响应：上一条是同唤醒内的 assistant → 计入 40s
                 f.write(json.dumps({
                     "type": "message",
-                    "timestamp": "2026-09-11T12:02:40.000Z",
+                    "timestamp": "2026-09-11T12:10:20.000Z",
+                    "message": {
+                        "role": "assistant", "stopReason": "toolUse",
+                        "usage": {"output": 10}}}) + "\n")
+                # provider 失败（error 单列；usage 全零，不污染生成时长）
+                f.write(json.dumps({
+                    "type": "message",
+                    "timestamp": "2026-09-11T12:11:00.000Z",
                     "message": {
                         "role": "assistant", "stopReason": "error",
                         "usage": {}}}) + "\n")
@@ -401,18 +414,19 @@ class TestBuildReport(unittest.TestCase):
             self.assertIn("三者不可互替", txt)     # 跨度分标
             # 建议 1（e2e17 评审）：按 stopReason 原值分组——键 = 原值
             self.assertIn("stopReason：", txt)
-            # 计数 + **响应跨度合计**（fixture：12:00:00→12:00:40 = 40s；
-            # 12:00:40→12:02:40 = 2m00s 的失败等待——provider 成本可见）
-            self.assertIn("toolUse 1（40s）", txt)
-            self.assertIn("error 1（2m00s）", txt)
-            self.assertIn("响应 2 次", txt)            # toolUse + error
+            # 计数 + **同一唤醒内 Δ 合计**（B 方案）：
+            #   toolUse 2 次 → 只计第 2 条的 40s（12:09:40→12:10:20）
+            #   首条响应相对唤醒 prompt 的 9 分钟**不计**（那是跨唤醒空闲）
+            self.assertIn("toolUse 2（40s）", txt)
+            self.assertIn("error 1（40s）", txt)   # 12:10:20→12:11:00
+            self.assertIn("响应 3 次", txt)            # toolUse×2 + error
             # usage 合计：reasoning ⊂ output（同一行可见，不相加）
             self.assertIn("output 1.2k（reasoning 900）", txt)
             # 档位对照：声明（pi-agent.json）vs 生效（session 条目）
             self.assertIn("档位：声明 high", txt)
             self.assertIn("生效 high", txt)
             self.assertIn("✓ 一致", txt)
-            self.assertIn("响应跨度合计", txt)         # 口径标注
+            self.assertIn("同一唤醒内响应 Δ 合计", txt)   # 口径标注（B 方案）
             # 边界之前的历史 usage 不得计入本轮（999999 应被排除）
             self.assertNotIn("999,999", txt)
             self.assertNotIn("999.9k", txt)
