@@ -42,6 +42,7 @@ PROG = os.environ.get("MV_INVOKED_AS") or "scripts/mv.sh"
 USAGE = f"""用法:
   {PROG} --prepare "<问题>" [--background "<背景>"] [--agents "a,b,c"|4]
   {PROG} --start <spec目录> [--fork-mode compaction|budget|full]
+  {PROG} --start <spec目录> [--extension-policy none|mc-tools|all]
   {PROG} --status  [dir]
   {PROG} --report  [dir]
   {PROG} --wait    [dir]

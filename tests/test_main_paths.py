@@ -210,6 +210,67 @@ class TestMeetingLoopMain(unittest.TestCase):
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
+    def test_invalid_extension_policy_exits_nonzero(self):
+        """loop 门：protocol.json 的 extensionPolicy 非法 → [fatal] + 非零退出。
+
+        与 forkMode 同款：值域守卫在**打开任何东西之前**（配置错误不进 engine
+        重试路径）。历史字段 `extensions: true` 走兼容路径（→ all）不受影响。
+        """
+        tmp, base, w = self._make_done_env()
+        try:
+            proto_path = os.path.join(w, "protocol.json")
+            with open(proto_path) as f:
+                proto = json.load(f)
+            proto["extensionPolicy"] = "careful"     # 非法值
+            with open(proto_path, "w") as f:
+                json.dump(proto, f)
+            subprocess.run(["git", "add", "-A"], cwd=w, check=True,
+                           capture_output=True)
+            subprocess.run(["git", "commit", "-m", "bad policy"], cwd=w,
+                           check=True, capture_output=True)
+            subprocess.run(["git", "push", "origin", "HEAD"], cwd=w,
+                           check=True, capture_output=True)
+            r = subprocess.run(
+                [sys.executable, "meeting_loop.py", w, "b"],
+                cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                capture_output=True, text=True, timeout=60)
+            self.assertNotEqual(r.returncode, 0)
+            out = r.stdout + r.stderr
+            self.assertIn("[fatal]", out)
+            self.assertIn("extensionPolicy", out)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_legacy_extensions_field_maps_to_all(self):
+        """历史字段兼容：`extensions: true`（0.4.0 的布尔开关）→ all。"""
+        tmp, base, w = self._make_done_env()
+        try:
+            proto_path = os.path.join(w, "protocol.json")
+            with open(proto_path) as f:
+                proto = json.load(f)
+            proto.pop("extensionPolicy", None)
+            proto["extensions"] = True
+            with open(proto_path, "w") as f:
+                json.dump(proto, f)
+            subprocess.run(["git", "add", "-A"], cwd=w, check=True,
+                           capture_output=True)
+            subprocess.run(["git", "commit", "-m", "legacy field"], cwd=w,
+                           check=True, capture_output=True)
+            subprocess.run(["git", "push", "origin", "HEAD"], cwd=w,
+                           check=True, capture_output=True)
+            r = subprocess.run(
+                [sys.executable, "-c",
+                 "import sys; sys.path.insert(0,'.'); import meeting_loop as m;"
+                 " import meeting_fs;"
+                 " bare = meeting_fs.bare_of_workdir(sys.argv[1]);"
+                 " print(meeting_fs.read_protocol(bare).get('extensions'))",
+                 w],
+                cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                capture_output=True, text=True, timeout=60)
+            self.assertIn("True", r.stdout)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
     def test_local_protocol_edit_ignored(self):
         """协议权威在 bare：本地副本改动（未提交）不影响 —— 防止 LLM 用
         写权限改 protocol.json 影响流程判定（engine/loop/check_status 均

@@ -4,7 +4,7 @@
 复用 meeting_engine 的唯一状态机，只注入"唤醒 pi"的 responder。
 协议逻辑（锁/配额/级联/信号）全在引擎，此处只做 LLM 交互。
 
-用法：python3 meeting_loop.py <workdir> <agent> [--extensions]
+用法：python3 meeting_loop.py <workdir> <agent> [--extension-policy V]
 （配额/超时从 protocol.json 读——单一事实源；无 CLI 覆盖）
 """
 
@@ -289,7 +289,7 @@ def _prepare_fork_session(workdir, agent, sid, fork_source, fork_cwd,
 
 
 def _build_wake_cmd(workdir, agent, sid, cfg, fork_source, fork_cwd,
-                    session_dir, first_wake, with_extensions, prompt,
+                    session_dir, first_wake, extension_policy, prompt,
                     fork_mode=meeting_fs.DEFAULT_FORK_MODE, topic=""):
     """组装唤醒命令（#3 拆分，e2e7 评审）：返回 (cmd, spawn_cwd)。
 
@@ -309,19 +309,32 @@ def _build_wake_cmd(workdir, agent, sid, cfg, fork_source, fork_cwd,
     else:
         cmd = ["pi", "--mode", "json", "--session-id", sid,
                "--session-dir", session_dir]
-    # ---- agent 进程的扩展策略（design.md 决策 20）----
-    # **默认 = 零扩展**（关扩展/技能/prompt-template/主题；保留内置工具与项目内
-    # AGENTS.md）。为什么：两类插件在**我们这种 session 形态**上都是分钟级负担，
-    # 且都在关键路径上（loop 等进程退出才继续）——
+    # ---- agent 进程的扩展策略（design.md 决策 20；三档见 meeting_fs）----
+    # none（默认）：零扩展——关扩展/技能/prompt-template/主题，保留内置工具与
+    #   项目内 AGENTS.md。为什么默认它：两类插件在**我们这种 session 形态**上都是
+    #   分钟级负担、且都在关键路径上（loop 等进程退出才继续）——
     #   · AFT：大 session 上进程退出前多活数分钟（受控对照 445.9s → 0.5s）；
     #   · MC：它的 historian 对"带着大段未处理历史"的 session **每次必失败并立刻
     #     重试**（受控对照：同输入 447s → 10.3s，43 倍）。
-    # 零扩展实测（真场）：墙钟 12m31s / 每次唤醒 48.1s / 收尾≈0% / historian 0 次。
-    # 加回扩展属**显式 opt-in**（`--extensions`，协议字段 `extensions: true`），
-    # 且应有净收益账（见 design.md 决策 20 的门槛条款）。
-    if not with_extensions:
+    #   零扩展真场实测：墙钟 12m31s / 每次唤醒 48.1s / 收尾≈0% / historian 0 次。
+    # mc-tools：只要 MC 的**只读检索工具**（ctx_search）——给 agents 按需检索项目
+    #   背景的能力（背景蒸馏机制已移除，这是它的补充通道）；entry **只注册工具、
+    #   不装 hook** → 不带 historian/压缩（受控实测 historian 0/6、成本≈噪音）。
+    #   代价：本档要求本机装有 MC（默认档不依赖任何扩展，故默认路径仍可移植）。
+    # all：走 pi 默认发现（A/B 实验与显式 opt-in；应有净收益账，见门槛条款）。
+    if extension_policy == "none":
         cmd += ["--no-extensions", "--no-skills", "--no-prompt-templates",
                 "--no-themes"]
+    elif extension_policy == "mc-tools":
+        entry, err = meeting_fs.resolve_mc_tools_entry()
+        if not entry:
+            # fail-fast：静默退回零扩展会让"要给 agent 背景检索"的意图无声消失
+            log(agent, f"[fatal] mc-tools 档入口解析失败：{err}")
+            raise RuntimeError(f"mc-tools 档不可用: {err}")
+        cmd += ["--no-extensions", "--no-skills", "--no-prompt-templates",
+                "--no-themes", "-e", entry]
+    elif extension_policy != "all":      # pragma: no cover（值域守卫应已拦下）
+        raise RuntimeError(f"未知 extensionPolicy: {extension_policy!r}")
     model = cfg.get("model") or ""
     if model:
         cmd += ["--model", model]
@@ -406,8 +419,9 @@ def _run_wake_proc(cmd, spawn_cwd, workdir, agent):
                                        err or "")
 
 
-def wake_llm(workdir, agent, prompt, with_extensions=False, fork_source=None,
-             fork_cwd=None,
+def wake_llm(workdir, agent, prompt,
+             extension_policy=meeting_fs.DEFAULT_EXTENSION_POLICY,
+             fork_source=None, fork_cwd=None,
              fork_mode=meeting_fs.DEFAULT_FORK_MODE, topic=""):
     """唤醒 pi（fork-only：首唤由本地生成 fork 源 + `--session` 打开，
     后续 `--session-id` 续接）。返回 (sessionID, returncode)。
@@ -432,7 +446,7 @@ def wake_llm(workdir, agent, prompt, with_extensions=False, fork_source=None,
         sid = str(uuid.uuid4())
     cmd, spawn_cwd = _build_wake_cmd(workdir, agent, sid, cfg, fork_source,
                                      fork_cwd, session_dir, first_wake,
-                                     with_extensions, prompt, fork_mode, topic)
+                                     extension_policy, prompt, fork_mode, topic)
 
     log_dir = os.path.join(base, "wake-logs")
     os.makedirs(log_dir, exist_ok=True)
@@ -509,7 +523,7 @@ def _read_perspective_brief(workdir, agent):
     return brief or None
 
 
-def make_responder(with_extensions, fork_source=None, fork_cwd=None,
+def make_responder(extension_policy, fork_source=None, fork_cwd=None,
                    fork_mode=meeting_fs.DEFAULT_FORK_MODE, topic=""):
     """构造真实 LLM responder：唤醒 pi，LLM 写内容文件。
 
@@ -534,7 +548,7 @@ def make_responder(with_extensions, fork_source=None, fork_cwd=None,
             if mem_available_mb() < MIN_MEM_MB:
                 log(agent, "内存不足——抛可恢复异常（不代写 freezing，下轮重试）")
                 raise RecoverableWakeError("内存不足")
-            wake_llm(workdir, agent, prompt, with_extensions,
+            wake_llm(workdir, agent, prompt, extension_policy,
                      fork_source=fork_source, fork_cwd=fork_cwd)
             return True
         if rr_turn:
@@ -554,7 +568,7 @@ def make_responder(with_extensions, fork_source=None, fork_cwd=None,
         if mem_available_mb() < MIN_MEM_MB:
             log(agent, "内存不足——抛可恢复异常（不代写 freezing，下轮重试）")
             raise RecoverableWakeError("内存不足")
-        wake_llm(workdir, agent, prompt, with_extensions,
+        wake_llm(workdir, agent, prompt, extension_policy,
                  fork_source=fork_source, fork_cwd=fork_cwd,
                  fork_mode=fork_mode, topic=topic)
         return True
@@ -574,12 +588,18 @@ if __name__ == "__main__":
     if len(sys.argv) < 3:
         print("用法: python3 meeting_loop.py <workdir> <agent> "
               "[--max-meeting N] [--max-rr N] [--stall-timeout S]"
-              " [--extensions]")
+              " [--extension-policy none|mc-tools|all]")
         sys.exit(1)
     workdir, agent = sys.argv[1], sys.argv[2]
     recover_git_lock(workdir, agent)
-    # 默认零扩展；`--extensions` 显式 opt-in（协议字段优先）
-    with_extensions = "--extensions" in sys.argv
+    # 扩展策略：CLI 先填，协议字段（若有）覆盖——与 forkMode 同款
+    extension_policy = meeting_fs.DEFAULT_EXTENSION_POLICY
+    if "--extension-policy" in sys.argv:
+        i = sys.argv.index("--extension-policy")
+        if i + 1 < len(sys.argv):
+            extension_policy = sys.argv[i + 1]
+    elif "--extensions" in sys.argv:            # 历史别名（0.4.0 的布尔开关）
+        extension_policy = "all"
     mm, mr, st = 10, 7, 600
     # 协议从 **bare HEAD** 读（单一来源 = 共享事实；本地副本 LLM 可改）——
     # 与 engine participants()/check_status 同一原语
@@ -589,8 +609,16 @@ if __name__ == "__main__":
         print(f"[fatal] protocol.json 读取失败（bare HEAD 无有效内容）: {bare}",
               flush=True)
         sys.exit(1)
-    if proto.get("extensions"):
-        with_extensions = True
+    if proto.get("extensionPolicy"):
+        extension_policy = proto["extensionPolicy"]
+    elif proto.get("extensions") is True:       # 历史字段兼容（→ all）
+        extension_policy = "all"
+    if extension_policy not in meeting_fs.EXTENSION_POLICIES:
+        # 值域守卫（与 forkMode 同款四层守卫之一：loop 门）——非法值不进 engine
+        # 重试路径，直接 fatal 退出（配置错误就该在启动时响）
+        print(f"[fatal] 非法 extensionPolicy: {extension_policy!r}"
+              f"（合法值: {'/'.join(meeting_fs.EXTENSION_POLICIES)}）", flush=True)
+        sys.exit(1)
     if proto.get("maxMeetingRounds"):
         mm = proto["maxMeetingRounds"]
     if proto.get("maxRRRounds"):
@@ -615,7 +643,7 @@ if __name__ == "__main__":
         sys.exit(1)
     try:
         agent_loop(workdir, agent,
-                   make_responder(with_extensions,
+                   make_responder(extension_policy,
                                   fork_source=fork_source,
                                   fork_cwd=proto.get("forkCwd") or "",
                                   fork_mode=fork_mode_cfg,

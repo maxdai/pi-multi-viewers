@@ -3,7 +3,8 @@
 
 用法：
   python3 start_discussion.py --dir mymeet --topic "主题" --agents a,b \
-      [--stances '{"a": "立场1", "b": "立场2"}'] [--start] [--extensions] \
+      [--stances '{"a": "立场1", "b": "立场2"}'] [--start] \
+      [--extension-policy none|mc-tools|all] \
       [--models '{"a": "provider/model"}'] [--max-meeting 10] [--max-rr 7]
 
 复杂内容用 spec 规格目录（设计 16，与 CLI 内容参数互斥）：
@@ -350,7 +351,7 @@ def setup_environment(args, participants, base, spec_dir=None,
     # 共享配置（work-a 提交，setup commit 进 bare）
     with open(os.path.join(wa, "protocol.json"), "w") as f:
         json.dump(gen_protocol(spec_topic or args.topic, participants, args.max_meeting,
-                               args.max_rr, args.extensions, args.result_writer,
+                               args.max_rr, args.extension_policy, args.result_writer,
                                args.stall_timeout,
                                fork_source=getattr(args, "fork_source", None),
                                fork_cwd=os.getcwd(),
@@ -420,7 +421,7 @@ def setup_environment(args, participants, base, spec_dir=None,
     print(f"[setup] 环境就绪: {base}（{len(participants)} agents: {', '.join(participants)}）")
     print(f"[setup] resultWriter={rw}, maxMeeting={args.max_meeting}, maxRR={args.max_rr}, "
           f"立场={'有' if (args.stances or spec_dir) else '无'}, "
-          f"extensions={args.extensions}")
+          f"extensionPolicy={args.extension_policy}")
 
 
 def _preserve_result_md(base):
@@ -550,9 +551,15 @@ def main():
                              "protocol.json，各 agent 首唤由本地生成 fork "
                              "源挂载主上下文；不传 = 从主 pi 环境自动解析"
                              "（PI_SESSION_ID；解析失败明确报错）")
-    parser.add_argument("--extensions", action="store_true",
-                        help="让 agents 加载外部扩展（默认零扩展：不加载任何"
-                             "外部扩展/技能/prompt-template/主题）")
+    parser.add_argument(
+        "--extension-policy",
+        choices=list(meeting_fs.EXTENSION_POLICIES),
+        default=meeting_fs.DEFAULT_EXTENSION_POLICY,
+        help="agents 的扩展策略：none=零扩展（默认）；mc-tools=只要 MC 的"
+             "只读检索工具 ctx_search（需要本机装有 MC）；all=走 pi 默认发现")
+    parser.add_argument("--extensions", dest="extension_policy",
+                        action="store_const", const="all",
+                        help="[历史别名] 等价 --extension-policy all")
     parser.add_argument("--start", action="store_true", help="创建后启动讨论")
     parser.add_argument("--skip-setup", action="store_true",
                         help="跳过环境生成，只启动已有环境（需 --dir）")
@@ -704,12 +711,12 @@ def main():
             workdir = os.path.join(base, f"work-{p}")
             cmd = [sys.executable, os.path.join(base, "meeting_loop.py"),
                    workdir, p]
-            if args.extensions:
-                cmd.append("--extensions")
+            if args.extension_policy != meeting_fs.DEFAULT_EXTENSION_POLICY:
+                cmd += ["--extension-policy", args.extension_policy]
             # 配额（max-meeting/max-rr/stall-timeout）是环境属性：创建时
             # 固化在 protocol.json，启动继承（loop 读 protocol 优先）。
             # 不传 CLI —— 避免无条件覆盖 protocol.json 的固化值
-            # （审核 C1：配额单一事实源；与 extensions 处理一致）
+            # （审核 C1：配额单一事实源；与 extension-policy 处理一致）
             with open(os.path.join(base, f"loop-{p}.log"), "w") as f:
                 procs.append(subprocess.Popen(cmd, stdout=f,
                                               stderr=subprocess.STDOUT,

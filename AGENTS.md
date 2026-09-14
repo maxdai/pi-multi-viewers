@@ -54,17 +54,27 @@ tests/               测试（unittest discover tests）
 移除，fork 使其冗余；background 只写显式边界，不复述对话）。
 
 **agent 进程环境**：`GIT_CEILING_DIRECTORIES`（git 上溯防护）——注入点
-`meeting_loop._spawn_env`。**扩展策略（决策 20）：默认零扩展** ——
-`--no-extensions --no-skills --no-prompt-templates --no-themes`，只留 pi 内置
-工具与项目内 AGENTS.md。为什么：两类插件在**我们这种 session 形态**上都是分钟级
-负担、且都在关键路径上（loop 等进程退出才继续）——
+`meeting_loop._spawn_env`。**扩展策略（决策 20）：三档**
+（`meeting_fs.EXTENSION_POLICIES` / 协议 `extensionPolicy` / CLI `--extension-policy`）：
+
+| 档 | 唤醒命令 | 用途 |
+|---|---|---|
+| **none**（默认） | `--no-extensions --no-skills --no-prompt-templates --no-themes` | 最快、可移植（不依赖任何扩展）|
+| **mc-tools** | 同上 + `-e <MC 的 subagent-entry.js>` | 给 agents **按需检索项目背景**（`ctx_search`）——背景蒸馏机制已移除，这是其补充通道 |
+| **all** | 不加任何 `--no-*`（pi 默认发现）| A/B 实验与显式 opt-in |
+
+为什么默认 none：两类插件在**我们这种 session 形态**上都是分钟级负担、且都在关键路径上
+（loop 等进程退出才继续）——
 · **AFT**：大 session 上进程退出前多活数分钟（受控对照 445.9s → 0.5s）；
-· **MC**：它的 historian 对"带大段未处理历史"的 session **每次必失败并立刻重试**
+· **MC 全档**：它的 historian 对"带大段未处理历史"的 session **每次必失败并立刻重试**
 （受控对照：同输入 **447s → 10.3s，43 倍**）。
 零扩展**真场实测**：墙钟 12m31s / 每次唤醒 48.1s / 收尾≈0% / historian 0 次。
-加回扩展 = **显式 opt-in**（`--extensions` / 协议 `extensions: true`），且须自证
-净收益（design.md 决策 20 的门槛条款）。**主 pi 完全不受影响**（只改我们 spawn 的
-agent 进程命令行；主 pi 的 MC/历史学家照常）。
+**mc-tools 档的实测**：entry **只注册工具、不装 hook** → historian 0/6 ✓；
+成本与 none 无差（受控 6 次：中位 7.8s vs 9.2s，差在噪音内 ✓）；`ctx_search` 实测可用 ✓。
+**入口解析 fail-fast**（`meeting_fs.resolve_mc_tools_entry`：从 pi 的 packages 找 MC 包 →
+读它声明的扩展入口 → 取同目录的 subagent-entry.js）；缺 MC 时**响亮失败**、不静默退回 none。
+**依赖边界**：只有 mc-tools 档要求本机装 MC；none 档零依赖（默认路径可移植）。
+**主 pi 完全不受影响**（只改我们 spawn 的 agent 进程命令行；主 pi 的 MC/历史学家照常）。
 
 **关键约定**：pi sessions 目录编码 = `--` + 去首尾斜杠内斜杠换 `-` + `--`
 （`/tmp` → `--tmp--`；wrapper 解析 fork 源依赖它，编码错一根横线 = 静默

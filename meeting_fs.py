@@ -60,6 +60,75 @@ DEFAULT_STALL_TIMEOUT = 600
 DEFAULT_THINKING = "max"
 
 
+def _package_dir(entry, agent_dir):
+    """把 pi 的 packages 条目解析成包目录（找不到 → None）。
+
+    形态（pi settings.json 的 packages，实测两种）：
+      "npm:@scope/name"  → <agent_dir>/npm/node_modules/@scope/name
+      "../../repo-name"  → 相对 <agent_dir> 解析（绝对路径原样）
+    """
+    if not isinstance(entry, str):
+        # 对象形态（如 {"source": "..."}）——取 source 字段；其余形态无法解析
+        entry = (entry or {}).get("source") if isinstance(entry, dict) else None
+    if not isinstance(entry, str) or not entry.strip():
+        return None
+    e = entry.strip()
+    if e.startswith("npm:"):
+        rel = e[len("npm:"):]
+        cand = os.path.join(agent_dir, "npm", "node_modules", *rel.split("/"))
+    else:
+        cand = e if os.path.isabs(e) else os.path.join(agent_dir, e)
+    cand = os.path.normpath(cand)
+    return cand if os.path.isdir(cand) else None
+
+
+def resolve_mc_tools_entry(agent_dir=None):
+    """解析 MC 的**只读工具入口**（`dist/subagent-entry.js`）——"mc-tools" 档用。
+
+    为什么这样解析而不硬编码路径：MC 自己就是用"主入口的**兄弟文件**"
+    （其源码 `resolveSiblingEntryPath("subagent-entry.js")`）定位它。我们的
+    等价做法 = 从 pi 的注册表（settings.json.packages）找到 MC 包目录 → 读它
+    package.json 声明的扩展入口（`pi.extensions[0]`）→ 取同目录下的
+    subagent-entry.js。
+
+    **fail-fast**：任一步缺失返回 (None, 原因)——调用方必须报错（不静默降级成
+    零扩展：那会让"要给 agent 背景检索能力"的意图无声消失）。
+
+    依赖边界（写进决策记录）：这一档**要求本机装有 MC**——它是 MC 的能力；
+    默认档 none 不依赖任何扩展，故默认路径仍可移植。
+    """
+    agent_dir = agent_dir or pi_agent_dir()
+    try:
+        with open(os.path.join(agent_dir, "settings.json"), encoding="utf-8") as f:
+            pkgs = json.load(f).get("packages") or []
+    except (OSError, ValueError) as e:
+        return None, f"读不到 pi 的 packages（{agent_dir}/settings.json）: {e}"
+    pkg_dir = None
+    for entry in pkgs:
+        name = entry if isinstance(entry, str) else (
+            (entry or {}).get("source") if isinstance(entry, dict) else None)
+        if isinstance(name, str) and MC_PACKAGE in name:
+            pkg_dir = _package_dir(entry, agent_dir)
+            break
+    if not pkg_dir:
+        return None, (f"packages 里没有可解析的 {MC_PACKAGE}（装它："
+                      f"pi install npm:{MC_PACKAGE}）")
+    try:
+        with open(os.path.join(pkg_dir, "package.json"), encoding="utf-8") as f:
+            man = json.load(f)
+    except (OSError, ValueError) as e:
+        return None, f"读不到 {MC_PACKAGE} 的 package.json: {e}"
+    entry_rel = ((man.get("pi") or {}).get("extensions") or [None])[0]
+    if not entry_rel:
+        return None, f"{MC_PACKAGE} 未声明 pi.extensions（版本不兼容？）"
+    cand = os.path.normpath(
+        os.path.join(pkg_dir, os.path.dirname(entry_rel), "subagent-entry.js"))
+    if not os.path.isfile(cand):
+        return None, (f"找不到 {MC_PACKAGE} 的只读工具入口（"
+                      f"{os.path.relpath(cand, pkg_dir)}）——上游版本可能改了布局")
+    return cand, ""
+
+
 def pi_agent_dir():
     """pi 的 agent 目录（`$PI_CODING_AGENT_DIR` 或 `~/.pi/agent`）——**单一实现**。
 
@@ -610,6 +679,20 @@ def parse_log_nameonly(output):
 # 两种语义角色（勿混）：FORK_MODES 是**处理哪个模式**（分派仍用字面量）；
 # DEFAULT_FORK_MODE 是**缺省填谁**（仅默认值位置，全仓引此常量）。
 # 历史值 active/curated（rename 前）按非法值处理（解析入口即报错）。
+# ---- agent 进程的扩展策略（design.md 决策 20）----
+# 三种语义（勿混）：EXTENSION_POLICIES 是**合法值域**（分派与值域守卫引它）；
+# DEFAULT_EXTENSION_POLICY 是**缺省填谁**（全仓引此常量）。
+#   none     : 零扩展（默认）——最快、可移植（不依赖任何扩展）
+#   mc-tools : 只要 MC 的**只读检索工具**（ctx_search）——给 agents 按需检索
+#              项目背景的能力（背景蒸馏已移除，这是它的补充通道）；MC 的
+#              historian/压缩机制**不在**这一档（入口只注册工具、不装 hook）
+#   all      : 走 pi 默认扩展发现（A/B 实验与显式 opt-in 用）
+EXTENSION_POLICIES = ("none", "mc-tools", "all")
+DEFAULT_EXTENSION_POLICY = "none"
+# "mc-tools" 档引用的包（该档 = 那个包的能力，故具名引用而非通用机制：
+# 入口是它的内部文件，路径解析见 resolve_mc_tools_entry 的 docstring）
+MC_PACKAGE = "@cortexkit/pi-magic-context"
+
 FORK_MODES = ("budget", "compaction", "full")
 DEFAULT_FORK_MODE = "budget"
 #

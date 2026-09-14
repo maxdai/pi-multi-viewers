@@ -466,10 +466,29 @@ commit 是溯源记录、本节是长期引用点——不并存两份权威值�
       档位对照 ✓。同一机制的对照：e2e19 71.6s·17m19s、e2e20 81.6s·20m34s、
       e2e21 **330s·1h13m**（historian 风暴 62 次 60 失败）。
 
-    **做法**：默认唤醒命令带 `--no-extensions --no-skills --no-prompt-templates
-    --no-themes`（保留内置工具与项目内 AGENTS.md）；加回扩展是**显式 opt-in**
-    （CLI `--extensions` / 协议字段 `extensions: true`，`gen_protocol` **恒写**该
-    字段——默认 `false`）。**主 pi 不受影响**（只改我们 spawn 的 agent 命令行）。
+    **做法（三档；值域/默认值的家 = `meeting_fs.EXTENSION_POLICIES` /
+    `DEFAULT_EXTENSION_POLICY`，协议字段 `extensionPolicy`，CLI
+    `--extension-policy`）**：
+
+    | 档 | 唤醒命令 | 语义 |
+    |---|---|---|
+    | `none`（默认） | 四个 `--no-*` | 零扩展：最快、可移植 |
+    | `mc-tools` | 四个 `--no-*` + `-e <MC subagent-entry.js>` | 只要 MC 的**只读检索工具**（`ctx_search`）|
+    | `all` | 不加任何 `--no-*` | pi 默认发现（A/B 与显式 opt-in）|
+
+    **`mc-tools` 档**（2026-09-14 加，用户裁定"提供 ctx_search 是必要的 background
+    补充"）：背景蒸馏机制移除后，agents 没有任何**主项目背景**通道；MC 的
+    `subagent-entry.js`（MC **自己**给它的"搜索类子代理"用的入口）**只注册工具、
+    不装任何 hook** → 给 agents 按需检索能力（memories / docs / 历史），
+    **不含** historian/压缩/打标。实测：`ctx_search` 可用 ✓；historian 0/6 ✓；
+    成本与 none 无差（受控 6 次：中位 7.8s vs 9.2s，差在噪音内 ✓）。
+    **入口解析 fail-fast**（`resolve_mc_tools_entry`：pi 的 packages → MC 包 →
+    它声明的扩展入口 → 同目录 `subagent-entry.js`）；缺 MC 时**响亮失败**
+    （静默退回 none 会让"要给 agent 背景检索"的意图无声消失）。
+    **依赖边界**：仅 mc-tools 档要求本机装 MC（它是 MC 的能力）；`none` 零依赖，
+    默认路径仍可移植。历史字段 `extensions: true` 走兼容路径（→ `all`）。
+
+    **主 pi 不受影响**（只改我们 spawn 的 agent 命令行）。
 
     **代价**：agents 用 pi 内置 read/write/edit/bash/grep/glob；无 `ctx_*` 与知识
     注入。零扩展真场里三视角自述："内置工具胜任本任务、未因缺工具放弃或简化检查

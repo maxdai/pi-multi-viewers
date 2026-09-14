@@ -18,6 +18,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import meeting_fs
 import start_discussion as sd
 from meeting_fs import (git_head, git_ls_files, git_show, list_my_messages,
                         new_messages_with_meta, next_msg_id, read_point,
@@ -38,7 +39,7 @@ class Args:
 
     def __init__(self, topic="组合测试主题", agents="a,b",
                  stances=None, background=None, questions=None,
-                 models=None, max_meeting=10, max_rr=7, extensions=False,
+                 models=None, max_meeting=10, max_rr=7, extension_policy=meeting_fs.DEFAULT_EXTENSION_POLICY,
                  result_writer=None, stall_timeout=600):
         self.topic = topic
         self.agents = agents
@@ -48,7 +49,7 @@ class Args:
         self.models = models
         self.max_meeting = max_meeting
         self.max_rr = max_rr
-        self.extensions = extensions
+        self.extension_policy = extension_policy
         self.result_writer = result_writer
         self.stall_timeout = stall_timeout
 

@@ -731,17 +731,17 @@ class TestSpawnEnv(unittest.TestCase):
 
 
 class TestExtensionPolicy(unittest.TestCase):
-    """agent 进程的扩展策略：**默认零扩展**（design.md 决策 20）。
+    """agent 进程的扩展策略：三档（design.md 决策 20）——none / mc-tools / all。
 
-    实测动机（真场 + 受控对照）：
+    实测依据：
       · AFT：大 session 上进程退出前多活数分钟（受控 445.9s → 0.5s）；
       · MC：historian 对"带大段未处理历史"的 session 每次必失败并立刻重试
-        （受控：同输入 447s → 10.3s，43 倍）。
-    零扩展真场：墙钟 12m31s / 每次唤醒 48.1s / 收尾≈0% / historian 0 次。
-    加回扩展 = 显式 opt-in（`--extensions` / 协议 `extensions: true`）。
+        （受控：同输入 447s → 10.3s，43 倍）；
+      · mc-tools 档（只要 MC 的只读工具入口）：historian 0/6、成本与零扩展
+        无差（受控 6 次：中位 7.8s vs 9.2s，差在噪音内）、ctx_search 实测可用。
     """
 
-    def _cmd(self, with_extensions):
+    def _cmd(self, policy):
         import meeting_loop
         with tempfile.TemporaryDirectory() as tmp:
             base = os.path.join(tmp, "mv-x")
@@ -750,30 +750,78 @@ class TestExtensionPolicy(unittest.TestCase):
             cmd, _ = meeting_loop._build_wake_cmd(
                 wd, "a", "sid", {"model": "", "thinking": "", "prompt_file": ""},
                 None, tmp, os.path.join(base, "pi-sessions"), False,
-                with_extensions, "唤醒")
+                policy, "唤醒")
         return cmd
 
     def test_default_is_zero_extensions(self):
-        """默认：四个 --no-* 都在，且**不**显式加载任何扩展。"""
-        cmd = self._cmd(False)
+        """none（默认）：四个 --no-* 都在，且**不**显式加载任何扩展。"""
+        cmd = self._cmd("none")
         for flag in ("--no-extensions", "--no-skills",
                      "--no-prompt-templates", "--no-themes"):
             self.assertIn(flag, cmd)
         self.assertNotIn("-e", cmd)
         self.assertNotIn("--extension", cmd)
 
-    def test_opt_in_loads_extensions(self):
-        """显式 opt-in：不加任何 --no-*（走 pi 默认发现）。"""
-        cmd = self._cmd(True)
+    def test_mc_tools_loads_only_the_entry(self):
+        """mc-tools：仍是零扩展 + **只**显式加载 MC 的只读工具入口。"""
+        import meeting_fs
+        cmd = self._cmd("mc-tools")
+        for flag in ("--no-extensions", "--no-skills",
+                     "--no-prompt-templates", "--no-themes"):
+            self.assertIn(flag, cmd)
+        entry, err = meeting_fs.resolve_mc_tools_entry()
+        if entry:                      # 本机装有 MC 时校验具体入口
+            self.assertIn("-e", cmd)
+            self.assertIn(entry, cmd)
+        else:                          # 没装 → 必须 fail-fast（不静默降级）
+            self.assertEqual(entry, None)
+            self.assertTrue(err)
+
+    def test_mc_tools_missing_entry_fails_loud(self):
+        """MC 缺失时必须**响亮失败**（静默退回零扩展 = 意图无声消失）。"""
+        import meeting_fs
+        import meeting_loop
+        with tempfile.TemporaryDirectory() as tmp:
+            base = os.path.join(tmp, "mv-x")
+            wd = os.path.join(base, "work-a")
+            os.makedirs(wd)
+            with mock.patch("meeting_fs.resolve_mc_tools_entry",
+                            return_value=(None, "模拟：没装 MC")):
+                with self.assertRaises(RuntimeError) as cm:
+                    meeting_loop._build_wake_cmd(
+                        wd, "a", "sid",
+                        {"model": "", "thinking": "", "prompt_file": ""},
+                        None, tmp, os.path.join(base, "pi-sessions"), False,
+                        "mc-tools", "唤醒")
+            self.assertIn("mc-tools", str(cm.exception))
+
+    def test_all_uses_default_discovery(self):
+        """all：不加任何 --no-*（走 pi 默认发现）。"""
+        cmd = self._cmd("all")
         for flag in ("--no-extensions", "--no-skills",
                      "--no-prompt-templates", "--no-themes"):
             self.assertNotIn(flag, cmd)
 
-    def test_resolve_extension_entries_is_gone(self):
-        """配套机制已随零扩展退役（不留死代码）。"""
+    def test_resolve_entry_or_clear_error(self):
+        """解析器二态：要么给**存在**的入口文件，要么给非空原因（无静默）。"""
         import meeting_fs
-        self.assertFalse(hasattr(meeting_fs, "resolve_extension_entries"))
-        self.assertFalse(hasattr(meeting_fs, "KEEP_EXTENSIONS"))
+        entry, err = meeting_fs.resolve_mc_tools_entry()
+        if entry:
+            self.assertEqual(err, "")
+            self.assertTrue(os.path.isfile(entry))
+            self.assertTrue(entry.endswith("subagent-entry.js"))
+        else:
+            self.assertTrue(err)
+
+    def test_resolve_entry_reports_missing_package(self):
+        """packages 里没有 MC → 明确说装它的办法，不抛异常。"""
+        import meeting_fs
+        with tempfile.TemporaryDirectory() as tmp:
+            with open(os.path.join(tmp, "settings.json"), "w") as f:
+                json.dump({"packages": ["npm:something-else"]}, f)
+            entry, err = meeting_fs.resolve_mc_tools_entry(agent_dir=tmp)
+            self.assertIsNone(entry)
+            self.assertIn("pi-magic-context", err)
 
 
 if __name__ == "__main__":

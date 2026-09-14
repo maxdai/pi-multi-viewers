@@ -19,6 +19,8 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import meeting_fs  # noqa: E402
+
 SD = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                   "start_discussion.py")
 
@@ -90,7 +92,7 @@ class TestDirFormMatrix(unittest.TestCase):
         args = sd.argparse.Namespace(
             dir="mydisc", cleanup=False, status=False, wait=False,
             skip_setup=False, spec=None, spec_gen=None, topic=None,
-            background=None, start=False, extensions=False,
+            background=None, start=False, extension_policy=meeting_fs.DEFAULT_EXTENSION_POLICY,
             stances=None, models=None, questions=None, agents=None,
             result_writer=None, max_meeting=10, max_rr=7, stall_timeout=600)
         # 复制 main() 的语义分支（与实现保持同步的断言）

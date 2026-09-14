@@ -38,12 +38,17 @@ class TestGenProtocol(unittest.TestCase):
         p = gen_protocol("t", ["a", "b", "c"], 5, 5, result_writer="a")
         self.assertEqual(p["resultWriter"], "a")
 
-    def test_extensions_flag(self):
-        """协议**恒**显式写出扩展策略；默认零扩展（False）。"""
-        p = gen_protocol("t", ["a", "b"], 5, 5, extensions=True)
-        self.assertEqual(p.get("extensions"), True)
+    def test_extension_policy_field(self):
+        """协议**恒**显式写出扩展策略；默认 none。"""
+        p = gen_protocol("t", ["a", "b"], 5, 5, extension_policy="mc-tools")
+        self.assertEqual(p.get("extensionPolicy"), "mc-tools")
         p2 = gen_protocol("t", ["a", "b"], 5, 5)
-        self.assertEqual(p2.get("extensions"), False)
+        self.assertEqual(p2.get("extensionPolicy"), "none")
+
+    def test_extension_policy_rejects_unknown(self):
+        """非法值就地报错（不落盘半成品）——与 forkMode 同款。"""
+        with self.assertRaises(ValueError):
+            gen_protocol("t", ["a", "b"], 5, 5, extension_policy="whatever")
 
     def test_fork_fields(self):
         """fork 模式（多视角）：--fork-source → protocol.json 写入
