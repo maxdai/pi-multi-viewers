@@ -31,6 +31,7 @@
 | `2026-09-13-e2e21-postfix-review.md` | 审阅 `5e02a67`（并验证报告口径修复） | AFT legacy 检测 4 组路径**多一层 `aft/`**（死检查 + 静默假阴性）；子串预筛是对设计的错误陈述；`n`/`sec` 分母不一致导致均值低估 | `5cc0b5e` 之后的批 |
 | `2026-09-13-e2e23-time-breakdown-analysis.md` | 一次分析的**时间构成**（哪些必要、哪些可省） | AFT / MC historian 两笔分钟级开销都不在报告里；反对"不等退出就推进"与"新增常驻机制" | `98786d6` + `c46d996` / `9deefac` |
 | `2026-09-14-e2e24-extension-policy-review.md` | 扩展策略三档（默认 mc-tools）的实现与证据链 + `ctx_search` 价值评估 | **S1：缺 MC 的降级路径提前 return → 命令被截断（缺 model/print/注入、cwd 错）**；S1a 测试判别力不足；E2 报告缺"声明 vs 生效"；E1 成本口径超出精度；T1–T3 文本矛盾；F5/F6/F7/S2/F9 解析链缺陷；**ctx_search 9 次调用全为问卷诱导、0 次决定性帮助、命中 1 条过期记忆** | `91a1171`（Batch 1+3）、`b9329fb`（Batch 2 删死代码）|
+| `2026-09-14-e2e25-doc-drift-review.md` | 文档 vs 代码一致性（文档漂移）+ ctx_search 的**自然使用**观察 | **三处文档仍写"兜底 mv-* 并警告"而代码是无兜底、未匹配报错**（行为语义相反）；README 缺 `--extension-policy`；报告字段列表过期；4 条缺失项；**根因 = 对实现的复述**（治本：引事实源不复制）；自然使用观察：`ctx_search` **0 次**、historian 0 次 | `ba204ef` |
 
 ## 环境口径（读报告时的背景）
 
