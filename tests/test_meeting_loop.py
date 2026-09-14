@@ -766,7 +766,8 @@ class TestExtensionPolicy(unittest.TestCase):
         """默认档 = mc-tools（用户裁定：ctx_search 是必要的 background 补充）。"""
         import meeting_fs
         self.assertEqual(meeting_fs.DEFAULT_EXTENSION_POLICY, "mc-tools")
-        self.assertEqual(meeting_fs.EXTENSION_POLICIES[0], "mc-tools")
+        self.assertIn("mc-tools", meeting_fs.EXTENSION_POLICIES)
+        self.assertIn("none", meeting_fs.EXTENSION_POLICIES)   # 零依赖备选仍在
 
     def test_mc_tools_loads_only_the_entry(self):
         """mc-tools（默认档）：仍是零扩展 + **只**显式加载 MC 的只读工具入口。"""

@@ -690,7 +690,9 @@ def parse_log_nameonly(output):
 #              代价：本档要求本机装有 MC（缺则 fail-fast，见 resolve_mc_tools_entry）
 #   none     : 零扩展——最快、**零依赖**（不依赖任何扩展；无 MC 的机器/CI 用这档）
 #   all      : 走 pi 默认扩展发现（A/B 实验与显式 opt-in 用）
-EXTENSION_POLICIES = ("none", "mc-tools", "all")
+# （顺序只影响 CLI 帮助的罗列——**不承载语义**，勿按下标取值：
+#  默认档看 DEFAULT_EXTENSION_POLICY）
+EXTENSION_POLICIES = ("mc-tools", "none", "all")
 DEFAULT_EXTENSION_POLICY = "mc-tools"
 # mc-tools 档**允许**（而非要求）MC：找不到 MC 时降级为零扩展，但必须**可见**
 # （打印一行说明 `ctx_search` 本次不可用）——无静默铁律。
