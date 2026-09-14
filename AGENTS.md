@@ -69,10 +69,11 @@ tests/               测试（unittest discover tests）
 · **MC 全档**：它的 historian 对"带大段未处理历史"的 session **每次必失败并立刻重试**
 （受控对照：同输入 **447s → 10.3s，43 倍**）。
 零扩展**真场实测**：墙钟 12m31s / 每次唤醒 48.1s / 收尾≈0% / historian 0 次。
-**mc-tools 档的实测**：entry **只注册工具、不装 hook** → historian 0/6 ✓；
-成本与 none 无差（受控 6 次：中位 7.8s vs 9.2s，差在噪音内 ✓）；`ctx_search` 实测可用 ✓。
+**mc-tools 档的实测**：entry **只注册工具、不装 hook** → historian 0/6 ✓（生产 0/3 ✓）；
+`ctx_search` 实测可用 ✓；成本**未测得显著差异**（受控探针 n 小、组内方差>组间差 ✗；
+生产基线：本场 strict=1、n=19，唤醒启动段中位 **0.68s**、收尾中位 0.04s ✓）。
 **入口解析 fail-fast**（`meeting_fs.resolve_mc_tools_entry`：从 pi 的 packages 找 MC 包 →
-读它声明的扩展入口 → 取同目录的 subagent-entry.js）；缺 MC 时**响亮失败**、不静默退回 none。
+读它声明的扩展入口 → 取同目录的 subagent-entry.js）；缺 MC 时**可见降级**为零扩展。
 **依赖边界**：mc-tools 档**允许而非要求** MC——缺 MC 时降级为零扩展，且**可见**
 （打印一行"本次按零扩展运行：ctx_search 不可用"；无静默铁律）；`none` 档零依赖
 （无 MC 的机器/CI 显式选它）。**测试/探针保真**：设 `MV_MC_TOOLS_STRICT=1` →

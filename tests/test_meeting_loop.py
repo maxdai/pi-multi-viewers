@@ -784,6 +784,63 @@ class TestExtensionPolicy(unittest.TestCase):
             self.assertEqual(entry, None)
             self.assertTrue(err)
 
+    def test_downgrade_command_is_identical_to_none(self):
+        """S1 验收（e2e24 评审）：降级返回与 none 返回**逐字同形** + cwd 一致。
+
+        修复前的 bug：降级分支自己拼前缀后提前 return → 截断掉
+        `--model`/`--thinking`/`--append-system-prompt`/`--print` 与 spawn cwd
+        （在"无 MC 的机器"上产出残缺命令）。装置要点：**同一 base**（否则路径
+        天然不同、逐字比较无意义）+ **非空配置**（空值会削弱本用例判别力）。
+        """
+        import meeting_loop
+        with tempfile.TemporaryDirectory() as tmp:
+            base = os.path.join(tmp, "mv-proj")
+            wd = os.path.join(base, "work-a")
+            os.makedirs(wd)
+            cfg = {"model": "prov/model-x", "thinking": "max", "prompt_file": ""}
+            args = (wd, "a", "sid", cfg, None, tmp,
+                    os.path.join(base, "pi-sessions"), False)
+            with mock.patch("meeting_fs.resolve_mc_tools_entry",
+                            return_value=(None, "模拟：没装 MC")), \
+                    mock.patch.dict(os.environ,
+                                    {meeting_fs.MC_TOOLS_STRICT_ENV: ""}):
+                deg, cwd_deg = meeting_loop._build_wake_cmd(*args, "mc-tools", "唤醒")
+                none, cwd_none = meeting_loop._build_wake_cmd(*args, "none", "唤醒")
+        self.assertEqual(deg, none)              # 逐字同形（无 -e、其余全同）
+        self.assertEqual(cwd_deg, cwd_none)      # spawn cwd 一致
+        self.assertFalse(cwd_deg.endswith("pi-sessions"))   # ≠ session 目录
+        for flag in ("--model", "--thinking", "--print", "--approve"):
+            self.assertIn(flag, deg)
+
+    def test_first_wake_logs_policy_line(self):
+        """首唤打**登记行**（声明/生效/strict）——报告据此给"声明 vs 生效"。"""
+        import contextlib
+        import io
+        import meeting_loop
+        with tempfile.TemporaryDirectory() as tmp:
+            base = os.path.join(tmp, "mv-proj")
+            wd = os.path.join(base, "work-a")
+            os.makedirs(wd)
+            # 首唤路径需要合法 fork 源（只有 header 的最小形态即可）
+            src = os.path.join(tmp, "src.jsonl")
+            with open(src, "w") as f:
+                f.write(json.dumps({"type": "session", "version": 3,
+                                    "id": "src", "timestamp": "2026-01-01T00:00:00Z"}) + "\n")
+            buf = io.StringIO()
+            with mock.patch("meeting_fs.resolve_mc_tools_entry",
+                            return_value=(None, "模拟：没装 MC")), \
+                    mock.patch.dict(os.environ,
+                                    {meeting_fs.MC_TOOLS_STRICT_ENV: ""}), \
+                    contextlib.redirect_stdout(buf):
+                meeting_loop._build_wake_cmd(
+                    wd, "a", "sid", {"model": "", "thinking": "",
+                                     "prompt_file": ""}, src, tmp,
+                    os.path.join(base, "pi-sessions"), True, "mc-tools", "唤醒")
+        out = buf.getvalue()
+        self.assertIn("扩展策略: 声明=mc-tools 生效=none", out)
+        self.assertIn("strict=0", out)
+        self.assertIn("降级原因=模拟：没装 MC", out)
+
     def test_mc_tools_falls_back_visibly_when_missing(self):
         """缺 MC → **降级为零扩展**（mc-tools 是"允许"而非"要求"），且必须可见。
 

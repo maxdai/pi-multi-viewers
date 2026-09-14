@@ -310,40 +310,49 @@ def _build_wake_cmd(workdir, agent, sid, cfg, fork_source, fork_cwd,
         cmd = ["pi", "--mode", "json", "--session-id", sid,
                "--session-dir", session_dir]
     # ---- agent 进程的扩展策略（design.md 决策 20；三档见 meeting_fs）----
-    # none（默认）：零扩展——关扩展/技能/prompt-template/主题，保留内置工具与
-    #   项目内 AGENTS.md。为什么默认它：两类插件在**我们这种 session 形态**上都是
-    #   分钟级负担、且都在关键路径上（loop 等进程退出才继续）——
-    #   · AFT：大 session 上进程退出前多活数分钟（受控对照 445.9s → 0.5s）；
-    #   · MC：它的 historian 对"带着大段未处理历史"的 session **每次必失败并立刻
-    #     重试**（受控对照：同输入 447s → 10.3s，43 倍）。
-    #   零扩展真场实测：墙钟 12m31s / 每次唤醒 48.1s / 收尾≈0% / historian 0 次。
-    # mc-tools：只要 MC 的**只读检索工具**（ctx_search）——给 agents 按需检索项目
-    #   背景的能力（背景蒸馏机制已移除，这是它的补充通道）；entry **只注册工具、
-    #   不装 hook** → 不带 historian/压缩（受控实测 historian 0/6、成本≈噪音）。
-    #   代价：本档要求本机装有 MC（默认档不依赖任何扩展，故默认路径仍可移植）。
-    # all：走 pi 默认发现（A/B 实验与显式 opt-in；应有净收益账，见门槛条款）。
+    # 三档共用**同一段零扩展前缀**；mc-tools 只决定"能否再追加 -e <MC 入口>"。
+    # 为什么这样写：此前 mc-tools 的降级分支自己拼前缀后**提前 return**，把后面的
+    # model/thinking/system-prompt/--print 与 spawn cwd 全截断——那条"降级"路径在
+    # 无 MC 的机器上产出残缺命令（e2e24 评审 S1；根因 = 前缀抄三遍 + 短路返回）。
+    # 现在**只有一个出口**（本函数末尾），降级只是"少追加一个 -e"。
+    #
+    # 三档语义：mc-tools（默认）给 agents `ctx_search`（MC 的只读检索工具；
+    # entry 只注册工具、不装 hook → 不带 historian/压缩）；none 零扩展（零依赖）；
+    # all 走 pi 默认发现（A/B 与显式 opt-in，须有净收益账）。
+    no_ext = ["--no-extensions", "--no-skills", "--no-prompt-templates",
+              "--no-themes"]
+    effective_policy = extension_policy
+    downgrade_reason = ""
+    if extension_policy not in meeting_fs.EXTENSION_POLICIES:
+        # 值域守卫在 __main__ 已拦（配置错误不进 engine）；直调也要响
+        raise RuntimeError(f"未知 extensionPolicy: {extension_policy!r}"
+                           f"（合法值: {'/'.join(meeting_fs.EXTENSION_POLICIES)}）")
     if extension_policy == "none":
-        cmd += ["--no-extensions", "--no-skills", "--no-prompt-templates",
-                "--no-themes"]
+        cmd += no_ext
     elif extension_policy == "mc-tools":
         entry, err = meeting_fs.resolve_mc_tools_entry()
-        if not entry:
-            # mc-tools **允许**（而非要求）MC：缺 MC → 降级为零扩展，但**可见**
-            # （一行说明本场没有 ctx_search）；测试/探针用 MV_MC_TOOLS_STRICT=1
-            # 把它变严格（保证测试环境的准确性——否则测试可能在"没装 MC"的
-            # 情况下通过，而 ctx_search 从未生效）。
-            if meeting_fs.mc_tools_strict():
-                log(agent, f"[fatal] mc-tools 档入口解析失败（严格模式）：{err}")
-                raise RuntimeError(f"mc-tools 档不可用: {err}")
-            log(agent, f"mc-tools 档未生效（{err}）——本次按零扩展运行："
-                       f"ctx_search 不可用")
-            cmd += ["--no-extensions", "--no-skills", "--no-prompt-templates",
-                    "--no-themes"]
-            return cmd, session_dir
-        cmd += ["--no-extensions", "--no-skills", "--no-prompt-templates",
-                "--no-themes", "-e", entry]
-    elif extension_policy != "all":      # pragma: no cover（值域守卫应已拦下）
-        raise RuntimeError(f"未知 extensionPolicy: {extension_policy!r}")
+        if entry:
+            cmd += no_ext + ["-e", entry]
+        elif meeting_fs.mc_tools_strict():
+            # 严格模式（测试/探针保真）：缺 MC 即响，不降级——否则测试可能在
+            # "没装 MC"的环境里通过，而 ctx_search 从未生效
+            log(agent, f"[fatal] mc-tools 档入口解析失败（严格模式）：{err}")
+            raise RuntimeError(f"mc-tools 档不可用: {err}")
+        else:
+            # mc-tools **允许**而非要求 MC：缺 MC → 降级零扩展，但**可见**
+            effective_policy = "none"
+            downgrade_reason = err
+            cmd += no_ext
+    # "all"：不加任何 --no-*（走 pi 默认发现）
+    if first_wake:
+        # 登记行（观测面的稳定字段；报告据此给"声明 vs 生效"）。只在首唤打：
+        # 策略在一次运行内不变，变了也是配置错误（重跑即可）。
+        log(agent, f"扩展策略: 声明={extension_policy} 生效={effective_policy}"
+                   f" strict={int(meeting_fs.mc_tools_strict())}"
+                   + (f" 降级原因={downgrade_reason}" if downgrade_reason else ""))
+        if downgrade_reason:
+            log(agent, f"mc-tools 档未生效（{downgrade_reason}）——本次按零扩展"
+                       f"运行：ctx_search 不可用")
     model = cfg.get("model") or ""
     if model:
         cmd += ["--model", model]

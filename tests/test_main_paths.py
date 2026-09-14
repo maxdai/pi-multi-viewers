@@ -556,6 +556,42 @@ class TestBuildReport(unittest.TestCase):
             txt = "\n".join(observability.build_report(base))
             self.assertIn("终止：stall 接管", txt)
 
+    def test_extension_policy_line_declared_vs_effective(self):
+        """报告给「扩展策略：声明 vs 生效」——降级（生效≠声明）必须可见。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            base = self._env(tmp, commits=[("a/0001", "message", "meeting")])
+            # 协议声明 mc-tools；日志登记行显示降级到 none（无 MC 的机器）
+            with open(os.path.join(base, "work-a", "protocol.json"), "a") as f:
+                pass
+            w = os.path.join(base, "work-a")
+            with open(os.path.join(w, "protocol.json")) as f:
+                proto = json.load(f)
+            proto["extensionPolicy"] = "mc-tools"
+            with open(os.path.join(w, "protocol.json"), "w") as f:
+                json.dump(proto, f)
+            subprocess.run(["git", "add", "-A"], cwd=w, check=True,
+                           capture_output=True)
+            subprocess.run(["git", "commit", "-qm", "policy"], cwd=w, check=True,
+                           capture_output=True)
+            subprocess.run(["git", "push", "-q", "origin", "HEAD"], cwd=w,
+                           check=True, capture_output=True)
+            with open(os.path.join(base, "loop-a.log"), "a") as f:
+                f.write("[2026-09-14T11:27:46.000] a: 扩展策略: 声明=mc-tools "
+                        "生效=none strict=0 降级原因=packages 里没有可解析的包\n")
+            import observability
+            txt = "\n".join(observability.build_report(base))
+        self.assertIn("扩展策略：声明 mc-tools ｜ 生效 none", txt)
+        self.assertIn("降级：packages 里没有可解析的包", txt)
+        self.assertIn("⚠ 生效≠声明", txt)
+
+    def test_extension_policy_line_absent_is_na(self):
+        """没有字段也没有登记行（旧产物）→ n/a，不报错。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            base = self._env(tmp, commits=[("a/0001", "message", "meeting")])
+            import observability
+            txt = "\n".join(observability.build_report(base))
+        self.assertIn("扩展策略：n/a", txt)
+
     def test_level_mismatch_visible(self):
         """声明值 ≠ 生效值 → 报告显式 ⚠ 不一致（这是 e2e17 §1 要的可见性：
         声明值从来没人跟生效值对照过）。"""

@@ -60,24 +60,53 @@ DEFAULT_STALL_TIMEOUT = 600
 DEFAULT_THINKING = "max"
 
 
-def _package_dir(entry, agent_dir):
-    """把 pi 的 packages 条目解析成包目录（找不到 → None）。
+def _entry_source(entry):
+    """pi 的 packages 条目 → 源字符串（两种形态共用；非字符串形态 → ""）。
 
-    形态（pi settings.json 的 packages，实测两种）：
+    形态（实测）：裸字符串 `"npm:@scope/name"` / 相对路径 `"../../repo"`；
+    对象形态 `{"source": "..."}`。**单一实现**（此前包目录解析与 MC 匹配各写
+    一遍、宽严不一）。
+    """
+    if isinstance(entry, str):
+        return entry.strip()
+    if isinstance(entry, dict):
+        src = entry.get("source")
+        return src.strip() if isinstance(src, str) else ""
+    return ""
+
+
+def _npm_package_name(source):
+    """`npm:` 源 → 裸包名（去版本后缀）；非 npm 源 → ""。
+
+    `npm:@scope/name@1.2.3` → `@scope/name`；`npm:name` → `name`。
+    （F5：包匹配必须**按裸包名精确相等**，不能用子串——`in` 会把
+    `@cortexkit/pi-magic-context-legacy` 也命中。）
+    """
+    if not source.startswith("npm:"):
+        return ""
+    body = source[len("npm:"):]
+    if body.startswith("@"):                 # scoped：@scope/name[@ver]
+        at = body.rfind("@")
+        return body[:at] if at > 0 else body
+    at = body.find("@")                      # 非 scoped：name[@ver]
+    return body[:at] if at > 0 else body
+
+
+def _package_dir(source, agent_dir):
+    """源字符串 → 包目录（不存在 → None）。
+
       "npm:@scope/name"  → <agent_dir>/npm/node_modules/@scope/name
       "../../repo-name"  → 相对 <agent_dir> 解析（绝对路径原样）
     """
-    if not isinstance(entry, str):
-        # 对象形态（如 {"source": "..."}）——取 source 字段；其余形态无法解析
-        entry = (entry or {}).get("source") if isinstance(entry, dict) else None
-    if not isinstance(entry, str) or not entry.strip():
+    if not source:
         return None
-    e = entry.strip()
-    if e.startswith("npm:"):
-        rel = e[len("npm:"):]
-        cand = os.path.join(agent_dir, "npm", "node_modules", *rel.split("/"))
+    if source.startswith("npm:"):
+        name = _npm_package_name(source)
+        if not name:
+            return None
+        cand = os.path.join(agent_dir, "npm", "node_modules", *name.split("/"))
     else:
-        cand = e if os.path.isabs(e) else os.path.join(agent_dir, e)
+        cand = source if os.path.isabs(source) else os.path.join(agent_dir, source)
     cand = os.path.normpath(cand)
     return cand if os.path.isdir(cand) else None
 
@@ -91,11 +120,12 @@ def resolve_mc_tools_entry(agent_dir=None):
     package.json 声明的扩展入口（`pi.extensions[0]`）→ 取同目录下的
     subagent-entry.js。
 
-    **fail-fast**：任一步缺失返回 (None, 原因)——调用方必须报错（不静默降级成
-    零扩展：那会让"要给 agent 背景检索能力"的意图无声消失）。
+    **失败语义**：任一步缺失返回 `(None, 原因)`——**由调用方按策略决定**：
+    loop 在生产态做**可见降级**（打印一行说明后按零扩展运行 ✓ 无静默），
+    在严格态（`MV_MC_TOOLS_STRICT=1`，测试/探针保真）直接报错。
 
-    依赖边界（写进决策记录）：这一档**要求本机装有 MC**——它是 MC 的能力；
-    默认档 none 不依赖任何扩展，故默认路径仍可移植。
+    依赖边界（决策 20）：mc-tools **允许而非要求** MC——缺 MC 即降级为零扩展；
+    `none` 档零依赖（无 MC 的机器/CI 显式选它）。
     """
     agent_dir = agent_dir or pi_agent_dir()
     try:
@@ -103,38 +133,58 @@ def resolve_mc_tools_entry(agent_dir=None):
             pkgs = json.load(f).get("packages") or []
     except (OSError, ValueError) as e:
         return None, f"读不到 pi 的 packages（{agent_dir}/settings.json）: {e}"
-    pkg_dir = None
+    # F5：按**裸包名精确相等**识别（npm 源直接比；路径源读其 package.json.name）；
+    # F6：遍历**全部**候选、取首个可解析（此前首个匹配失败即停，装着 MC 也会
+    #     报"没装"，文案误导）
+    seen = []          # 候选（source 字符串）——用于错误文案，说明"试过哪些"
     for entry in pkgs:
-        name = entry if isinstance(entry, str) else (
-            (entry or {}).get("source") if isinstance(entry, dict) else None)
-        if isinstance(name, str) and MC_PACKAGE in name:
-            pkg_dir = _package_dir(entry, agent_dir)
-            break
-    if not pkg_dir:
-        return None, (f"packages 里没有可解析的 {MC_PACKAGE}——装它"
-                      f"（pi install npm:{MC_PACKAGE}），或改用零扩展档："
-                      f"--extension-policy none")
-    try:
-        with open(os.path.join(pkg_dir, "package.json"), encoding="utf-8") as f:
-            man = json.load(f)
-    except (OSError, ValueError) as e:
-        return None, f"读不到 {MC_PACKAGE} 的 package.json: {e}"
-    entry_rel = ((man.get("pi") or {}).get("extensions") or [None])[0]
-    if not entry_rel:
-        return None, f"{MC_PACKAGE} 未声明 pi.extensions（版本不兼容？）"
-    cand = os.path.normpath(
-        os.path.join(pkg_dir, os.path.dirname(entry_rel), "subagent-entry.js"))
-    if not os.path.isfile(cand):
-        return None, (f"找不到 {MC_PACKAGE} 的只读工具入口（"
-                      f"{os.path.relpath(cand, pkg_dir)}）——上游版本可能改了布局")
-    return cand, ""
+        source = _entry_source(entry)
+        if not source:
+            continue
+        pkg_dir = _package_dir(source, agent_dir)
+        if not pkg_dir:
+            continue
+        name = _npm_package_name(source)
+        if not name:               # 路径源：读它的包名（读不到就跳过）
+            try:
+                with open(os.path.join(pkg_dir, "package.json"),
+                          encoding="utf-8") as f:
+                    name = json.load(f).get("name") or ""
+            except (OSError, ValueError):
+                name = ""
+        if name != MC_PACKAGE:
+            continue
+        seen.append(source)
+        try:
+            with open(os.path.join(pkg_dir, "package.json"), encoding="utf-8") as f:
+                man = json.load(f)
+        except (OSError, ValueError) as e:
+            return None, f"读不到 {MC_PACKAGE} 的 package.json: {e}"
+        exts = (man.get("pi") or {}).get("extensions")
+        if isinstance(exts, str):          # F7：字符串形态（取首字符会解析错路径）
+            exts = [exts]
+        if not isinstance(exts, list) or not exts or not all(
+                isinstance(x, str) and x for x in exts):
+            return None, f"{MC_PACKAGE} 的 pi.extensions 形态不可用（版本不兼容？）"
+        cand = os.path.normpath(
+            os.path.join(pkg_dir, os.path.dirname(exts[0]), "subagent-entry.js"))
+        if os.path.isfile(cand):
+            return cand, ""
+        # 该候选不可解析 → 继续看后面的候选（F6）
+        last_missing = os.path.relpath(cand, pkg_dir)
+    if seen:
+        return None, (f"{MC_PACKAGE} 的只读工具入口不存在（{last_missing}）"
+                      f"——上游版本可能改了布局")
+    return None, (f"packages 里没有可解析的 {MC_PACKAGE}——装它"
+                  f"（pi install npm:{MC_PACKAGE}），或改用零扩展档："
+                  f"--extension-policy none")
 
 
 def pi_agent_dir():
     """pi 的 agent 目录（`$PI_CODING_AGENT_DIR` 或 `~/.pi/agent`）——**单一实现**。
 
-    与 spec_gen.PI_AGENT_DIR 同规则；本模块需要它的地方（会话登记日志、
-    扩展入口解析）都走本函数，避免两处各拼一次。
+    **单一实现**：spec_gen / 本模块（会话登记日志、扩展入口解析）都走本函数
+    （F9：此前 spec_gen 自持常量、两处各拼一次；测试改为 patch 环境变量）。
     """
     return os.environ.get("PI_CODING_AGENT_DIR") or os.path.expanduser("~/.pi/agent")
 
@@ -686,8 +736,9 @@ def parse_log_nameonly(output):
 #   mc-tools : **默认**——只要 MC 的**只读检索工具**（ctx_search）。为什么默认它：
 #              agents 需要主项目背景（背景蒸馏机制已移除），这是它的补充通道；
 #              该入口**只注册工具、不装 hook** → historian/压缩不在其中
-#              （受控实测 historian 0/6、成本与 none 无差、ctx_search 可用）。
-#              代价：本档要求本机装有 MC（缺则 fail-fast，见 resolve_mc_tools_entry）
+#              （受控实测 historian 0/6、ctx_search 可用；成本未测得显著差异）。
+#              代价：本档**允许而非要求** MC（缺则可见降级为零扩展；严格模式见
+#              MC_TOOLS_STRICT_ENV）
 #   none     : 零扩展——最快、**零依赖**（不依赖任何扩展；无 MC 的机器/CI 用这档）
 #   all      : 走 pi 默认扩展发现（A/B 实验与显式 opt-in 用）
 # （顺序只影响 CLI 帮助的罗列——**不承载语义**，勿按下标取值：

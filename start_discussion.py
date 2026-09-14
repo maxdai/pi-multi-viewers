@@ -513,7 +513,7 @@ from spec_gen import (  # noqa: F401
     viewer_set_error, gen_agents_md, gen_protocol,
     pi_sessions_dir, current_session_file, _join_model_ref,
     _default_model, _detect_pi_model_thinking, resolve_fork_source,
-    PI_AGENT_DIR, MAX_AGENT_NAME_LEN,
+    MAX_AGENT_NAME_LEN,
 )
 from observability import (  # noqa: F401
     _loop_pids, _loops_alive, check_status, build_report,
@@ -555,8 +555,9 @@ def main():
         "--extension-policy",
         choices=list(meeting_fs.EXTENSION_POLICIES),
         default=meeting_fs.DEFAULT_EXTENSION_POLICY,
-        help="agents 的扩展策略：none=零扩展（默认）；mc-tools=只要 MC 的"
-             "只读检索工具 ctx_search（需要本机装有 MC）；all=走 pi 默认发现")
+        help="agents 的扩展策略：mc-tools=默认，只要 MC 的只读检索工具 "
+             "ctx_search（缺 MC 时可见降级为零扩展）；none=零扩展（零依赖）；"
+             "all=走 pi 默认发现")
     parser.add_argument("--extensions", dest="extension_policy",
                         action="store_const", const="all",
                         help="[历史别名] 等价 --extension-policy all")

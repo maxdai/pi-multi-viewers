@@ -317,7 +317,7 @@ class TestSpecModels(unittest.TestCase):
             with open(os.path.join(d, "settings.json"), "w") as f:
                 json.dump({"defaultProvider": "opencode-go",
                            "defaultModel": "deepseek-v4-flash"}, f)
-            with mock.patch.object(spec_gen, "PI_AGENT_DIR", d):
+            with mock.patch.dict(os.environ, {"PI_CODING_AGENT_DIR": d}):
                 self.assertEqual(sd._default_model(), "opencode-go/deepseek-v4-flash")
 
     def test_default_model_missing_settings(self):
@@ -325,11 +325,11 @@ class TestSpecModels(unittest.TestCase):
         import start_discussion as sd
         from unittest import mock
         with tempfile.TemporaryDirectory() as d:
-            with mock.patch.object(spec_gen, "PI_AGENT_DIR", d):
+            with mock.patch.dict(os.environ, {"PI_CODING_AGENT_DIR": d}):
                 self.assertIsNone(sd._default_model())
             with open(os.path.join(d, "settings.json"), "w") as f:
                 f.write("{bad json")
-            with mock.patch.object(spec_gen, "PI_AGENT_DIR", d):
+            with mock.patch.dict(os.environ, {"PI_CODING_AGENT_DIR": d}):
                 self.assertIsNone(sd._default_model())
 
     # ---- _join_model_ref：契约拼接（不按值形状猜，2026-09-10） ----
@@ -367,7 +367,7 @@ class TestSpecModels(unittest.TestCase):
             with open(os.path.join(d, "settings.json"), "w") as f:
                 json.dump({"defaultProvider": "commandcode-goat",
                            "defaultModel": "deepseek/deepseek-v4-flash"}, f)
-            with mock.patch.object(spec_gen, "PI_AGENT_DIR", d):
+            with mock.patch.dict(os.environ, {"PI_CODING_AGENT_DIR": d}):
                 self.assertEqual(
                     sd._default_model(),
                     "commandcode-goat/deepseek/deepseek-v4-flash")

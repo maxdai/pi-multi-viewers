@@ -113,6 +113,7 @@ compaction 的 `firstKeptEntryId` 起 + 其后的条目"——窗口内含 compa
 | `seconds_by_stopReason` | `{键=stopReason 原值: Δ 合计}` | 同上；**口径 = 相邻条目 Δ 合计**（每次唤醒首条响应**也计入**；跨唤醒空闲不进入 Δ——唤醒 prompt 本身是一条 user 条目，空闲落在"上一唤醒末条 → 本次 user 条目"之间）。⚠️ 曾短暂采用"首响不计时"，理由（跨唤醒空闲）经 e2e20 评审批证伪后**已撤回**（见决策 19 的 e2e20 修正段） |
 | `effective_levels` | `[thinkingLevel…]`（session 侧，去重保序） | `档位：声明 X ｜ 生效 Y ｜ ✓一致 / ⚠不一致` |
 | （对照）`declared` | `pi-agent.json.thinking` | 同上——声明值与生效值**并列**（此前从没人对照过：探测失败会静默取档，spec 表面正常） |
+| `扩展策略` 行 | `声明 / 生效 / strict / 降级原因` | 声明 = `protocol.extensionPolicy`；生效 = loop log 的**登记行**（首唤打一次：`扩展策略: 声明=X 生效=Y strict=0\|1[ 降级原因=…]`）→ 报告给"声明 vs 生效 + ⚠ 生效≠声明"（与"档位：声明/生效"同型；e2e24 评审 E2）|
 | `终止` 行 | 分类 + 原料计数 | `终止：共识（RR 全体 pass）｜freezing N / all-freezing N / pass N / stall 接管行 N`；分类判据只有事实（bare 的 type 计数 + loop log 的"超时兜底/声明接管"字样）——**不做评分** |
 | `唤醒构成` 表 | 每次唤醒一行 + 每 agent 合计 | 四端点（spawn / 首事件 / 末事件 / exit）+ 往返数 + `Δ助手` + `Δ工具` + retry + 本唤醒内的 commit；合计给 `跨度 = 启动前 + 事件内 + 收尾` 与平均/往返/retry（e2e23 分析产出，见下） |
 
@@ -450,8 +451,8 @@ commit 是溯源记录、本节是长期引用点——不并存两份权威值�
        （具名推导 `agent_config_aft_file`，写入侧与判定侧共用），未注入时打一行
        **事实**日志；`build_agent_config` 只返回 warnings（目录不再返回——
        生产端本来就不用），并删掉只有测试在用的 `source_config_home` 参数。
-20. **agent 进程默认零扩展**（2026-09-13 用户定；取代决策 19 的"屏蔽 AFT、
-    保留 MC"）：
+20. **agent 进程扩展策略三档（默认 mc-tools）**（2026-09-13 定零扩展、
+    2026-09-14 用户定为默认 mc-tools 并改“允许而非要求”；取代决策 19）：
 
     **证据（两类插件都在关键路径上，都是分钟级）**：
     - **AFT**：大 session 上进程退出前多活数分钟——同一份 1.9MB session、同一模型
@@ -477,14 +478,24 @@ commit 是溯源记录、本节是长期引用点——不并存两份权威值�
     | `all` | 不加任何 `--no-*` | pi 默认发现（A/B 与显式 opt-in）|
 
     **`mc-tools` 档 = 默认档**（2026-09-14 加并定为默认，用户裁定"提供 ctx_search
-    是必要的 background 补充"）：背景蒸馏机制移除后，agents 没有任何**主项目背景**通道；MC 的
+    是必要的 background 补充”）：**fork 本身是主背景通道**（agent 继承主会话的开发
+    上下文），覆盖面受 ① fork 源内容 ② `budget` 裁剪比例限制；`ctx_search` 是它的
+    **兜底**（按需检索记忆/文档/历史）。MC 的
     `subagent-entry.js`（MC **自己**给它的"搜索类子代理"用的入口）**只注册工具、
     不装任何 hook** → 给 agents 按需检索能力（memories / docs / 历史），
     **不含** historian/压缩/打标。实测：`ctx_search` 可用 ✓；historian 0/6 ✓；
-    成本与 none 无差（受控 6 次：中位 7.8s vs 9.2s，差在噪音内 ✓）。
+    **成本未测得显著差异**（受控探针 n 小、组内方差 > 组间差 ✗；生产基线：首次真场
+    strict=1、n=19 → 唤醒启动段中位 **0.68s**、收尾中位 0.04s ✓）。
     **入口解析 fail-fast**（`resolve_mc_tools_entry`：pi 的 packages → MC 包 →
-    它声明的扩展入口 → 同目录 `subagent-entry.js`）；缺 MC 时**响亮失败**
-    （静默退回 none 会让"要给 agent 背景检索"的意图无声消失）。
+    它声明的扩展入口 → 同目录 `subagent-entry.js`）；缺 MC 时**可见降级**（严格模式
+    `MV_MC_TOOLS_STRICT=1` 才报错退出）。
+    **实现纪律（e2e24 评审 S1 的教训）**：三档共用**同一段零扩展前缀**，
+    `_build_wake_cmd` **只有一个出口**——降级只是"少追加一个 `-e`"。此前降级
+    分支自拼前缀后提前 `return`，把 model/thinking/system-prompt/`--print` 与
+    spawn cwd 全截断（"无 MC 的机器"上产出残缺命令）。**登记行**：首唤打
+    `扩展策略: 声明=X 生效=Y strict=0|1 [降级原因=…]`——报告据此给"声明 vs 生效"
+    （E2；与"档位"同型），否则降级只在 loop log 里、产品面看不见。
+
     **依赖边界（用户 2026-09-14 定）**：mc-tools **允许而非要求** MC——缺 MC 时
     **降级为零扩展并按 none 运行**，但**必须可见**（打印一行"mc-tools 档未生效
     （原因）——本次按零扩展运行：ctx_search 不可用"；无静默铁律）。

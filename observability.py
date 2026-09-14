@@ -327,6 +327,9 @@ def build_report(base):
                    f"{_dur(d['max_ms'] // 1000)} | rc≠0 {d['fails']} 次")
 
     # ---- LLM 运行事实（session 文档化字段；流式预过滤，不整文件解析） ----
+    # ---- 扩展策略（声明 vs 生效）----
+    _report_extension_line(base, out)
+
     # ---- 终止原因（只报事实与计数）----
     _report_termination(base, agents, out)
 
@@ -616,6 +619,49 @@ def _report_termination(base, agents, out):
                f" / all-freezing {types.get('all-freezing', 0)}"
                f" / pass {types.get('pass', 0)} / stall 接管行 {stalls}"
                + (" | result.md 已提交" if has_result else ""))
+
+
+def _report_extension_line(base, out):
+    """扩展策略：**声明 vs 生效**（+ 降级原因）——与"档位：声明 max ｜ 生效 max"同型。
+
+    取数（只读已有家，零新增记录）：
+      · 声明 = `protocol.json.extensionPolicy`（现行字段；旧产物可能有
+        历史字段 `extensions: true` → 记作 all；两者都无 → n/a）
+      · 生效 = loop log 的**登记行**（首唤打一次）：
+        `扩展策略: 声明=<x> 生效=<y> strict=<0|1>[ 降级原因=<reason>]`
+    为什么需要它：降级本来是**可见的**（loop log 一行），但产品面（报告）看不到
+    ——2026-09-14 为确认"MC 生效没有"花了好几轮探针 + DB 查询（e2e24 评审 E2）。
+    fail-open：读不到 → 显示 n/a，不报错。
+    """
+    bare = meeting_fs.bare_of_base(base)
+    proto = meeting_fs.read_protocol(bare)
+    declared = proto.get("extensionPolicy")
+    if not declared and proto.get("extensions") is True:
+        declared = "all（历史字段 extensions: true）"
+    eff = None
+    for f in sorted(glob.glob(os.path.join(base, "loop-*.log"))):
+        try:
+            txt = open(f, encoding="utf-8", errors="replace").read()
+        except OSError:
+            continue
+        m = re.search(r"扩展策略: 声明=(\S+) 生效=(\S+) strict=(\d)"
+                      r"(?: 降级原因=(.*))?", txt)
+        if m:
+            eff = m
+            break
+    if not declared and not eff:
+        out.append("扩展策略：n/a（协议无字段、日志无登记行——多为 2026-09-14 前的产物）")
+        return
+    if eff:
+        d, e, strict, reason = eff.group(1), eff.group(2), eff.group(3), eff.group(4)
+        line = f"扩展策略：声明 {d} ｜ 生效 {e}（strict={strict}"
+        line += f"，降级：{reason.strip()}" if reason else ""
+        line += "）"
+        if d != e:
+            line += "  ⚠ 生效≠声明（降级：ctx_search 不可用）"
+        out.append(line)
+    else:
+        out.append(f"扩展策略：声明 {declared} ｜ 生效 n/a（日志中无登记行）")
 
 
 def _report_wake_fields(base):

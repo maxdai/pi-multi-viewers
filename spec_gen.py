@@ -17,8 +17,7 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 TPL_DIR = os.path.join(HERE, "templates")
-PI_AGENT_DIR = os.environ.get("PI_CODING_AGENT_DIR",
-                             os.path.expanduser("~/.pi/agent"))
+# pi agent 目录的**单一实现**在 meeting_fs.pi_agent_dir()（F9：此前两处各拼一次）
 MAX_AGENT_NAME_LEN = 32
 
 import meeting_fs
@@ -56,7 +55,7 @@ def _default_model():
     获取失败（pi 不可用/无 settings）→ 返回 None。
     """
     try:
-        with open(os.path.join(PI_AGENT_DIR, "settings.json")) as f:
+        with open(os.path.join(meeting_fs.pi_agent_dir(), "settings.json")) as f:
             cfg = json.load(f)
         provider = cfg.get("defaultProvider") or ""
         model = cfg.get("defaultModel") or ""
@@ -123,7 +122,7 @@ def pi_sessions_dir(cwd):
     AGENTS.md 明言"编码错一根横线 = 静默解析不到"——风险点不应复制。
     """
     enc = "--" + cwd.strip("/").replace("/", "-") + "--"
-    return os.path.join(PI_AGENT_DIR, "sessions", enc)
+    return os.path.join(meeting_fs.pi_agent_dir(), "sessions", enc)
 
 
 def current_session_file():
