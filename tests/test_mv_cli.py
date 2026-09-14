@@ -14,6 +14,7 @@
 import io
 import os
 import sys
+import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from unittest import mock
@@ -324,6 +325,109 @@ class TestStartParse(unittest.TestCase):
             self.assertEqual(rc, 0)
             self.assertTrue(os.path.isdir(spec))
             self.assertIn("保留未删", out)
+
+
+class TestViewers(unittest.TestCase):
+    """`--viewers` 只读检查（建视角时用）：列出 + 用代码判据校验。
+
+    为什么单独测：这条命令的判据全部复用 spec_gen 的单一实现（列举 / 名字 /
+    集合），此前只有 prepare 路径在用它——建视角这一刻**没有分析目录**，消费
+    命令的目录自动发现不适用。数量不足在这里是**提示**（建 1 个合法），不是错误。
+    """
+
+    def _proj(self, tmp, files):
+        """造一个项目目录：{文件名: 内容} → <tmp>/viewers/。"""
+        vdir = os.path.join(tmp, "viewers")
+        os.makedirs(vdir, exist_ok=True)
+        for name, body in files.items():
+            with open(os.path.join(vdir, name), "w", encoding="utf-8") as f:
+                f.write(body)
+        return tmp
+
+    def _run(self, tmp, argv=("--viewers",)):
+        with mock.patch.object(mv_cli.os, "getcwd", return_value=tmp):
+            return run_main(list(argv))
+
+    def test_legal_set_passes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._proj(tmp, {"甲.md": "镜头 A\n", "乙.md": "镜头 B\n"})
+            rc, out, err = self._run(tmp)
+            self.assertEqual((rc, err), (0, ""))
+            self.assertIn("甲.md", out)
+            self.assertIn("校验：通过（2 个视角", out)
+
+    def test_single_viewer_is_hint_not_error(self):
+        """建 1 个是合法中间状态（≥2 只在启动分析时要求）。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            self._proj(tmp, {"甲.md": "镜头 A\n"})
+            rc, out, err = self._run(tmp)
+            self.assertEqual((rc, err), (0, ""))
+            self.assertIn("至少需要 2 个", out)
+            self.assertIn("合法的中间状态", out)
+
+    def test_empty_viewer_fails_without_double_prefix(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._proj(tmp, {"甲.md": "镜头 A\n", "乙.md": "   \n\n"})
+            rc, out, err = self._run(tmp)
+            self.assertEqual(rc, 1)
+            self.assertIn("乙.md", err)
+            self.assertIn("不能为空", err)
+            self.assertNotIn("错误: 错误:", err)   # 前缀归判据实现方，不再包一层
+            self.assertIn("乙.md（空", out)        # 列表先落地，错误在后
+
+    def test_illegal_name_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._proj(tmp, {"甲.md": "x\n", "a b.md": "y\n"})
+            rc, _out, err = self._run(tmp)
+            self.assertEqual(rc, 1)
+            self.assertIn("非法 agent 名", err)
+            self.assertNotIn("错误: 错误:", err)
+
+    def test_reserved_human_name_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._proj(tmp, {"甲.md": "x\n", "human.md": "y\n"})
+            rc, _out, err = self._run(tmp)
+            self.assertEqual(rc, 1)
+            self.assertIn("保留名", err)
+
+    def test_hidden_file_ignored(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._proj(tmp, {"甲.md": "x\n", "乙.md": "y\n", ".draft.md": "z\n"})
+            rc, out, _err = self._run(tmp)
+            self.assertEqual(rc, 0)
+            self.assertNotIn("draft", out)
+            self.assertIn("校验：通过（2 个视角", out)
+
+    def test_missing_viewers_dir_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            rc, _out, err = self._run(tmp)
+            self.assertEqual(rc, 1)
+            self.assertIn("未找到", err)
+            self.assertIn("multi-viewers-setup", err)   # 错误里给出路
+
+    def test_empty_dir_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._proj(tmp, {})
+            rc, _out, err = self._run(tmp)
+            self.assertEqual(rc, 1)
+            self.assertIn("没有 *.md", err)
+
+    def test_extra_args_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._proj(tmp, {"甲.md": "x\n", "乙.md": "y\n"})
+            rc, _out, err = self._run(tmp, ("--viewers", "extra"))
+            self.assertEqual(rc, 1)
+            self.assertIn("不接受参数", err)
+
+    def test_not_routed_through_dir_resolution(self):
+        """--viewers 只看项目 cwd——不得走消费命令的目录自动发现。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            self._proj(tmp, {"甲.md": "x\n", "乙.md": "y\n"})
+            with mock.patch.object(mv_cli, "resolve_dir") as rd, \
+                    mock.patch.object(mv_cli.os, "getcwd", return_value=tmp):
+                rc, _out, _err = run_main(["--viewers"])
+            self.assertEqual(rc, 0)
+            rd.assert_not_called()
 
 
 if __name__ == "__main__":

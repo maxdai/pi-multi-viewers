@@ -447,6 +447,19 @@ def validate_participants(participants):
     return None
 
 
+def viewers_count_gap(names, where="viewers/"):
+    """视角数量不足的**事实句**（不带"错误:"前缀）→ 或 None。
+
+    与 viewer_set_error 共用同一句话（那里把它包成错误）：差别只在**场景语义**——
+    prepare/start 时数量不足 = 不能启动（错误）；建视角时 1 个是**合法中间状态**
+    （只读检查 `mv.sh --viewers` 把它当提示，不判错）。
+    """
+    if len(names) < 2:
+        return (f"{where} 下仅发现 {len(names)} 个视角"
+                f"（{', '.join(names)}）——多视角分析至少需要 2 个")
+    return None
+
+
 def viewer_set_error(names, empty, where="viewers/"):
     """viewers 集合级校验（**唯一实现**）：空正文视角 + 至少 2 个。
 
@@ -461,10 +474,8 @@ def viewer_set_error(names, empty, where="viewers/"):
         detail = "、".join(f"{where}{n}.md（{why}）" for n, why in empty)
         return (f"错误: {detail}——视角任务书不能为空"
                 f"（写清该视角用什么 lenses 看分析对象）")
-    if len(names) < 2:
-        return (f"错误: {where} 下仅发现 {len(names)} 个视角"
-                f"（{', '.join(names)}）——多视角分析至少需要 2 个")
-    return None
+    gap = viewers_count_gap(names, where)
+    return f"错误: {gap}" if gap else None
 
 
 def _discover_viewers(viewers_dir):

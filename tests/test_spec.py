@@ -745,5 +745,29 @@ class TestSkeletonModelsMd(unittest.TestCase):
 
 
 
+class TestViewersCountGap(unittest.TestCase):
+    """数量不足的**同一句话**（viewer_set_error 包成错误 / --viewers 当提示）。
+
+    为什么要测：这句话此前只长在 viewer_set_error 里；`mv.sh --viewers` 需要
+    同一个事实但**不判错**（建 1 个合法）。拆出来后两处必须仍是同一句，
+    否则文案会在两个出口漂移（正是 e2e25 认定的漂移模式）。
+    """
+
+    def test_gap_is_none_when_enough(self):
+        self.assertIsNone(spec_gen.viewers_count_gap(["甲", "乙"]))
+
+    def test_gap_sentence_matches_error_body(self):
+        names = ["甲"]
+        gap = spec_gen.viewers_count_gap(names)
+        self.assertIn("仅发现 1 个视角", gap)
+        self.assertIn("至少需要 2 个", gap)
+        self.assertNotIn("错误:", gap)              # 事实句不带前缀
+        self.assertEqual(spec_gen.viewer_set_error(names, []), f"错误: {gap}")
+
+    def test_where_prefix_is_carried(self):
+        gap = spec_gen.viewers_count_gap(["甲"], where="spec/agents/")
+        self.assertIn("spec/agents/", gap)
+
+
 if __name__ == "__main__":
     unittest.main()

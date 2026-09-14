@@ -28,8 +28,9 @@ human_sayer.py       【human 通道】插话命令（单次/stdin/交互 -i）
 scripts/mv.sh        稳定入口 shim（exec mv_cli.py；路径被 prompt/README 引用）
 scripts/pi-probe.sh  LLM 探针（跑 pi + 登记新 session → 残留检查器可追溯）
 scripts/check-residue.sh  残留检查（session/进程/目录三类；增删 scripts/ 时同步本节）
-mv_cli.py            命令行实现（prepare/start/status/report/wait/cleanup/view/say）
-prompts/multi-viewers.md  /multi-viewers 入口（视角设计三原则 + 审核闸门）
+mv_cli.py            命令行实现（prepare/start/status/report/wait/cleanup/view/say/viewers）
+prompts/multi-viewers.md  /multi-viewers 分析入口（审核闸门；视角原则引 README，不复述）
+prompts/multi-viewers-setup.md  /multi-viewers-setup 建视角入口（建议→你定→落盘→给审）
 extensions/multi-viewers-say/  /multi-viewers-say 插话（registerCommand，零 LLM）
 docs/design.md       设计文档（fork 源模式与规模口径 + 决策记录）
 package.json         npm 包 pi-multi-viewers（pi.prompts 注册；**版本号唯一事实源**）
@@ -229,7 +230,7 @@ loop、状态从 git 共享事实推导、单一事实源 = protocol.json、无�
 
 ## 安装/发版状态（2026-09-11）
 
-- **当前形态**：prompt × 1（multi-viewers，开发机已注册可用）+
+- **当前形态**：prompt × 2（multi-viewers 分析 / multi-viewers-setup 建视角）+
   extension × 1（multi-viewers-say 插话：零 LLM，直接 spawn human_sayer.py；
   目录发现 = `<cwd>/mv-<sessionId>-*` 最新——**无兜底**：未匹配即报错
   rc 1，需显式传目录）

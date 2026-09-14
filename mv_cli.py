@@ -28,6 +28,8 @@ import subprocess
 import sys
 from datetime import datetime
 
+import spec_gen  # --viewers 复用其单一判据（列举/名字/集合校验）
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 PYTHON = os.environ.get("PYTHON") or "python3"
 START_DISCUSSION = os.path.join(HERE, "start_discussion.py")
@@ -49,6 +51,7 @@ USAGE = f"""用法:
   {PROG} --cleanup [dir]
   {PROG} --view    [dir] [--since <ref>]
   {PROG} --say     [dir] "<文本>"
+  {PROG} --viewers                           # 列出并校验当前项目的 viewers/（只读；建视角时用）
 
 消费命令的 <dir> 可省略（自动发现本 session 当前分析——按 cwd 下
 mv-<PI_SESSION_ID>-* 最新；无匹配则报错要求显式传目录）
@@ -67,7 +70,20 @@ human 通道:
 
 def fail(msg):
     """错误出口（沿用 bash 约定：`错误: ` 前缀 + stderr + rc 1）。"""
+    sys.stdout.flush()  # 已打印的正常输出先落地（stderr 无缓冲，否则会插到前面）
     print(f"错误: {msg}", file=sys.stderr)
+    raise SystemExit(1)
+
+
+def fail_verbatim(msg):
+    """错误文本**自带 `错误: ` 前缀**（来自 spec_gen 的单一判据）→ 原样输出。
+
+    与 fail() 的差别只是前缀归属：判据的实现方（spec_gen）负责文案与前缀
+    （`start_discussion` 同样 `print(err)` 原样输出）；再包一层会变成
+    "错误: 错误: …"（实测踩过）。
+    """
+    sys.stdout.flush()
+    print(msg, file=sys.stderr)
     raise SystemExit(1)
 
 
@@ -126,6 +142,50 @@ def _call(cmd):
 # ---------------------------------------------------------------
 # 消费命令
 # ---------------------------------------------------------------
+
+def cmd_viewers(args):
+    """列出并校验**当前项目**的 `viewers/`（只读）。
+
+    为什么需要它：视角是**长期资产**，创建/检查它的时刻通常**还没有任何分析
+    目录**（消费命令的目录自动发现对此不适用——它找的是 mv-<sid>-*）。判据全部
+    复用 `spec_gen` 的单一实现（列举 `list_agent_md` / 名字 `check_agent_name` /
+    集合 `viewer_set_error`），这一层不另写一套规则。
+
+    数量不足（<2）在这里是**提示**不是错误：建 1 个是合法的中间状态，只有启动
+    一次分析时才要求 ≥2（那条判据仍由 `viewer_set_error` 独占）。
+    """
+    if args:
+        fail(f"未知参数: {' '.join(args)}（--viewers 不接受参数——只检查项目 cwd 的 viewers/）")
+    vdir = os.path.join(os.getcwd(), "viewers")
+    if not os.path.isdir(vdir):
+        fail(f"未找到 {vdir}——视角文件放在项目 cwd 的 viewers/<视角名>.md"
+             f"（文件名即视角名；可跑 /multi-viewers-setup 交互式建立）")
+    names, _briefs, empty = spec_gen._discover_viewers(vdir)
+    if not names:
+        fail(f"{vdir} 下没有 *.md——文件名即视角名（如 viewers/效率.md）")
+    empty_names = {n for n, _why in empty}
+    print(f"[viewers] {vdir}", flush=True)  # 与 stderr 的错误行保序（管道下也如此）
+    for n in names:
+        notes = []
+        name_err = spec_gen.check_agent_name(n)
+        if name_err:
+            notes.append(f"文件名非法：{name_err}")
+        if n in empty_names:
+            notes.append("空：没有视角内容")
+        suffix = f"（{'；'.join(notes)}）" if notes else ""
+        print(f"  {n}.md{suffix}")
+    err = spec_gen.validate_participants(names)
+    if err:
+        fail_verbatim(err)
+    if empty:
+        fail_verbatim(spec_gen.viewer_set_error(names, empty))
+    gap = spec_gen.viewers_count_gap(names)
+    if gap:
+        print(f"  校验：{gap}（建 1 个是合法的中间状态）")
+        return 0
+    print(f"  校验：通过（{len(names)} 个视角，名字与内容均合法）")
+    return 0
+
 
 def cmd_status(args):
     d = _dir_only("--status", args)
@@ -341,6 +401,8 @@ def main(argv=None):
         if not rest:
             fail("--start 需要 spec 目录参数")
         return cmd_start(rest[0], rest[1:])
+    if cmd == "--viewers":
+        return cmd_viewers(rest)
     if cmd == "--status":
         return cmd_status(rest)
     if cmd == "--report":

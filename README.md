@@ -68,11 +68,12 @@ ls ~/.pi/agent/npm/node_modules/pi-multi-viewers/scripts/mv.sh
 ## 用法
 
 ```
-/multi-viewers "<主题>"        # prompt 入口（推荐；视角来自 viewers/）
+/multi-viewers "<主题>"        # 分析入口（推荐；视角来自 viewers/）
+/multi-viewers-setup          # 建视角入口（交互式：先建议 → 你定 → 落盘 → 给你审）
 /multi-viewers-say "<文本>"    # 插话（extension：零 LLM 直接写入 human 消息）
 ```
 
-两个 pi 命令入口（视角/主题走 prompt，插话走 extension——插话是"本地命令
+三个 pi 命令入口（分析/建视角走 prompt，插话走 extension——插话是"本地命令
 执行"，不需要经过 LLM）。
 
 **目录可以省略**：`--view`/`--say`/`--status`/`--report`/`--wait`/`--cleanup`
@@ -108,9 +109,14 @@ scripts/mv.sh --say "<文本>"                   # 插话（命令行形态；pi
 scripts/mv.sh --status                        # 状态 + 路径（取值与含义以该命令输出为准）
 scripts/mv.sh --report                        # 只读报告（流程/配额/进程/LLM/档位对照；冷路径，不持久化）
 scripts/mv.sh --cleanup                       # 收尾（result.md 自动留存到 <dir>-result.md）
+scripts/mv.sh --viewers                       # 列出+校验当前项目 viewers/（只读；建视角时用）
 ```
 
 ## 视角文件写什么（`viewers/<视角名>.md`）
+
+建视角**推荐**走 `/multi-viewers-setup`（交互式：先给候选建议 → 你定建哪几个 →
+落盘 → 展示给你审）；也可以手写。写完用 `scripts/mv.sh --viewers` 自查（列出并
+用代码判据校验名字与空正文）。
 
 一个视角文件 = **一份视角说明**，纯内容、无格式要求（无 frontmatter、
 无需标题，**文件名就是全部元数据**）。三个要点（措辞经实验验证）：
