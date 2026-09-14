@@ -33,7 +33,8 @@
 2026-09-10；随主会话增长漂移），加模型 384k completion 预留即超 1M 窗口，
 provider 直接 400 拒绝（`pi --fork` 原生命令同样超窗）。budget 把基线压到
 ~80k est，首唤（唤醒 1 首请求）≈132k tokens，可正常进行（e2e 实测：
-三视角 15–19 分钟完整收敛）。权威口径与测点见 docs/design.md §二。
+三视角约 12–35 分钟完整收敛——决定因素是**扩展策略与唤醒数**，区间与测点见
+docs/design.md §二）。
 
 ## 安装
 
@@ -75,8 +76,9 @@ ls ~/.pi/agent/npm/node_modules/pi-multi-viewers/scripts/mv.sh
 执行"，不需要经过 LLM）。
 
 **目录可以省略**：`--view`/`--say`/`--status`/`--report`/`--wait`/`--cleanup`
-不带目录时自动定位"本 session 当前分析"（`mv-<sessionId>-*` 最新；找不到
-则取最新 `mv-*` 并警告；判据 = 含 `repo.git`）。传目录仍支持（显式优先）。
+不带目录时自动定位"本 session 当前分析"（只匹配 `mv-<sessionId>-*` 最新；**未匹配
+即报错退出、不猜目录**——破坏性命令尤其不能猜；判据 = 含 `repo.git`）。传目录仍支持
+（显式优先）。
 这样路径不需要经过任何 LLM 记忆——此前命令都要求绝对路径，等于让主 pi
 把长路径记在上下文里复用。
 
@@ -91,17 +93,19 @@ ls viewers/
 scripts/mv.sh --prepare "<主题>"              # spec = question.md(+background.md)
 scripts/mv.sh --start <spec目录>              # 启动（自动挂载主 session；默认 budget 模式）
 #  可选：--fork-mode compaction|budget|full（见上表；一般不调）
+#  可选：--extension-policy mc-tools|none|all（默认 mc-tools = agents 带 MC 的只读检索工具
+#        ctx_search；none = 零扩展、零依赖；all = 走 pi 默认发现。缺 MC 时 mc-tools 可见降级）
 #  高级：--agents "a,b" 起一次性视角（不建 viewers/ 时用；prompt 入口不传它）
 
 # 观看：--start 会输出可直接执行的 !! 流式观看命令（复制执行）
 scripts/mv.sh --view                          # 一次性增量查看（主 pi 记录 HEAD 作下轮 --since）
 #  --follow 会打印【状态】(meeting/all-freezing/round-robin/concluded)
 #         与【进度】(meeting 消耗/上限 ｜ freezing 集合 ｜ rr → 下一位)
-#         结束时自动附【分析报告】（消息/墙钟/配额/进程跨度/LLM 用量）
+#         结束时自动附【分析报告】（字段集以 docs/design.md「观测面契约」为准）
 
 # 插话 / 状态 / 收尾（目录可省略——自动定位本 session 当前分析）
 scripts/mv.sh --say "<文本>"                   # 插话（命令行形态；pi 内用 /multi-viewers-say）
-scripts/mv.sh --status                        # running / done / stalled / stopped（done 时附 [result] 路径）
+scripts/mv.sh --status                        # 状态 + 路径（取值与含义以该命令输出为准）
 scripts/mv.sh --report                        # 只读报告（流程/配额/进程/LLM/档位对照；冷路径，不持久化）
 scripts/mv.sh --cleanup                       # 收尾（result.md 自动留存到 <dir>-result.md）
 ```
@@ -159,7 +163,7 @@ human_viewer/sayer  human 插话通道
 ## 开发
 
 ```bash
-./tests/run_tests.sh          # 全量（~280s）
+./tests/run_tests.sh          # 全量（`--force` 语义，本机 ~300s；指纹未变时 --reuse 毫秒级）
 ./tests/run_tests.sh --reuse  # 指纹未变跳过
 ```
 

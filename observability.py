@@ -120,8 +120,6 @@ def check_status(base):
         return "not-exists"
     # 读路径统一走 fs.run_git（quotepath 加固单点；run_cmd 只做一次性
     # 环境命令——init/clone/config/push）
-    # 读路径统一走 fs.run_git（quotepath 加固单点；run_cmd 只做一次性
-    # 环境命令——init/clone/config/push）
     agents = meeting_fs.read_protocol(bare).get("participants", [])
     # "收尾完成"判据**单源** = human_viewer.is_finished（concluded 且
     # HEAD:result.md 有效）——与 viewer 的 done 同一判据（§3.5-P5：此前

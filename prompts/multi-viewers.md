@@ -86,7 +86,7 @@ argument-hint: '"<主题>"'
 ## 收尾（用户驱动）
 
 ```bash
-mv.sh --status      # done/stopped/running（目录可省略——自动定位当前分析）
+mv.sh --status      # 状态 + [result] 路径（目录可省略——自动定位当前分析）
 ```
 
 - `done`：读上一步打印的 `[result]` 路径（产物固定位；**路径由命令给出，

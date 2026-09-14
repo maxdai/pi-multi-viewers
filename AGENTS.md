@@ -21,15 +21,18 @@ fake_agent.py        测试薄壳：responder = 随机决策
 start_discussion.py  组合层：CLI 分发 + 环境创建/启动/清理（_resolve_spec / setup_environment）
 spec_gen.py          spec 生成层（question/骨架/viewers 校验与快照/agent 定义 + pi 环境探测）
 observability.py     观测层（check_status / --report / --wait / loop 存活检测）
+                     ↑ 分析目录内含 4 个模块的**运行快照**（非事实源）：改主仓代码
+                       对已启动的分析不生效，排查时用同名文件 diff 溯源
 human_viewer.py      【human 通道】只读展示（增量/--follow/游标）
 human_sayer.py       【human 通道】插话命令（单次/stdin/交互 -i）
 scripts/mv.sh        稳定入口 shim（exec mv_cli.py；路径被 prompt/README 引用）
 scripts/pi-probe.sh  LLM 探针（跑 pi + 登记新 session → 残留检查器可追溯）
+scripts/check-residue.sh  残留检查（session/进程/目录三类；增删 scripts/ 时同步本节）
 mv_cli.py            命令行实现（prepare/start/status/report/wait/cleanup/view/say）
 prompts/multi-viewers.md  /multi-viewers 入口（视角设计三原则 + 审核闸门）
 extensions/multi-viewers-say/  /multi-viewers-say 插话（registerCommand，零 LLM）
 docs/design.md       设计文档（fork 源模式与规模口径 + 决策记录）
-package.json         npm 包 pi-multi-viewers（pi.prompts 注册；发版待办）
+package.json         npm 包 pi-multi-viewers（pi.prompts 注册；**版本号唯一事实源**）
 templates/           AGENTS.md.tpl / agent.md.tpl / gitignore.tpl / spec-readme.md.tpl
 viewers/             示例视角（效率/简单/铁律——仅是形态示例，视角内容由用户按需自定）
 docs/examples/first-experiment/  首次实验存档（机制验证 + 模板原型 + 真实消息）
@@ -66,9 +69,11 @@ tests/               测试（unittest discover tests）
 为什么**不能**用插件全档（`all`）：两类插件在**我们这种 session 形态**上都是分钟级负担、
 且都在关键路径上（loop 等进程退出才继续）——
 · **AFT**：大 session 上进程退出前多活数分钟（受控对照 445.9s → 0.5s）；
-· **MC 全档**：它的 historian 对"带大段未处理历史"的 session **每次必失败并立刻重试**
-（受控对照：同输入 **447s → 10.3s，43 倍**）。
-零扩展**真场实测**：墙钟 12m31s / 每次唤醒 48.1s / 收尾≈0% / historian 0 次。
+· **MC 全档**：它的 historian 对"带大段未处理历史"的 session **在默认输出上限
+（32000）下**每次必失败并立刻重试（受控对照：同输入 **447s → 10.3s，43 倍**；根因 =
+推理流吃光输出上限——该上限**可调**：主 pi 抬到 131072 后首跑即成功、输出 36954 ✓）。
+零扩展**真场实测**：每次唤醒约 48–82s、收尾≈0%、historian 0 次（墙钟随唤醒数变动，
+区间与测点见 docs/design.md §二）。
 **mc-tools 档的实测**：entry **只注册工具、不装 hook** → historian 0/6 ✓（生产 0/3 ✓）；
 `ctx_search` 实测可用 ✓；成本**未测得显著差异**（受控探针 n 小、组内方差>组间差 ✗；
 生产基线：本场 strict=1、n=19，唤醒启动段中位 **0.68s**、收尾中位 0.04s ✓）。
@@ -198,6 +203,21 @@ loop、状态从 git 共享事实推导、单一事实源 = protocol.json、无�
 `docs/test-methodology.md`——新方法在那里追加，AGENTS.md 不逐条同步
 （避免 100 个方法全堆进来）。
 
+## 文档维护纪律（2026-09-14 文档漂移自审共识）
+
+**文档不做第二事实源**——同一事实被多处抄写，抄本必随实现演进漂移（本轮实测：
+"目录发现兜底"一处行为被抄 3 份、全部滞后于代码；版本号 2 处、状态列举 3 版不一）。
+
+1. **有唯一事实源 → 一律引用，不复制**（与变更频率无关）：版本号 → `package.json`；
+   命令行选项 → `--help`；报告字段 → `docs/design.md`「观测面契约」；状态取值 →
+   `observability.check_status` 定义处；容量/规模 → `docs/design.md §二`。
+   **无事实源 → 补一行 + 增删同步**（按变更频率分级，如 `scripts/` 清单）。
+2. **复述类问题的改法优先级**：**删复述引权威** > **最短准确陈述**（无权威入口的
+   行为描述）> **就地改准确**（必须保留语境时）。
+3. **两条判据**：① 重复"计算"在冷路径可接受、重复"**事实**"在文档不可接受
+   （报告的两次遍历不合并；文档的复述必去）② **数字必须带口径**（测点/样本/是否
+   `--force`；单点数字不宜当承诺）。
+
 ## Git 准则（用户约定，沿用）
 
 1. **每次改动先更新本地 git**：对本项目代码/文档的每次修改，先 `git add` + `git commit` 记录。
@@ -211,9 +231,9 @@ loop、状态从 git 共享事实推导、单一事实源 = protocol.json、无�
 
 - **当前形态**：prompt × 1（multi-viewers，开发机已注册可用）+
   extension × 1（multi-viewers-say 插话：零 LLM，直接 spawn human_sayer.py；
-  目录发现 = `<cwd>/mv-<sessionId>-*` 最新，兜底 `mv-*`（排除
-  `mv-spec-*`）并警告）
-  + wrapper。**npm 已发布 0.3.0（2026-09-12）**。
+  目录发现 = `<cwd>/mv-<sessionId>-*` 最新——**无兜底**：未匹配即报错
+  rc 1，需显式传目录）
+  + wrapper。**npm 已发布**（版本以 `package.json` / registry 为准）。
 - **开发机安装（两步，缺一不可；2026-09-10 实测）**：
   ① `pi install /root/pi-multi-viewers`——**注册包**（写
   `~/.pi/agent/settings.json` 的 `packages` 数组）；pi 不是"扫 node_modules
