@@ -111,8 +111,9 @@ def resolve_mc_tools_entry(agent_dir=None):
             pkg_dir = _package_dir(entry, agent_dir)
             break
     if not pkg_dir:
-        return None, (f"packages 里没有可解析的 {MC_PACKAGE}（装它："
-                      f"pi install npm:{MC_PACKAGE}）")
+        return None, (f"packages 里没有可解析的 {MC_PACKAGE}——装它"
+                      f"（pi install npm:{MC_PACKAGE}），或改用零扩展档："
+                      f"--extension-policy none")
     try:
         with open(os.path.join(pkg_dir, "package.json"), encoding="utf-8") as f:
             man = json.load(f)
@@ -682,13 +683,15 @@ def parse_log_nameonly(output):
 # ---- agent 进程的扩展策略（design.md 决策 20）----
 # 三种语义（勿混）：EXTENSION_POLICIES 是**合法值域**（分派与值域守卫引它）；
 # DEFAULT_EXTENSION_POLICY 是**缺省填谁**（全仓引此常量）。
-#   none     : 零扩展（默认）——最快、可移植（不依赖任何扩展）
-#   mc-tools : 只要 MC 的**只读检索工具**（ctx_search）——给 agents 按需检索
-#              项目背景的能力（背景蒸馏已移除，这是它的补充通道）；MC 的
-#              historian/压缩机制**不在**这一档（入口只注册工具、不装 hook）
+#   mc-tools : **默认**——只要 MC 的**只读检索工具**（ctx_search）。为什么默认它：
+#              agents 需要主项目背景（背景蒸馏机制已移除），这是它的补充通道；
+#              该入口**只注册工具、不装 hook** → historian/压缩不在其中
+#              （受控实测 historian 0/6、成本与 none 无差、ctx_search 可用）。
+#              代价：本档要求本机装有 MC（缺则 fail-fast，见 resolve_mc_tools_entry）
+#   none     : 零扩展——最快、**零依赖**（不依赖任何扩展；无 MC 的机器/CI 用这档）
 #   all      : 走 pi 默认扩展发现（A/B 实验与显式 opt-in 用）
 EXTENSION_POLICIES = ("none", "mc-tools", "all")
-DEFAULT_EXTENSION_POLICY = "none"
+DEFAULT_EXTENSION_POLICY = "mc-tools"
 # "mc-tools" 档引用的包（该档 = 那个包的能力，故具名引用而非通用机制：
 # 入口是它的内部文件，路径解析见 resolve_mc_tools_entry 的 docstring）
 MC_PACKAGE = "@cortexkit/pi-magic-context"

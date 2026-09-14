@@ -753,8 +753,8 @@ class TestExtensionPolicy(unittest.TestCase):
                 policy, "唤醒")
         return cmd
 
-    def test_default_is_zero_extensions(self):
-        """none（默认）：四个 --no-* 都在，且**不**显式加载任何扩展。"""
+    def test_none_is_zero_extensions(self):
+        """none 档：四个 --no-* 都在，且**不**显式加载任何扩展。"""
         cmd = self._cmd("none")
         for flag in ("--no-extensions", "--no-skills",
                      "--no-prompt-templates", "--no-themes"):
@@ -762,8 +762,14 @@ class TestExtensionPolicy(unittest.TestCase):
         self.assertNotIn("-e", cmd)
         self.assertNotIn("--extension", cmd)
 
+    def test_mc_tools_is_the_default_policy(self):
+        """默认档 = mc-tools（用户裁定：ctx_search 是必要的 background 补充）。"""
+        import meeting_fs
+        self.assertEqual(meeting_fs.DEFAULT_EXTENSION_POLICY, "mc-tools")
+        self.assertEqual(meeting_fs.EXTENSION_POLICIES[0], "mc-tools")
+
     def test_mc_tools_loads_only_the_entry(self):
-        """mc-tools：仍是零扩展 + **只**显式加载 MC 的只读工具入口。"""
+        """mc-tools（默认档）：仍是零扩展 + **只**显式加载 MC 的只读工具入口。"""
         import meeting_fs
         cmd = self._cmd("mc-tools")
         for flag in ("--no-extensions", "--no-skills",

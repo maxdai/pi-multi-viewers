@@ -59,12 +59,12 @@ tests/               测试（unittest discover tests）
 
 | 档 | 唤醒命令 | 用途 |
 |---|---|---|
-| **none**（默认） | `--no-extensions --no-skills --no-prompt-templates --no-themes` | 最快、可移植（不依赖任何扩展）|
-| **mc-tools** | 同上 + `-e <MC 的 subagent-entry.js>` | 给 agents **按需检索项目背景**（`ctx_search`）——背景蒸馏机制已移除，这是其补充通道 |
+| **mc-tools**（默认） | 四个 `--no-*` + `-e <MC 的 subagent-entry.js>` | 给 agents **按需检索项目背景**（`ctx_search`）——背景蒸馏机制已移除，这是其补充通道 |
+| **none** | 四个 `--no-*` | 零扩展、**零依赖**（无 MC 的机器/CI 用这档）|
 | **all** | 不加任何 `--no-*`（pi 默认发现）| A/B 实验与显式 opt-in |
 
-为什么默认 none：两类插件在**我们这种 session 形态**上都是分钟级负担、且都在关键路径上
-（loop 等进程退出才继续）——
+为什么**不能**用插件全档（`all`）：两类插件在**我们这种 session 形态**上都是分钟级负担、
+且都在关键路径上（loop 等进程退出才继续）——
 · **AFT**：大 session 上进程退出前多活数分钟（受控对照 445.9s → 0.5s）；
 · **MC 全档**：它的 historian 对"带大段未处理历史"的 session **每次必失败并立刻重试**
 （受控对照：同输入 **447s → 10.3s，43 倍**）。
@@ -73,7 +73,9 @@ tests/               测试（unittest discover tests）
 成本与 none 无差（受控 6 次：中位 7.8s vs 9.2s，差在噪音内 ✓）；`ctx_search` 实测可用 ✓。
 **入口解析 fail-fast**（`meeting_fs.resolve_mc_tools_entry`：从 pi 的 packages 找 MC 包 →
 读它声明的扩展入口 → 取同目录的 subagent-entry.js）；缺 MC 时**响亮失败**、不静默退回 none。
-**依赖边界**：只有 mc-tools 档要求本机装 MC；none 档零依赖（默认路径可移植）。
+**依赖边界**：默认档（mc-tools）**要求本机装有 MC**——它是 MC 的能力（缺则 fail-fast，
+报错里给出两条出路：装 MC，或显式 `--extension-policy none`）；`none` 档零依赖
+（无 MC 的机器/CI 用这档）。
 **主 pi 完全不受影响**（只改我们 spawn 的 agent 进程命令行；主 pi 的 MC/历史学家照常）。
 
 **关键约定**：pi sessions 目录编码 = `--` + 去首尾斜杠内斜杠换 `-` + `--`

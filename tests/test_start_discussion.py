@@ -43,7 +43,7 @@ class TestGenProtocol(unittest.TestCase):
         p = gen_protocol("t", ["a", "b"], 5, 5, extension_policy="mc-tools")
         self.assertEqual(p.get("extensionPolicy"), "mc-tools")
         p2 = gen_protocol("t", ["a", "b"], 5, 5)
-        self.assertEqual(p2.get("extensionPolicy"), "none")
+        self.assertEqual(p2.get("extensionPolicy"), "mc-tools")   # 默认档
 
     def test_extension_policy_rejects_unknown(self):
         """非法值就地报错（不落盘半成品）——与 forkMode 同款。"""
