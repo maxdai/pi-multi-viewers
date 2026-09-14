@@ -558,9 +558,6 @@ def main():
         help="agents 的扩展策略：mc-tools=默认，只要 MC 的只读检索工具 "
              "ctx_search（缺 MC 时可见降级为零扩展）；none=零扩展（零依赖）；"
              "all=走 pi 默认发现")
-    parser.add_argument("--extensions", dest="extension_policy",
-                        action="store_const", const="all",
-                        help="[历史别名] 等价 --extension-policy all")
     parser.add_argument("--start", action="store_true", help="创建后启动讨论")
     parser.add_argument("--skip-setup", action="store_true",
                         help="跳过环境生成，只启动已有环境（需 --dir）")
@@ -712,8 +709,9 @@ def main():
             workdir = os.path.join(base, f"work-{p}")
             cmd = [sys.executable, os.path.join(base, "meeting_loop.py"),
                    workdir, p]
-            if args.extension_policy != meeting_fs.DEFAULT_EXTENSION_POLICY:
-                cmd += ["--extension-policy", args.extension_policy]
+            # 扩展策略**不转发**：协议字段（gen_protocol 恒写）是唯一权威，
+            # 转发只会多一条通道（S3）。例外语义已写进 decision 20：旧协议
+            # 目录（无该字段）按默认档启动。
             # 配额（max-meeting/max-rr/stall-timeout）是环境属性：创建时
             # 固化在 protocol.json，启动继承（loop 读 protocol 优先）。
             # 不传 CLI —— 避免无条件覆盖 protocol.json 的固化值

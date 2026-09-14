@@ -616,8 +616,6 @@ if __name__ == "__main__":
         i = sys.argv.index("--extension-policy")
         if i + 1 < len(sys.argv):
             extension_policy = sys.argv[i + 1]
-    elif "--extensions" in sys.argv:            # 历史别名（0.4.0 的布尔开关）
-        extension_policy = "all"
     mm, mr, st = 10, 7, 600
     # 协议从 **bare HEAD** 读（单一来源 = 共享事实；本地副本 LLM 可改）——
     # 与 engine participants()/check_status 同一原语
@@ -629,8 +627,6 @@ if __name__ == "__main__":
         sys.exit(1)
     if proto.get("extensionPolicy"):
         extension_policy = proto["extensionPolicy"]
-    elif proto.get("extensions") is True:       # 历史字段兼容（→ all）
-        extension_policy = "all"
     if extension_policy not in meeting_fs.EXTENSION_POLICIES:
         # 值域守卫（与 forkMode 同款四层守卫之一：loop 门）——非法值不进 engine
         # 重试路径，直接 fatal 退出（配置错误就该在启动时响）

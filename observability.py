@@ -625,8 +625,7 @@ def _report_extension_line(base, out):
     """扩展策略：**声明 vs 生效**（+ 降级原因）——与"档位：声明 max ｜ 生效 max"同型。
 
     取数（只读已有家，零新增记录）：
-      · 声明 = `protocol.json.extensionPolicy`（现行字段；旧产物可能有
-        历史字段 `extensions: true` → 记作 all；两者都无 → n/a）
+      · 声明 = `protocol.json.extensionPolicy`（无该字段的旧产物 → n/a）
       · 生效 = loop log 的**登记行**（首唤打一次）：
         `扩展策略: 声明=<x> 生效=<y> strict=<0|1>[ 降级原因=<reason>]`
     为什么需要它：降级本来是**可见的**（loop log 一行），但产品面（报告）看不到
@@ -636,8 +635,6 @@ def _report_extension_line(base, out):
     bare = meeting_fs.bare_of_base(base)
     proto = meeting_fs.read_protocol(bare)
     declared = proto.get("extensionPolicy")
-    if not declared and proto.get("extensions") is True:
-        declared = "all（历史字段 extensions: true）"
     eff = None
     for f in sorted(glob.glob(os.path.join(base, "loop-*.log"))):
         try:
