@@ -783,8 +783,12 @@ class TestExtensionPolicy(unittest.TestCase):
             self.assertEqual(entry, None)
             self.assertTrue(err)
 
-    def test_mc_tools_missing_entry_fails_loud(self):
-        """MC 缺失时必须**响亮失败**（静默退回零扩展 = 意图无声消失）。"""
+    def test_mc_tools_falls_back_visibly_when_missing(self):
+        """缺 MC → **降级为零扩展**（mc-tools 是"允许"而非"要求"），且必须可见。
+
+        生产默认走这条路：命令形态 = 四个 `--no-*`、**无** `-e`；
+        同时打印一行说明（"本次按零扩展运行：ctx_search 不可用"）。
+        """
         import meeting_fs
         import meeting_loop
         with tempfile.TemporaryDirectory() as tmp:
@@ -792,7 +796,35 @@ class TestExtensionPolicy(unittest.TestCase):
             wd = os.path.join(base, "work-a")
             os.makedirs(wd)
             with mock.patch("meeting_fs.resolve_mc_tools_entry",
-                            return_value=(None, "模拟：没装 MC")):
+                            return_value=(None, "模拟：没装 MC")), \
+                    mock.patch.dict(os.environ,
+                                    {meeting_fs.MC_TOOLS_STRICT_ENV: ""}):
+                cmd, _ = meeting_loop._build_wake_cmd(
+                    wd, "a", "sid",
+                    {"model": "", "thinking": "", "prompt_file": ""},
+                    None, tmp, os.path.join(base, "pi-sessions"), False,
+                    "mc-tools", "唤醒")
+        for flag in ("--no-extensions", "--no-skills",
+                     "--no-prompt-templates", "--no-themes"):
+            self.assertIn(flag, cmd)
+        self.assertNotIn("-e", cmd)          # 没有显式入口 → 等价 none 档
+
+    def test_mc_tools_missing_entry_fails_loud(self):
+        """`MV_MC_TOOLS_STRICT=1`（测试/探针保真）→ 缺 MC 必须**响亮失败**。
+
+        理由：否则测试可能在"没装 MC"的环境里通过，而 ctx_search 从未生效
+        （测试环境准确性；用户 2026-09-14 定）。"""
+        import meeting_fs
+        import meeting_loop
+        with tempfile.TemporaryDirectory() as tmp:
+            base = os.path.join(tmp, "mv-x")
+            wd = os.path.join(base, "work-a")
+            os.makedirs(wd)
+            import meeting_fs
+            with mock.patch("meeting_fs.resolve_mc_tools_entry",
+                            return_value=(None, "模拟：没装 MC")), \
+                    mock.patch.dict(os.environ,
+                                    {meeting_fs.MC_TOOLS_STRICT_ENV: "1"}):
                 with self.assertRaises(RuntimeError) as cm:
                     meeting_loop._build_wake_cmd(
                         wd, "a", "sid",

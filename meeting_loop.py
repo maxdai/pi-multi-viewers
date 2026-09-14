@@ -328,9 +328,18 @@ def _build_wake_cmd(workdir, agent, sid, cfg, fork_source, fork_cwd,
     elif extension_policy == "mc-tools":
         entry, err = meeting_fs.resolve_mc_tools_entry()
         if not entry:
-            # fail-fast：静默退回零扩展会让"要给 agent 背景检索"的意图无声消失
-            log(agent, f"[fatal] mc-tools 档入口解析失败：{err}")
-            raise RuntimeError(f"mc-tools 档不可用: {err}")
+            # mc-tools **允许**（而非要求）MC：缺 MC → 降级为零扩展，但**可见**
+            # （一行说明本场没有 ctx_search）；测试/探针用 MV_MC_TOOLS_STRICT=1
+            # 把它变严格（保证测试环境的准确性——否则测试可能在"没装 MC"的
+            # 情况下通过，而 ctx_search 从未生效）。
+            if meeting_fs.mc_tools_strict():
+                log(agent, f"[fatal] mc-tools 档入口解析失败（严格模式）：{err}")
+                raise RuntimeError(f"mc-tools 档不可用: {err}")
+            log(agent, f"mc-tools 档未生效（{err}）——本次按零扩展运行："
+                       f"ctx_search 不可用")
+            cmd += ["--no-extensions", "--no-skills", "--no-prompt-templates",
+                    "--no-themes"]
+            return cmd, session_dir
         cmd += ["--no-extensions", "--no-skills", "--no-prompt-templates",
                 "--no-themes", "-e", entry]
     elif extension_policy != "all":      # pragma: no cover（值域守卫应已拦下）

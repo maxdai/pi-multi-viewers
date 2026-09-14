@@ -692,6 +692,20 @@ def parse_log_nameonly(output):
 #   all      : 走 pi 默认扩展发现（A/B 实验与显式 opt-in 用）
 EXTENSION_POLICIES = ("none", "mc-tools", "all")
 DEFAULT_EXTENSION_POLICY = "mc-tools"
+# mc-tools 档**允许**（而非要求）MC：找不到 MC 时降级为零扩展，但必须**可见**
+# （打印一行说明 `ctx_search` 本次不可用）——无静默铁律。
+# 测试/探针要保真（确认"本场确实带着 ctx_search 在跑"）时，用环境变量把它变严格：
+#   MV_MC_TOOLS_STRICT=1 → 解析失败即报错退出（测试环境准确性优先，用户 2026-09-14 定）
+MC_TOOLS_STRICT_ENV = "MV_MC_TOOLS_STRICT"
+
+
+def mc_tools_strict():
+    """严格模式？（仅测试/探针用；生产默认 False = 允许降级）
+
+    为什么需要它：降级是**可见的**，但"没降级"这件事在测试里必须能被断言——
+    否则一个测试可能"通过"而实际上 ctx_search 从未安装（测试环境准确性）。
+    """
+    return os.environ.get(MC_TOOLS_STRICT_ENV) == "1"
 # "mc-tools" 档引用的包（该档 = 那个包的能力，故具名引用而非通用机制：
 # 入口是它的内部文件，路径解析见 resolve_mc_tools_entry 的 docstring）
 MC_PACKAGE = "@cortexkit/pi-magic-context"

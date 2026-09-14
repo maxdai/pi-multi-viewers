@@ -59,7 +59,7 @@ tests/               测试（unittest discover tests）
 
 | 档 | 唤醒命令 | 用途 |
 |---|---|---|
-| **mc-tools**（默认） | 四个 `--no-*` + `-e <MC 的 subagent-entry.js>` | 给 agents **按需检索项目背景**（`ctx_search`）——背景蒸馏机制已移除，这是其补充通道 |
+| **mc-tools**（默认） | 四个 `--no-*` + `-e <MC 的 subagent-entry.js>` | 给 agents **按需检索项目背景**（`ctx_search`）——背景蒸馏机制已移除，这是其补充通道。**允许而非要求 MC**：找不到 MC → 降级为零扩展 + 一行可见说明（`ctx_search` 本次不可用）|
 | **none** | 四个 `--no-*` | 零扩展、**零依赖**（无 MC 的机器/CI 用这档）|
 | **all** | 不加任何 `--no-*`（pi 默认发现）| A/B 实验与显式 opt-in |
 
@@ -73,9 +73,10 @@ tests/               测试（unittest discover tests）
 成本与 none 无差（受控 6 次：中位 7.8s vs 9.2s，差在噪音内 ✓）；`ctx_search` 实测可用 ✓。
 **入口解析 fail-fast**（`meeting_fs.resolve_mc_tools_entry`：从 pi 的 packages 找 MC 包 →
 读它声明的扩展入口 → 取同目录的 subagent-entry.js）；缺 MC 时**响亮失败**、不静默退回 none。
-**依赖边界**：默认档（mc-tools）**要求本机装有 MC**——它是 MC 的能力（缺则 fail-fast，
-报错里给出两条出路：装 MC，或显式 `--extension-policy none`）；`none` 档零依赖
-（无 MC 的机器/CI 用这档）。
+**依赖边界**：mc-tools 档**允许而非要求** MC——缺 MC 时降级为零扩展，且**可见**
+（打印一行"本次按零扩展运行：ctx_search 不可用"；无静默铁律）；`none` 档零依赖
+（无 MC 的机器/CI 显式选它）。**测试/探针保真**：设 `MV_MC_TOOLS_STRICT=1` →
+缺 MC 即报错退出（否则测试可能在"没装 MC"下通过而 ctx_search 从未生效）。
 **主 pi 完全不受影响**（只改我们 spawn 的 agent 进程命令行；主 pi 的 MC/历史学家照常）。
 
 **关键约定**：pi sessions 目录编码 = `--` + 去首尾斜杠内斜杠换 `-` + `--`

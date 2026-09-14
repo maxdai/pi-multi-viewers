@@ -472,7 +472,7 @@ commit 是溯源记录、本节是长期引用点——不并存两份权威值�
 
     | 档 | 唤醒命令 | 语义 |
     |---|---|---|
-    | `mc-tools`（默认） | 四个 `--no-*` + `-e <MC subagent-entry.js>` | 只要 MC 的**只读检索工具**（`ctx_search`）|
+    | `mc-tools`（默认） | 四个 `--no-*` + `-e <MC subagent-entry.js>`（找不到 MC 时退化为四个 `--no-*`）| 只要 MC 的**只读检索工具**（`ctx_search`）；**允许而非要求** MC |
     | `none` | 四个 `--no-*` | 零扩展：最快、**零依赖** |
     | `all` | 不加任何 `--no-*` | pi 默认发现（A/B 与显式 opt-in）|
 
@@ -485,10 +485,15 @@ commit 是溯源记录、本节是长期引用点——不并存两份权威值�
     **入口解析 fail-fast**（`resolve_mc_tools_entry`：pi 的 packages → MC 包 →
     它声明的扩展入口 → 同目录 `subagent-entry.js`）；缺 MC 时**响亮失败**
     （静默退回 none 会让"要给 agent 背景检索"的意图无声消失）。
-    **依赖边界（默认档的取舍，用户明确选择）**：mc-tools 要求本机装有 MC（它是
-    MC 的能力，缺则 fail-fast，报错给出"装 MC"或"`--extension-policy none`"两条
-    出路）；`none` 零依赖（无 MC 的机器/CI 用这档）。历史字段 `extensions: true`
-    走兼容路径（→ `all`）。
+    **依赖边界（用户 2026-09-14 定）**：mc-tools **允许而非要求** MC——缺 MC 时
+    **降级为零扩展并按 none 运行**，但**必须可见**（打印一行"mc-tools 档未生效
+    （原因）——本次按零扩展运行：ctx_search 不可用"；无静默铁律）。
+    `none` 零依赖（无 MC 的机器/CI 显式选它）。历史字段 `extensions: true` 走
+    兼容路径（→ `all`）。
+    **测试/探针保真开关**：`MV_MC_TOOLS_STRICT=1` → 缺 MC 即报错退出。
+    为什么需要它（测试阶段语义）：降级虽可见，但"没降级"这件事在测试里必须可断言——
+    否则测试可能在"没装 MC"的环境下通过，而 `ctx_search` 从未生效
+    （测试环境准确性优先；成版行为 = 允许降级）。
 
     **主 pi 不受影响**（只改我们 spawn 的 agent 命令行）。
 
