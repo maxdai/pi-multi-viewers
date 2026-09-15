@@ -5,7 +5,7 @@
   python3 start_discussion.py --dir mymeet --topic "主题" --agents a,b \
       [--stances '{"a": "立场1", "b": "立场2"}'] [--start] \
       [--extension-policy none|mc-tools|all] \
-      [--models '{"a": "provider/model"}'] [--max-meeting 10] [--max-rr 7]
+      [--models '{"a": "provider/model"}'] [--max-meeting 15] [--max-rr 7]
 
 复杂内容用 spec 规格目录（设计 16，与 CLI 内容参数互斥）：
   1. 生成骨架:  python3 start_discussion.py --spec-gen myspec --agents a,b,c
@@ -532,7 +532,8 @@ def main():
     parser.add_argument("--questions", default=None, help="待回答问题（|分隔，对齐 RR）")
     parser.add_argument("--models", default=None, help='JSON: {"a": "provider/model"}')
     parser.add_argument("--result-writer", default=None, help="resultWriter（默认最后一位参与者）")
-    parser.add_argument("--max-meeting", type=int, default=10, help="meeting 阶段发言配额（每 agent）")
+    parser.add_argument("--max-meeting", type=int, default=meeting_fs.DEFAULT_MAX_MEETING,
+                        help="meeting 阶段发言配额（每 agent）")
     parser.add_argument("--max-rr", type=int, default=7, help="RR 阶段轮次配额（starter）")
     parser.add_argument("--stall-timeout", type=int,
                         default=meeting_fs.DEFAULT_STALL_TIMEOUT,

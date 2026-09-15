@@ -284,7 +284,7 @@ def build_report(base):
     # msgs 由上方流程段一次读取提供（同一读取派生四段）。
     lasts = {a: (msgs[a][-1] if msgs[a] else None) for a in agents}
     types = {a: (lasts[a].get("type") if lasts[a] else None) for a in agents}
-    quota_meeting = proto.get("maxMeetingRounds", 10)
+    quota_meeting = proto.get("maxMeetingRounds", meeting_fs.DEFAULT_MAX_MEETING)
     quota_rr = proto.get("maxRRRounds", 7)
     out.append("配额：meeting " + "、".join(
         f"{a} {meeting_core.meeting_speak_count(msgs, a)}/{quota_meeting}"

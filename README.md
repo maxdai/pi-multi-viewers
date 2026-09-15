@@ -94,7 +94,7 @@ ls viewers/
 scripts/mv.sh --prepare "<主题>"              # spec = question.md(+background.md)
 scripts/mv.sh --start <spec目录>              # 启动（自动挂载主 session；默认 budget 模式）
 #  可选：--fork-mode compaction|budget|full（见上表；一般不调）
-#  可选：--max-meeting 10 --max-rr 7 --stall-timeout 600
+#  可选：--max-meeting 15 --max-rr 7 --stall-timeout 600
 #        （配额：建环境时固化进 protocol.json，之后不可改；meeting 配额是"每 agent"）
 #  可选：--extension-policy mc-tools|none|all（默认 mc-tools = agents 带 MC 的只读检索工具
 #        ctx_search；none = 零扩展、零依赖；all = 走 pi 默认发现。缺 MC 时 mc-tools 可见降级）

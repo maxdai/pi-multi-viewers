@@ -36,6 +36,7 @@ from meeting_fs import (
     read_protocol, cat_batch, remove_message, write_text, file_size,
     bare_of_base, bare_of_workdir, log,
     RESULT_MD, RESULT_MD_MIN_BYTES, DEFAULT_STALL_TIMEOUT,
+    DEFAULT_MAX_MEETING, DEFAULT_MAX_RR,
 )
 from meeting_core import (
     meeting_speak_count as core_meeting_speak_count,
@@ -503,7 +504,9 @@ def _commit_result_md(workdir, agent, subject):
         log(agent, "result.md 无改动——跳过 commit（幂等）")
 
 
-def agent_loop(workdir, agent, responder, max_meeting=10, max_rr=7,
+def agent_loop(workdir, agent, responder,
+               max_meeting=DEFAULT_MAX_MEETING,
+               max_rr=DEFAULT_MAX_RR,
                poll_interval=POLL_INTERVAL,
                stall_timeout=DEFAULT_STALL_TIMEOUT):
     """主状态机（v2）。responder 注入：响应一轮并返回是否产出。

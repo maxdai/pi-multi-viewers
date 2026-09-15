@@ -47,8 +47,12 @@ def result_path(base):
     """
     return f"{base}-{RESULT_MD}"
 
-# 无进展超时兜底（秒）——协议参数的默认值（gen_protocol 固化进
-# protocol.json；engine/fake_agent 的签名默认与 CLI default 同源于此）。
+# 协议参数默认值（gen_protocol 固化进 protocol.json）——**唯一声明点**：
+# CLI default、engine 签名默认、observability 的兜底读取都引用这里
+# （此前 10/7 在三处各写一遍，改一处不改另一处就会漂移）。
+DEFAULT_MAX_MEETING = 15   # meeting 阶段**每 agent** 发言配额
+DEFAULT_MAX_RR = 7         # RR 阶段轮次配额
+# 无进展超时兜底（秒）——同上（engine/fake_agent 的签名默认与 CLI default 同源）。
 DEFAULT_STALL_TIMEOUT = 600
 
 # thinking 档位缺省值——**唯一声明点**：models.md 的 variant 槽（缺省）

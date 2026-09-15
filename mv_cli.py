@@ -59,7 +59,7 @@ USAGE = f"""用法:
 mv-<PI_SESSION_ID>-* 最新；无匹配则报错要求显式传目录）
 
 默认参数:
-  agents=a,b,c  max-meeting=10  max-rr=7   # 默认值的权威在 python argparse；
+  agents=a,b,c  max-meeting=15  max-rr=7   # 默认值的权威在 python argparse；
                                            # 配额可在 --start 时传（建环境时固化，运行中不可改）
 
 --agents: 逗号分隔名称列表（如 "x,y"）或纯数字（如 4 → 生成 a..d）；
