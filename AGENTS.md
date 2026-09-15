@@ -247,6 +247,9 @@ loop、状态从 git 共享事实推导、单一事实源 = protocol.json、无�
 - **发版时**参照 pi-agents-helper 成熟路径：`pi install npm:pi-multi-viewers`
   用户级安装（package.json `pi.prompts` 声明）；prompt 路径用固定安装路径
   （只支持用户级，项目级 `.pi/npm/` 下不可达）；改动 prompt 后 reload 生效。
+- **版本号口径**（用户 2026-09-15 定）：第二位只在「结构性变更或大功能」时升
+  （如 CLI 从 bash 收敛为 `mv_cli`、新增命令）；其它改动（配置/默认值/小功能/
+  文档/修复）只升第三位。版本号唯一事实源 = `package.json`。
 - **核验法**（照上游约定，不用命令行长度判断）：
   `readlink -f ~/.pi/agent/npm/node_modules/pi-multi-viewers` 指向仓库根，
   且该路径下 `scripts/mv.sh` 存在。
