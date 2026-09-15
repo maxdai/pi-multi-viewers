@@ -45,6 +45,8 @@ USAGE = f"""用法:
   {PROG} --prepare "<问题>" [--background "<背景>"] [--agents "a,b,c"|4]
   {PROG} --start <spec目录> [--fork-mode compaction|budget|full]
   {PROG} --start <spec目录> [--extension-policy none|mc-tools|all]
+  {PROG} --start <spec目录> [--max-meeting N] [--max-rr N] [--stall-timeout S]
+                             # 配额：建环境时固化进 protocol.json（默认 10 / 7 / 600）
   {PROG} --status  [dir]
   {PROG} --report  [dir]
   {PROG} --wait    [dir]
@@ -57,7 +59,8 @@ USAGE = f"""用法:
 mv-<PI_SESSION_ID>-* 最新；无匹配则报错要求显式传目录）
 
 默认参数:
-  agents=a,b,c  max-meeting=10  max-rr=7   # 配额默认值的权威在 python argparse（本层不传）
+  agents=a,b,c  max-meeting=10  max-rr=7   # 默认值的权威在 python argparse；
+                                           # 配额可在 --start 时传（建环境时固化，运行中不可改）
 
 --agents: 逗号分隔名称列表（如 "x,y"）或纯数字（如 4 → 生成 a..d）；
           human 是保留名，不能作为参与者
