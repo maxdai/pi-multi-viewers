@@ -68,13 +68,13 @@ ls ~/.pi/agent/npm/node_modules/pi-multi-viewers/scripts/mv.sh
 ## 用法
 
 ```
-/multi-viewers "<主题>"        # 分析入口（推荐；视角来自 viewers/）
-/multi-viewers-setup          # 建视角入口（交互式：先建议 → 你定 → 落盘 → 给你审）
-/multi-viewers-say "<文本>"    # 插话（extension：零 LLM 直接写入 human 消息）
+/multi-viewers-setup          # ① 建视角入口（首次使用先跑这个；交互式：先建议 → 你定 → 落盘 → 给你审）
+/multi-viewers "<主题>"        # ② 分析入口（推荐；视角来自 viewers/）
+/multi-viewers-say "<文本>"    # 插话（分析进行中；extension：零 LLM 直接写入 human 消息）
 ```
 
-三个 pi 命令入口（分析/建视角走 prompt，插话走 extension——插话是"本地命令
-执行"，不需要经过 LLM）。
+三个 pi 命令入口，按使用顺序排列（建视角/分析走 prompt，插话走 extension——
+插话是"本地命令执行"，不需要经过 LLM）。
 
 **目录可以省略**：`--view`/`--say`/`--status`/`--report`/`--wait`/`--cleanup`
 不带目录时自动定位"本 session 当前分析"（只匹配 `mv-<sessionId>-*` 最新；**未匹配
