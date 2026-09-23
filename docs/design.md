@@ -17,6 +17,9 @@
 循环**生成 fork 源文件**（`meeting_fs.build_fork_source`），再用
 `pi --session <fork 源> --name <分析名>-<视角名>` 打开。
 
+> 本机制建立在 pi 的 **session jsonl 文件**上——那是一处**外部契约**，
+> 依赖清单与迁移触发条件见 **§六**。
+
 > **下列产物数字的锚**（口径要求见 §二）：产物侧，2026-09-10，本仓库
 > 主 session（≈6.8k 条 / 15MB）。**条数/MB 随主会话增长漂移**（每次跑值
 > 不同），故本节数字只作量级示意；消费侧数字（tokens）一律带唤醒序号。
@@ -612,3 +615,40 @@ commit 是溯源记录、本节是长期引用点——不并存两份权威值�
   若重启该实验，须**先登记判据**（可机械核查：覆盖 question.md 评审项数、
   给出 `file:line` 次数、是否达配额）与比较单位（per-agent / per-wake）。
 - 图片块与非字符串叶子在预算估算中的计入未覆盖（当前余量充足）。
+
+---
+
+## 六、外部契约：我们对 pi session 格式的依赖（迁移清单）
+
+fork 机制建立在 pi 的 **session jsonl 文件**上——这是**外部契约**，不是我们能单方面
+稳定的内部设计。依赖逐条列出，供上游演进时**逐条验证**（快照：2026-09-22，
+上游源码副本 `/root/research/pi`）。
+
+| 依赖 | 内容 |
+|---|---|
+| CLI | `--session <path>`（须接受**任意路径文件**——我们的 fork 源在分析目录里）、`--session-id`、`--session-dir`、`--name`、`--model`/`--thinking`/`--append-system-prompt`/`--print`/`--approve` |
+| 文件布局 | `~/.pi/agent/sessions/--<cwd 编码>--/<ts>_<sid>.jsonl`；编码 = 去首尾 `/`、内部 `/`→`-`（`spec_gen.pi_sessions_dir`；`PI_SESSION_FILE` 是更稳的入口） |
+| 条目 schema | 每行一个 JSON：`type`/`id`/`parentId`/`timestamp`；消息体在 `message.{role,content}`；**未知类型一律原样透传**（`_fold_entry` 默认分支） |
+| 语义（**只复刻这两处**） | ① replay 起点 = 路径上最后一个 `compaction` 的 `firstKeptEntryId`；② 可见集合 = 该锚点之后的条目（`_normalize_entries` 据此移除窗口内 compaction 并桥接 `parentId`，不变量 I4） |
+| 条目类型 | `compaction`（读/移除）、`thinking_level_change`（剔除继承值，否则 pi 不写本场生效值）、`session_info.name`、`custom_message`（我们的边界条目） |
+
+**触碰面**（适配范围；口径 = 函数体行数，2026-09-22 摸底）：`meeting_fs` 456 行
+（真正格式耦合 ≈300：`build_fork_source` + `_normalize_entries`）· `meeting_loop` 141 ·
+`spec_gen` 66 · `observability` 33。
+
+**触发条件**（任一出现即进入适配）：① `packages/coding-agent/docs/session-format.md`
+改写，或 CLI 默认会话落到 sqlite/repo 抽象（含 `--session-backend` 类开关）；
+② `--session <file>` 不再接受任意路径文件，或首唤报「打不开 fork 源 / 上下文为空」；
+③ CHANGELOG 出现 "migrate sessions" / "sqlite default" 类条目。
+
+**核对方式**（两条命令，读上游源码副本）
+```bash
+head -3 /root/research/pi/packages/coding-agent/docs/session-format.md   # 是否仍声明 stored as JSONL
+grep -n '"--session"' /root/research/pi/packages/coding-agent/src/cli/args.ts
+```
+
+**上游现状与结论**：`pi-agent-core` 已有 `Session`/`SessionStorage`/`SessionRepo` 抽象 +
+`jsonl`/`memory` 实现，SQLite 是独立包（`@earendil-works/pi-session-backend-sqlite-node`，
+活跃开发）；**但 CLI 主路径仍是 jsonl**（`core/session-manager.ts`）、`session-format.md`
+仍如此定义、Unreleased 无迁移条目。**现在不改**——对着尚未被 CLI 使用的接口写代码是投机。
+（扩展侧另有稳定只读入口 `ctx.sessionManager`，进程外 loop 用不到，与"流程 extension 化"相关。）
