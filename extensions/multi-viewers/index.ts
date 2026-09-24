@@ -127,18 +127,20 @@ export default function register(pi: any) {
         );
         return;
       }
-      ctx.ui.notify(
-        `spec 已生成：${specDir}\n文件：${specListing(specDir)}\n` +
-          "（要看内容就直接打开该目录；改完再回到这个弹窗点「启动分析」）",
-        "info",
-      );
+      ctx.ui.notify(`spec 已生成：${specDir}`, "info");
 
-      // ② 门禁弹窗（用户审阅的闸门；取消则保留 spec 不启动）
-      const choice = await ctx.ui.select("启动多视角分析？", [
-        "启动分析",
-        "取消（保留 spec）",
-      ]);
-      if (choice !== "启动分析") {
+      // ② 门禁 = **暂停点**（用户要求）：confirm 弹窗保持打开，流程不继续；
+      //    用户在**其它窗口**编辑 spec 目录，改完点「确认」继续；取消则不启动
+      //    且保留 spec（提示里给出显式 --start 出路）。为什么不是 select：
+      //    select 的选项在弹窗里、看不到路径；confirm 的正文能把路径/文件清单/
+      //    "可以先去改"写进弹窗本身，不需要用户记住前一条 notify。
+      const go = await ctx.ui.confirm(
+        "启动多视角分析？（现在暂停中，可在其它窗口修改 spec）",
+        `spec：${specDir}\n文件：${specListing(specDir)}\n\n` +
+          "需要修改就去改这个目录，改完点「确认」继续；\n" +
+          "点「取消」则不启动（spec 保留，可稍后 mv.sh --start）。",
+      );
+      if (!go) {
         ctx.ui.notify(
           `已取消，spec 保留在：${specDir}\n` +
             `之后可用：mv.sh --start ${specDir}`,
