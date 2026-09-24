@@ -555,9 +555,10 @@ commit 是溯源记录、本节是长期引用点——不并存两份权威值�
    经评估收益不支撑扩面。
 
 22. **分析流程 = extension（零 LLM 骨架）**（2026-09-24 定）：`/multi-viewers` 与
-    `/multi-viewers-finish` 由 prompt 改为 extension 命令——prepare → **门禁弹窗**
-    （显示 spec 路径 + 文件清单，[启动分析]/[取消保留 spec]）→ start → **观看命令
-    预填输入框**（`ctx.ui.setEditorText`，用户按 Enter 即执行）；收尾为 status →
+    `/multi-viewers-finish` 由 prompt 改为 extension 命令——prepare → **门禁 = 暂停点**
+    （`ui.confirm`：标题点明「暂停中，可在其它窗口修改 spec」，正文带 spec 路径 +
+    文件清单；用户在**其它窗口**编辑该目录，改完点「确认」继续，取消则保留 spec）
+    → start → **观看命令    预填输入框**（`ctx.ui.setEditorText`，用户按 Enter 即执行）；收尾为 status →
     确认 → cleanup。**为什么**：prompt 靠 LLM 逐步执行，每步都可能漏（实测：观看
     命令漏传 2 次、失败判据曾靠读中文报错文本、目录路径曾靠 LLM 记忆）；代码执行
     则天然不遗漏。**与 CLI 的契约 = 机器标记行**（`[prepare] spec=` / `[start] dir=` /
