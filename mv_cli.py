@@ -322,11 +322,15 @@ def cmd_prepare(args):
         cmd += ["--agents", agents_list]
     if _call(cmd):
         fail("spec 骨架生成失败（start_discussion --spec-gen，见上方错误）")
+    # 机器可读标记（供 pi extension 解析；人类文字照常保留）：扩展靠它拿
+    # spec 路径，不解析人类文案（文案会变，标记不变）。
+    print(f"[prepare] spec={spec_dir}")
     print(f"""已生成分析 spec:
   {spec_dir}
 
-请查看/编辑该目录，补充背景、各 agent 视角等。
-编辑完成后，告诉我"继续"，我会自动启动分析。""")
+请查看/编辑该目录（question.md 任务书 / background.md 边界 / agents/*.md 视角快照 /
+models.md 模型），确认后启动：
+  {PROG} --start {spec_dir}""")
     return 0
 
 
@@ -368,11 +372,16 @@ def cmd_start(spec_dir, extra):
               "--skip-setup", "--start"]):
         fail("启动失败，请查看上方输出")
 
+    # 机器可读标记（供 pi extension 解析；人类文字照常保留）：watch= 供扩展
+    # 把观看命令**原样**预填进输入框（不做改写/转述）。
+    watch_cmd = f'!!python3 "{HUMAN_VIEWER}" {dir_path} --follow'
+    print(f"[start] dir={dir_path}")
+    print(f"[start] watch={watch_cmd}")
     print(f"""多视角分析已启动
 目录: {dir_path}
 
 观看分析（复制执行，不进 LLM；Ctrl-C 中断后可插话再续看）:
-!!python3 "{HUMAN_VIEWER}" {dir_path} --follow
+{watch_cmd}
 
 查看进展: {PROG} --view {dir_path}
 插话: {PROG} --say {dir_path} "<文本>"

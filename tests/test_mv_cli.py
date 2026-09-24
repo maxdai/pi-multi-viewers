@@ -432,3 +432,46 @@ class TestViewers(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestMachineMarkers(unittest.TestCase):
+    """pi extension 与 CLI 的**机器契约**：标记行（扩展不解析人类文案）。
+
+    为什么锁住它：`extensions/multi-viewers/index.ts` 靠 `[prepare] spec=` /
+    `[start] dir=` / `[start] watch=` 取值——人类文案可以改，这三行不能消失，
+    否则扩展静默拿不到路径/观看命令（用户 2026-09-24 拍板的 extension 形态）。
+    """
+
+    def test_prepare_prints_spec_marker(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.object(mv_cli, "_call", return_value=0), \
+                    mock.patch.object(mv_cli.os, "getcwd", return_value=tmp):
+                rc, out, _err = run_main(["--prepare", "主题"])
+        self.assertEqual(rc, 0)
+        markers = [l for l in out.splitlines() if l.startswith("[prepare] spec=")]
+        self.assertEqual(len(markers), 1, out)
+        spec = markers[0].split("=", 1)[1]
+        self.assertTrue(os.path.isabs(spec), spec)
+        self.assertTrue(os.path.basename(spec).startswith("mv-spec-"), spec)
+
+    def test_start_prints_dir_and_watch_markers(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            spec = os.path.join(tmp, "mv-spec-x")
+            os.makedirs(spec)
+            with open(os.path.join(spec, "question.md"), "w") as f:
+                f.write("# 分析主题：T\n")
+            with mock.patch.object(mv_cli, "_call", return_value=0), \
+                    mock.patch.dict(os.environ, {"PI_SESSION_ID": "sid9"}), \
+                    mock.patch.object(mv_cli.os, "getcwd", return_value=tmp):
+                rc, out, _err = run_main(["--start", spec])
+        self.assertEqual(rc, 0)
+        dir_m = [l for l in out.splitlines() if l.startswith("[start] dir=")]
+        watch_m = [l for l in out.splitlines() if l.startswith("[start] watch=")]
+        self.assertEqual(len(dir_m), 1, out)
+        self.assertEqual(len(watch_m), 1, out)
+        d = dir_m[0].split("=", 1)[1]
+        w = watch_m[0].split("=", 1)[1]
+        self.assertTrue(os.path.basename(d).startswith("mv-sid9-"), d)
+        self.assertEqual(w, f'!!python3 "{mv_cli.HUMAN_VIEWER}" {d} --follow')
+        # 人类块里那一行 = **同一字符串**（单一来源，不重复拼）
+        self.assertEqual(out.count(w), 2, out)

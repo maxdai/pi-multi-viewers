@@ -554,6 +554,20 @@ commit 是溯源记录、本节是长期引用点——不并存两份权威值�
    约束归指令层 + 主项目 `.gitignore`）。要拦主仓库需换机制类（沙箱/钩子），
    经评估收益不支撑扩面。
 
+22. **分析流程 = extension（零 LLM 骨架）**（2026-09-24 定）：`/multi-viewers` 与
+    `/multi-viewers-finish` 由 prompt 改为 extension 命令——prepare → **门禁弹窗**
+    （显示 spec 路径 + 文件清单，[启动分析]/[取消保留 spec]）→ start → **观看命令
+    预填输入框**（`ctx.ui.setEditorText`，用户按 Enter 即执行）；收尾为 status →
+    确认 → cleanup。**为什么**：prompt 靠 LLM 逐步执行，每步都可能漏（实测：观看
+    命令漏传 2 次、失败判据曾靠读中文报错文本、目录路径曾靠 LLM 记忆）；代码执行
+    则天然不遗漏。**与 CLI 的契约 = 机器标记行**（`[prepare] spec=` / `[start] dir=` /
+    `[start] watch=` / `[status]` / `[result]`），扩展不解析人类文案——文案可变，
+    标记不可消失（`tests/test_mv_cli.py::TestMachineMarkers` 锁住）。**边界**：spec
+    内容起草仍是真 LLM 工作（任务类型/产出形态），故为**两段式**——骨架零 LLM，
+    起草/摘要走普通对话；门禁取消则保留 spec，用户编辑后自行 `mv.sh --start`。
+    被否决：A（handler 里 `sendUserMessage` 触发 LLM 回合改 spec——时序不可控）、
+    D（拆两条命令——把门禁成本转嫁用户；B1 变体/第三种即现形态）。
+
 ### 被否决方案（含重估触发条件）
 
 | 方案 | 否因 | 重估触发 | 所在位置 |

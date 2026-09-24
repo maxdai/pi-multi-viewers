@@ -29,7 +29,8 @@ scripts/mv.sh        稳定入口 shim（exec mv_cli.py；路径被 prompt/READM
 scripts/pi-probe.sh  LLM 探针（跑 pi + 登记新 session → 残留检查器可追溯）
 scripts/check-residue.sh  残留检查（session/进程/目录三类；增删 scripts/ 时同步本节）
 mv_cli.py            命令行实现（prepare/start/status/report/wait/cleanup/view/say/viewers）
-prompts/multi-viewers.md  /multi-viewers 分析入口（审核闸门；视角原则引 README，不复述）
+extensions/multi-viewers/  /multi-viewers 分析入口（extension：prepare→门禁弹窗→start→预填观看命令）
+                           /multi-viewers-finish 收尾（extension：status→确认→cleanup）
 prompts/multi-viewers-setup.md  /multi-viewers-setup 建视角入口（建议→你定→落盘→给审）
 extensions/multi-viewers-say/  /multi-viewers-say 插话（registerCommand，零 LLM）
 docs/design.md       设计文档（fork 源模式与规模口径 + 决策记录）
@@ -230,11 +231,12 @@ loop、状态从 git 共享事实推导、单一事实源 = protocol.json、无�
 
 ## 安装/发版状态（2026-09-11）
 
-- **当前形态**：prompt × 2（multi-viewers 分析 / multi-viewers-setup 建视角）+
-  extension × 1（multi-viewers-say 插话：零 LLM，直接 spawn human_sayer.py；
-  目录发现 = `<cwd>/mv-<sessionId>-*` 最新——**无兜底**：未匹配即报错
-  rc 1，需显式传目录）
-  + wrapper。**npm 已发布**（版本以 `package.json` / registry 为准）。
+- **当前形态**：prompt × 1（multi-viewers-setup 建视角）+ extension × 2
+  （`multi-viewers` 分析与 `multi-viewers-finish` 收尾：零 LLM 流程，靠 CLI 的
+  机器标记行取值 `[prepare] spec=` / `[start] dir=` / `[start] watch=` / `[status]`；
+  `multi-viewers-say` 插话：零 LLM，直接 spawn human_sayer.py；目录发现 =
+  `<cwd>/mv-<sessionId>-*` 最新——**无兜底**：未匹配即报错 rc 1）+ wrapper。
+  **npm 已发布**（版本以 `package.json` / registry 为准）。
 - **开发机安装（两步，缺一不可；2026-09-10 实测）**：
   ① `pi install /root/pi-multi-viewers`——**注册包**（写
   `~/.pi/agent/settings.json` 的 `packages` 数组）；pi 不是"扫 node_modules
