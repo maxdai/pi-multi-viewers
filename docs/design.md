@@ -586,8 +586,13 @@ commit 是溯源记录、本节是长期引用点——不并存两份权威值�
     注释「set_editor_text … ignored」+ SDK `ui-context.ts` 里是空实现）。⇒ **交付观看命令
     必须有 notify 兜底**（预填只是增强，不能当唯一出口）；需要分级时用 `ctx.mode`。
     但 pi-web 实测**关掉 notify 弹窗即消失** ⇒ 观看命令还写一条 `pi.sendMessage`
-    （`customType: multi-viewers`、`display: true`）进消息流：持久可回滚复制，
-    代价 = 参与 LLM 上下文的一行（用户 2026-09-25 要求「message 流中也能显示」）。
+    （`customType: multi-viewers`、`display: true`）进消息流：持久留痕，代价 = 参与
+    LLM 上下文的一行（用户 2026-09-25 要求「message 流中也能显示」）。**pi-web 把
+    custom_message 渲染成折叠块**（`multi-viewers (click to expand)`，`static/app.js`
+    的 `renderCustom`）——一眼看不见 ⇒ 另加**常驻面板**：`ctx.ui.setWidget("multi-viewers", […])`
+    （pi-web 注释 "Persistent widget panel … Not a popup"；主 pi 的 MC 待办用同一通道），
+    收尾成功时 `setWidget(key, undefined)` 清掉。**四个出口各司其职**：预填=能直接跑（TUI）、
+    notify=即时、custom_message=会话留痕（折叠）、widget=常驻一眼可见。
     被否决：A（handler 里 `sendUserMessage` 触发 LLM 回合改 spec——时序不可控）、
     D（拆两条命令——把门禁成本转嫁用户；B1 变体/第三种即现形态）。
 

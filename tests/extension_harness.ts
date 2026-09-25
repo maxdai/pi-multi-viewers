@@ -72,6 +72,8 @@ function mockCtx(calls: Call[], answer?: any) {
         return answer;
       },
       setEditorText: (t: string) => calls.push({ kind: "setEditorText", args: t }),
+      setWidget: (k: string, lines: any) =>
+        calls.push({ kind: "setWidget", args: { k, lines } }),
     },
   };
 }
@@ -238,17 +240,26 @@ console.log("=== /multi-viewers ===");
   const calls: Call[] = [];
   await MV.handler("主题X", mockCtx(calls, true));
   check(
-    "确认 → confirm→setEditorText→success（无多余额外 notify）",
-    eq(kinds(calls), ["confirm", "setEditorText", "notify:success"]),
+    "确认 → confirm→setEditorText→setWidget→success",
+    eq(kinds(calls), ["confirm", "setEditorText", "setWidget", "notify:success"]),
     calls,
   );
+  {
+    // 常驻面板（pi-web：custom_message 是折叠的、notify 会消失 → 面板才一眼可见）
+    const w = calls.find((c) => c.kind === "setWidget")!.args;
+    check("setWidget 面板含观看命令（key=multi-viewers）", w.k === "multi-viewers" &&
+      (w.lines as string[]).some((l: string) => l.includes(WATCH)), w);
+  }
   check("setEditorText = watch 行原样", calls[1].args === WATCH, calls[1].args);
-  check("notify 带 watch 命令副本（pi-web 下唯一退路）", String(calls[2].args).includes(WATCH), calls[2].args);
-  check(
-    "notify 文案不再断言「已预填」（D2：pi-web 忽略 setEditorText）",
-    !String(calls[2].args).includes("已预填进输入框，按"),
-    calls[2].args,
-  );
+  {
+    const nf = calls.find((c) => c.kind === "notify:success")!;
+    check("notify 带 watch 命令副本（弹窗/面板之外仍有一份）", String(nf.args).includes(WATCH), nf.args);
+    check(
+      "notify 文案不再断言「已预填」（D2：pi-web 忽略 setEditorText）",
+      !String(nf.args).includes("已预填进输入框，按"),
+      nf.args,
+    );
+  }
   check("sid 注入（start）", cliCalls()[1]?.sid === SID, cliCalls()[1]);
   check("第 2 次调用 = --start <spec>", cliCalls()[1]?.argv.includes("--start /tmp/mv-harness/work/mv-spec-2"), cliCalls());
   // 消息流持久出口（pi-web 的 notify 关掉就没；用户要求 message 流里也留一份）
@@ -347,17 +358,28 @@ console.log("=== /multi-viewers-finish ===");
   const calls: Call[] = [];
   await FIN.handler("", mockCtx(calls, true));
   check(
-    "done+确认 → 通知结果→confirm→cleanup→success",
-    eq(kinds(calls), ["notify:success", "confirm", "notify:success"]),
+    "done+确认 → 通知结果→confirm→cleanup→清面板→success",
+    eq(kinds(calls), ["notify:success", "confirm", "setWidget", "notify:success"]),
     calls,
   );
   check("done 文案含 result 路径", String(calls[0].args).includes("x-result.md"), calls[0].args);
-  check(
-    "cleanup 恰好一次，输出原样转达（含保存路径）",
-    cliCalls().filter((c) => c.argv.includes("--cleanup")).length === 1 &&
-      String(calls[2].args).includes("结果已保存到"),
-    calls,
-  );
+  {
+    const w = calls.filter((c) => c.kind === "setWidget");
+    check(
+      "收尾成功 → 清掉常驻面板（setWidget(key, undefined)）",
+      w.length === 1 && w[0].args.lines === undefined,
+      w,
+    );
+  }
+  {
+    const last = [...calls].reverse().find((c) => c.kind.startsWith("notify"))!;
+    check(
+      "cleanup 恰好一次，输出原样转达（含保存路径）",
+      cliCalls().filter((c) => c.argv.includes("--cleanup")).length === 1 &&
+        String(last.args).includes("结果已保存到"),
+      calls,
+    );
+  }
 }
 {
   // 场景 ④：cleanup 自身失败
@@ -390,8 +412,8 @@ console.log("=== /multi-viewers-finish ===");
   const calls: Call[] = [];
   await FIN.handler("", mockCtx(calls, true));
   check(
-    "stalled → warning→confirm→cleanup→success（不等死）",
-    eq(kinds(calls), ["notify:warning", "confirm", "notify:success"]),
+    "stalled → warning→confirm→cleanup→清面板→success（不等死）",
+    eq(kinds(calls), ["notify:warning", "confirm", "setWidget", "notify:success"]),
     calls,
   );
   const warn = String(calls[0].args);

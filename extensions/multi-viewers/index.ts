@@ -19,8 +19,10 @@
  * 观看命令交付 = **三个出口**（缺一不可，都是实测暴露的）：
  * ① `ctx.ui.setEditorText` 预填输入框（按 Enter 即执行；**仅 TUI**，pi-web 忽略）
  * ② `notify` 带一份（即时可见；但 pi-web 上关掉弹窗即消失）
- * ③ `pi.sendMessage` 写一条 custom_message 进消息流（**持久可回滚复制**；
- *    代价 = 参与 LLM 上下文的一行）
+ * ③ `pi.sendMessage` 写一条 custom_message 进消息流（持久；但 pi-web 渲染为
+ *    **折叠的** `multi-viewers (click to expand)`，需点击/重载才展开）
+ * ④ `ctx.ui.setWidget` 常驻面板（**一眼可见、不消失、不需点击**——pi-web 实测
+ *    前三条都不够用；面板是 MC 待办用的同一通道）
  */
 
 import {
@@ -102,6 +104,15 @@ export default function register(pi: any) {
         content: `多视角分析已启动：${dir}\n观看命令（复制执行，不进 LLM）：\n${watch}`,
         display: true,
       });
+      // 常驻面板：pi-web 实测把 custom_message 渲染成折叠的 `multi-viewers (click to expand)`，
+      // 且历史条目未必实时刷新 → 观看命令还需要一条**一眼可见、不需点击**的常驻出口。
+      // setWidget 正是这个语义（pi-web 注释："Persistent widget panel … Not a popup"；
+      // 主 pi 的 magic-context 待办面板用的就是它）。
+      ctx.ui.setWidget("multi-viewers", [
+        `多视角分析进行中：${dir}`,
+        `观看（复制执行，不进 LLM）：${watch}`,
+        `插话 /multi-viewers-say <文本>　收尾 /multi-viewers-finish`,
+      ]);
       ctx.ui.notify(
         `分析已启动：${dir}\n` +
           "观看（复制执行；TUI 下已预填进输入框）:\n" +
@@ -178,6 +189,8 @@ export default function register(pi: any) {
         ctx.ui.notify(`收尾失败：\n${clean.output}`, "error");
         return;
       }
+      // 收尾成功 → 清掉常驻面板（否则留下一行指向已删除目录的观看命令）。
+      ctx.ui.setWidget("multi-viewers", undefined);
       ctx.ui.notify(
         `${clean.output}\n\n要摘要就在对话里说一声（主 pi 读该 result.md 即可）。`,
         "success",
