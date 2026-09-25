@@ -261,3 +261,7 @@ loop、状态从 git 共享事实推导、单一事实源 = protocol.json、无�
 - **核验法**（照上游约定，不用命令行长度判断）：
   `readlink -f ~/.pi/agent/npm/node_modules/pi-multi-viewers` 指向仓库根，
   且该路径下 `scripts/mv.sh` 存在。
+- **registry 核验别只看 `/latest`**（实测踩两次）：npm 的 abbreviated 元数据
+  （`registry.npmjs.org/<pkg>/latest`）有缓存，发布后可能持续返回旧版本；
+  **权威判据 = 完整文档的 `dist-tags`**：
+  `curl -s https://registry.npmjs.org/pi-multi-viewers | python3 -c "import json,sys;print(json.load(sys.stdin)['dist-tags'])"`
