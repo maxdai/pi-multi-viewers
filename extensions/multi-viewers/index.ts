@@ -20,7 +20,8 @@
  * ① `ctx.ui.setEditorText` 预填输入框——TUI 便利（能直接回车跑）；pi-web 忽略
  * ② `notify`——即时反馈；pi-web 上关掉弹窗即消失
  * ③ `pi.sendMessage`（custom_message）——**持久留痕**，跨重启仍在；但 pi-web 渲染为
- *    **折叠的** `multi-viewers (click to expand)`，且随 fork 进入每场分析上下文
+ *    **折叠的** `multi-viewers (click to expand)`，需点击展开（pi-web 0.5.19 起**实时出现**，
+ *    此前只在重载后可见）；且随 fork 进入每场分析上下文
  * ④ `ctx.ui.setWidget`——**运行期常驻可见**（一眼看到、不需点击；MC 待办用的同一通道）
  */
 
@@ -104,8 +105,8 @@ export default function register(pi: any) {
         content: `多视角分析已启动：${dir}\n观看命令（复制执行，不进 LLM）：\n${watch}`,
         display: true,
       });
-      // 常驻面板：pi-web 实测把 custom_message 渲染成折叠的 `multi-viewers (click to expand)`，
-      // 且历史条目未必实时刷新 → 观看命令还需要一条**一眼可见、不需点击**的常驻出口。
+      // 常驻面板：custom_message 在 pi-web 是**折叠块**（要点击才展开；0.5.19 起实时出现）
+      // → 观看命令还需要一条**一眼可见、不需点击**的常驻出口。
       // setWidget 正是这个语义（pi-web 注释："Persistent widget panel … Not a popup"；
       // 主 pi 的 magic-context 待办面板用的就是它）。
       ctx.ui.setWidget("multi-viewers", [

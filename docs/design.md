@@ -591,7 +591,7 @@ commit 是溯源记录、本节是长期引用点——不并存两份权威值�
     |---|---|---|---|
     | `setEditorText` 预填 | 仅 TUI | 0 | TUI 便利（能直接回车跑） |
     | `notify` | 全模式 | 0 | 即时反馈（pi-web 关掉弹窗即消失） |
-    | `pi.sendMessage`（custom_message） | 全模式 | ~百 token（主 session）+ 随 fork 进每场分析 | 持久留痕（pi-web 渲染为折叠块） |
+    | `pi.sendMessage`（custom_message） | 全模式 | ~百 token（主 session）+ 随 fork 进每场分析 | 持久留痕（pi-web 渲染为折叠块、需点击；起 0.5.19 实时出现） |
     | `ctx.ui.setWidget` | 全模式 | 0（纯 UI） | 运行期常驻可见（一眼看到、不需点击） |
     三条注记：① `sendMessage` 的 custom_message **会随 fork 进每场分析各视角的上下文**
     （fork 源在首唤由主 session 条目构建，不做类型过滤）——~2 行/场，有界；不为它加
