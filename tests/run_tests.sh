@@ -63,6 +63,11 @@ elif [ "$REUSE" -eq 1 ] && [ -f "$LAST_LOG" ]; then
 fi
 
 cd "$HERE"
+# ②′（2026-09-25 评审「漏 A」）：真跑前先清指纹——否则**同源码的环境性失败**
+# （缺 bun 的严格模式、中断、并发）会残留上一轮的旧绿指纹，让下次 --reuse 命中
+# 并 exit 0 而缓存日志里其实是失败。指纹只在 rc==0 时写回，于是不变式成立：
+# **指纹存在 ∧ 匹配 ⇒ 最近一次同源真跑全绿**（单一 rc 判据，零文本解析）。
+rm -f "$FP_FILE"
 python3 -m unittest "${ARGS[@]}" 2>&1 | tee "$LAST_LOG"
 rc="${PIPESTATUS[0]}"
 
@@ -87,6 +92,8 @@ else
     echo "[run_tests] 跳过扩展层 harness：本机没有 bun（要强制请设 MV_REQUIRE_BUN=1）" | tee -a "$LAST_LOG"
 fi
 
-echo "${SRC_HASH}_${ARG_HASH}" > "$FP_FILE"
+if [ "$rc" -eq 0 ]; then
+    echo "${SRC_HASH}_${ARG_HASH}" > "$FP_FILE"
+fi
 echo "[run_tests] 完整输出已落盘: $LAST_LOG（观察用 grep xxx $LAST_LOG，0 秒）" >&2
 exit "$rc"

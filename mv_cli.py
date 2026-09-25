@@ -365,10 +365,10 @@ def cmd_start(spec_dir, extra):
     # 条件 = 观测到一次 launch 失败，或将来引入 resume/retry 通道。
     if fnmatch.fnmatch(os.path.basename(os.path.normpath(spec_dir)),
                        "mv-spec-*"):
-        print(f"[start] spec 已消费，删除（本工具生成形态）: {spec_dir}")
+        print(f"spec 已消费，删除（本工具生成形态）: {spec_dir}")
         shutil.rmtree(spec_dir, ignore_errors=True)
     else:
-        print(f"[start] spec 已消费（保留未删——非 mv-spec-* 形态）: {spec_dir}")
+        print(f"spec 已消费（保留未删——非 mv-spec-* 形态）: {spec_dir}")
 
     # 第 2 步：启动已有环境
     if _call([PYTHON, START_DISCUSSION, "--dir", dir_path,

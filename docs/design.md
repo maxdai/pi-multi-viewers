@@ -567,19 +567,20 @@ commit 是溯源记录、本节是长期引用点——不并存两份权威值�
     内容起草仍是真 LLM 工作（任务类型/产出形态），故为**两段式**——骨架零 LLM，
     起草/摘要走普通对话；门禁取消则保留 spec，用户编辑后自行 `mv.sh --start`。
     **收尾状态语义（2026-09-25 评审）**：`running` 等待；`done | stalled` 并流进
-    "notify → confirm → cleanup"（`stalled` = 无存活 loop 的静止态，照 running 处理
-    会让用户等一个永不到来的收尾）；`stopped` 只提示手动清理。`stalled` 用独立文案
-    （其 result 由清理时保存，不复用 done 的"已留存"路径文案）；扩展是唯一守卫
+    "notify → confirm → cleanup"（照 running 处理会让用户等一个永不到来的收尾）；
+    `stopped` 只提示手动清理。**状态定义以 `observability.check_status` 为单一
+    事实源**（`stalled` = 有 result.md、无 concluded、loop 均不存活）——此处不复述其判据。
+    `stalled` 用独立文案（其 result 由清理时保存，不复用 done 的"已留存"路径文案）；扩展是唯一守卫
     （CLI 的 cleanup 无状态防护）。**本轮明确不做**（防翻案）：`--json` 输出模式、
     resume 新命令面、env 回退配置、`runCli` 超时、启动路径继续优化（已在 1–2s 地板）、
     给 stalled 加第三种动作。**契约例外**：扩展作为包内第一方消费者**直连**
     `mv_cli.py`（实测 shim 61ms vs 直连 58–66ms，性能上零差异；按契约一致性记例外一行）。
-      **UI 通道按 mode 分级（2026-09-25 实测）**：dialog（`select`/`confirm`/`input`/`editor`）
-      全模式可用（RPC/web 走请求-响应子协议、阻塞等用户；不带 `timeout` 即不倒计时，
-      暂停点成立）；`notify` 全模式可用（TUI = showStatus 行；pi-web = **追加进聊天流的
-      常驻行**，非瞬时提示）；**`setEditorText` 仅 TUI**——pi-web 忽略（`pi-web/static/app.js`
-      注释「set_editor_text … ignored」+ SDK `ui-context.ts` 里是空实现）。⇒ **交付观看命令
-      必须有 notify 兜底**（预填只是增强，不能当唯一出口）；需要分级时用 `ctx.mode`。
+    **UI 通道按 mode 分级（2026-09-25 实测）**：dialog（`select`/`confirm`/`input`/`editor`）
+    全模式可用（RPC/web 走请求-响应子协议、阻塞等用户；不带 `timeout` 即不倒计时，
+    暂停点成立）；`notify` 全模式可用（TUI = showStatus 行；pi-web = **追加进聊天流的
+    常驻行**，非瞬时提示）；**`setEditorText` 仅 TUI**——pi-web 忽略（`pi-web/static/app.js`
+    注释「set_editor_text … ignored」+ SDK `ui-context.ts` 里是空实现）。⇒ **交付观看命令
+    必须有 notify 兜底**（预填只是增强，不能当唯一出口）；需要分级时用 `ctx.mode`。
     被否决：A（handler 里 `sendUserMessage` 触发 LLM 回合改 spec——时序不可控）、
     D（拆两条命令——把门禁成本转嫁用户；B1 变体/第三种即现形态）。
 

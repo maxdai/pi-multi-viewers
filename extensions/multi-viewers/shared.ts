@@ -25,8 +25,11 @@ const PKG_NAME = "pi-multi-viewers";
  *  **找不到就响亮失败**（评审 P4）：此前回退到 `/root/pi-multi-viewers` 是单机
  *  死分支——触发条件（包被拆散/复制）恰恰发生在开发机以外，回退只会把"包根
  *  解析失败"变成更晚、更难诊断的失败。这里在**加载期** throw，错误信息给出行动。
+ *
+ *  导出仅供测试直调（断言 throw；不锁散文措辞）——加载期接线本身无覆盖，
+ *  残差明账：坏掉时症状 = 三个命令消失（响亮）。
  */
-function findPackageRoot(start: string, pkgName: string): string {
+export function findPackageRoot(start: string, pkgName: string): string {
   let dir = start;
   for (let i = 0; i < 8; i++) {
     try {
@@ -52,24 +55,46 @@ const CLI = path.join(PACKAGE_ROOT, "mv_cli.py");
 const SAYER = path.join(PACKAGE_ROOT, "human_sayer.py");
 const OBSERVABILITY = path.join(PACKAGE_ROOT, "observability.py");
 
+/** 稳定的 CLI 入口（给用户的出路提示用）——裸 `mv.sh` 不在 PATH 上，
+ *  按此常量给绝对路径（评审 B2：出路必须可执行）。 */
+export const MV_SH = `bash ${PACKAGE_ROOT}/scripts/mv.sh`;
+
+/** 跑一次子进程并收输出。三处调用点的差异全部显式化（合并前是三份样板）：
+ *  `sid` 决定是否注入 PI_SESSION_ID（目录名与 find-dir 的唯一钥匙）；
+ *  `mergeStderr` 决定 stderr 是否并进同一缓冲（不并时必须 resume 掉，否则管道满阻塞）。 */
+function capture(
+  args: string[],
+  opts: { cwd?: string; sid?: string; mergeStderr?: boolean } = {},
+): Promise<{ code: number; output: string }> {
+  return new Promise((resolve) => {
+    const env = opts.sid
+      ? { ...process.env, PI_SESSION_ID: opts.sid }
+      : process.env;
+    const proc = spawn("python3", args, {
+      cwd: opts.cwd,
+      env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let output = "";
+    proc.stdout.on("data", (d) => (output += d.toString()));
+    if (opts.mergeStderr) {
+      proc.stderr.on("data", (d) => (output += d.toString()));
+    } else {
+      proc.stderr.resume(); // 丢弃但必须消费
+    }
+    proc.on("close", (code) => resolve({ code: code ?? 1, output }));
+    proc.on("error", (e) => resolve({ code: 1, output: String(e) }));
+  });
+}
+
 /** 运行 mv_cli 一条命令；返回 { rc, output }（stdout+stderr 合并）。 */
-export function runCli(
+export async function runCli(
   args: string[],
   cwd: string,
   sid: string,
 ): Promise<{ rc: number; output: string }> {
-  return new Promise((resolve) => {
-    const proc = spawn("python3", [CLI, ...args], {
-      cwd,
-      env: { ...process.env, PI_SESSION_ID: sid },
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    let out = "";
-    proc.stdout.on("data", (d) => (out += d.toString()));
-    proc.stderr.on("data", (d) => (out += d.toString()));
-    proc.on("close", (code) => resolve({ rc: code ?? 1, output: out.trim() }));
-    proc.on("error", (e) => resolve({ rc: 1, output: String(e) }));
-  });
+  const r = await capture([CLI, ...args], { cwd, sid, mergeStderr: true });
+  return { rc: r.code, output: r.output.trim() };
 }
 
 /** 取机器可读标记行的值（`[label] value`）；没有 → null。 */
@@ -116,37 +141,21 @@ export function specListing(specDir: string): string {
  *  判据 = **退出码**（不是 stderr 文案——中文提示一改就静默失配，e2e16 F2）：
  *  rc 0 → stdout 是绝对路径；rc 1 → 未找到（无同 sid 分析）。无降级通道
  *  （不会回退到"项目下最新"——那会插错分析，e2e16 F1）。 */
-export function findCurrentDir(cwd: string, sid: string): Promise<string | null> {
-  return new Promise((resolve) => {
-    const proc = spawn("python3", [OBSERVABILITY, "--find-dir"], {
-      cwd,
-      env: { ...process.env, PI_SESSION_ID: sid },
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    let out = "";
-    proc.stdout.on("data", (d) => (out += d.toString()));
-    proc.stderr.on("data", () => {}); // 原因只在 rc=1 时通知用户（见 handler）
-    proc.on("close", (code) => {
-      const dir = out.trim();
-      resolve(code === 0 && dir ? dir : null);
-    });
-    proc.on("error", () => resolve(null));
-  });
+export async function findCurrentDir(
+  cwd: string,
+  sid: string,
+): Promise<string | null> {
+  const r = await capture([OBSERVABILITY, "--find-dir"], { cwd, sid });
+  const dir = r.output.trim();
+  return r.code === 0 && dir ? dir : null;
 }
 
-/** 执行 human_sayer.py 一次插话。返回 { ok, output }。 */
-export function runSayer(
+/** 执行 human_sayer.py 一次插话。返回 { ok, output }。
+ *  现语义照抄（不注入 sid——sayer 用显式目录参数）。 */
+export async function runSayer(
   dir: string,
   text: string,
 ): Promise<{ ok: boolean; output: string }> {
-  return new Promise((resolve) => {
-    const proc = spawn("python3", [SAYER, dir, text], {
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    let out = "";
-    proc.stdout.on("data", (d) => (out += d.toString()));
-    proc.stderr.on("data", (d) => (out += d.toString()));
-    proc.on("close", (code) => resolve({ ok: code === 0, output: out.trim() }));
-    proc.on("error", (e) => resolve({ ok: false, output: String(e) }));
-  });
+  const r = await capture([SAYER, dir, text], { mergeStderr: true });
+  return { ok: r.code === 0, output: r.output.trim() };
 }

@@ -24,6 +24,7 @@
 import {
   findCurrentDir,
   grab,
+  MV_SH,
   runCli,
   runSayer,
   specListing,
@@ -35,7 +36,6 @@ export default function register(pi: any) {
   pi.registerCommand("multi-viewers", {
     description: "多视角协同分析：生成 spec → 你审阅 → 启动（零 LLM 流程）",
     argumentHint: "<主题>",
-    getArgumentCompletions: () => null,
     handler: async (args: string, ctx: any) => {
       const topic = stripQuotes(args.trim());
       if (!topic) {
@@ -64,12 +64,12 @@ export default function register(pi: any) {
         "启动多视角分析？（现在暂停中，可在其它窗口修改 spec）",
         `spec：${specDir}\n文件：${specListing(specDir)}\n\n` +
           "需要修改就去改这个目录，改完点「确认」继续；\n" +
-          "点「取消」则不启动（spec 保留，可稍后 mv.sh --start）。",
+          "点「取消」则不启动（spec 保留，可稍后 " + MV_SH + " --start）。",
       );
       if (!go) {
         ctx.ui.notify(
           `已取消，spec 保留在：${specDir}\n` +
-            `之后可在**当前 pi session 内**用：mv.sh --start ${specDir}\n` +
+            `之后可在**当前 pi session 内**用：${MV_SH} --start ${specDir}\n` +
             "（外部终端执行时目录名不带 session id，插话/收尾命令定位不到它）",
           "info",
         );
@@ -80,10 +80,10 @@ export default function register(pi: any) {
       const start = await runCli(["--start", specDir], cwd, sid);
       const watch = grab(start.output, "[start] watch=");
       const dir = grab(start.output, "[start] dir=");
-      if (start.rc !== 0 || !watch) {
+      if (start.rc !== 0 || !watch || !dir) {
         ctx.ui.notify(
           `启动失败：\n${start.output || "(无输出)"}\n` +
-            "可用 mv.sh --status 查看环境状态。",
+            "可用 `" + MV_SH + " --status` 查看环境状态。",
           "error",
         );
         return;
@@ -92,8 +92,8 @@ export default function register(pi: any) {
       // ④ 观看命令：预填进输入框 + notify 里留一份副本（见文件头）
       ctx.ui.setEditorText(watch);
       ctx.ui.notify(
-        `分析已启动${dir ? `：${dir}` : ""}\n` +
-          "观看（已预填进输入框，按 Enter 执行；也可复制这行）:\n" +
+        `分析已启动：${dir}\n` +
+          "观看（复制执行；TUI 下已预填进输入框）:\n" +
           `${watch}\n` +
           "插话：/multi-viewers-say <文本>　收尾：/multi-viewers-finish",
         "success",
@@ -104,7 +104,6 @@ export default function register(pi: any) {
   // ---------------------------------------------------------------- 收尾
   pi.registerCommand("multi-viewers-finish", {
     description: "收尾：查状态 → 确认 → 清理分析目录（结果留存；摘要走对话）",
-    getArgumentCompletions: () => null,
     handler: async (_args: string, ctx: any) => {
       const sid = ctx.sessionManager.getSessionId();
       const st = await runCli(["--status"], ctx.cwd, sid);
@@ -126,7 +125,7 @@ export default function register(pi: any) {
       if (state === "stopped") {
         ctx.ui.notify(
           "分析已结束但未生成结果（状态 stopped）。" +
-            "要清理请自行运行 mv.sh --cleanup。",
+            "要清理请自行运行 `" + MV_SH + " --cleanup`。",
           "warning",
         );
         return;
@@ -179,7 +178,6 @@ export default function register(pi: any) {
   pi.registerCommand("multi-viewers-say", {
     description: "向正在进行的多视角分析插话（human 消息，各视角可见可回应）",
     argumentHint: "<插话内容>",
-    getArgumentCompletions: () => null,
     handler: async (args: string, ctx: any) => {
       const text = args.trim();
       if (!text) {
@@ -195,7 +193,7 @@ export default function register(pi: any) {
         ctx.ui.notify(
           "本 session 没有正在进行的多视角分析（cwd 下无 " +
             `mv-${sid}-* 分析环境）。先用 /multi-viewers 启动，` +
-            "或改用 mv.sh --say <目录> \"<文本>\" 显式指定。",
+            "或改用 `" + MV_SH + " --say <目录> \"<文本>\"` 显式指定。",
           "error",
         );
         return;
