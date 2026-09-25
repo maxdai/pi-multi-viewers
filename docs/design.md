@@ -574,6 +574,12 @@ commit 是溯源记录、本节是长期引用点——不并存两份权威值�
     resume 新命令面、env 回退配置、`runCli` 超时、启动路径继续优化（已在 1–2s 地板）、
     给 stalled 加第三种动作。**契约例外**：扩展作为包内第一方消费者**直连**
     `mv_cli.py`（实测 shim 61ms vs 直连 58–66ms，性能上零差异；按契约一致性记例外一行）。
+      **UI 通道按 mode 分级（2026-09-25 实测）**：dialog（`select`/`confirm`/`input`/`editor`）
+      全模式可用（RPC/web 走请求-响应子协议、阻塞等用户；不带 `timeout` 即不倒计时，
+      暂停点成立）；`notify` 全模式可用（TUI = showStatus 行；pi-web = **追加进聊天流的
+      常驻行**，非瞬时提示）；**`setEditorText` 仅 TUI**——pi-web 忽略（`pi-web/static/app.js`
+      注释「set_editor_text … ignored」+ SDK `ui-context.ts` 里是空实现）。⇒ **交付观看命令
+      必须有 notify 兜底**（预填只是增强，不能当唯一出口）；需要分级时用 `ctx.mode`。
     被否决：A（handler 里 `sendUserMessage` 触发 LLM 回合改 spec——时序不可控）、
     D（拆两条命令——把门禁成本转嫁用户；B1 变体/第三种即现形态）。
 
