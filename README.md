@@ -4,6 +4,42 @@
 各带一份视角任务书（效率/简单/铁律/……），在 meeting 协议下交锋、
 修正、收敛，产出一份共识结果。
 
+## 它想解决什么问题
+
+单次提问只有**一个视角**：它可能顺着你的说法走，可能漏掉权衡的另一面，而且你无从知道
+它**没考虑什么**。本项目把主 pi session fork 成 N 个视角 agent（效率 / 简单 / 铁律 / …），
+每个 agent：
+
+- **带着你真实的工作上下文**——fork 自当前会话，不用你重新描述一遍项目
+- 只有**一份固定的视角任务书**（`viewers/<视角名>.md`，长期资产，不是每次现编的提示）
+- **必须对其它视角的观点表态**——认同或反驳，都要用本视角的论据
+
+由代码驱动的 meeting 协议（发言配额 → 冻结 → 轮转表态 → 共识）把讨论推向收敛，最终产出
+`result.md`：**共识结论 + 明确否决项（含理由与重估触发条件）+ 各自保留的分歧**。
+
+## 什么时候值得跑
+
+- **值得**：设计/实现审阅、方案取舍、口径与一致性检查——就是那种"一个视角容易漏、
+  而你希望看到反对意见"的场合。
+- **不值得**：查一个事实、跑一条命令、问一个一两分钟就能自己确认的问题（直接问 pi 更快）。
+
+## 凭什么相信它的结论
+
+1. **不是模拟**：视角 agent 真读你的代码与文档（cwd = 你的项目）、真实交锋，结论里每条
+   尽量带 `文件:行`。本仓库自己的评审就是这么做的——`docs/reviews/` 存的是**它审自己**的
+   报告原文。
+2. **真抓到过东西**：报告数字虚高 4–8 倍（边界判定被主会话历史里的字面量命中）、
+   `--view` 显式目录被静默丢弃（回归）、`cleanup` 在输出管道出错时会跳过删目录……
+   都是本机制在自己的代码里抓出来的。
+3. **流程不进 LLM**：跑什么命令、是否启动、状态判定、观看命令交付全由代码执行
+   （退出码 + 机器标记行），不靠模型转述；`result.md` 与 `-report.txt` 落盘可复查。
+4. **视角是资产**：`viewers/` 写好长期复用；每次分析只写主题（`question.md`）。
+
+## 代价
+
+一次分析通常 **12–35 分钟**（3 视角、20–50 次唤醒，受扩展策略与 provider 情况影响），
+外加相应 token 成本。它换来的不是"更快"，而是"多几个独立立场 + 一份可复查的分歧记录"。
+
 与 [pi-agents-helper](https://github.com/maxdai/pi-agents-helper)（多方
 讨论达成共识，agent 无主上下文）平行演化；共享 meeting 协议核心
 （core/fs/engine），差异在初始化层。
@@ -67,16 +103,20 @@ ls ~/.pi/agent/npm/node_modules/pi-multi-viewers/scripts/mv.sh
 
 ## 用法
 
-```
-/multi-viewers-setup          # ① 建视角（首次使用先跑这个；prompt：先建议 → 你定 → 落盘 → 给你审）
-/multi-viewers "<主题>"        # ② 分析（extension：生成 spec → 弹窗门禁 → 启动 → 预填观看命令）
-/multi-viewers-say "<文本>"    # ③ 插话（分析进行中；extension：零 LLM 直接写入 human 消息）
-/multi-viewers-finish         # ④ 收尾（extension：查状态 → 确认 → 清理，报告随清理打印）
-```
+**接口总表**（pi 内 1 个 prompt + 3 个命令；终端侧另有等价 CLI）：
 
-四个 pi 命令入口，按使用顺序排列。**②③④ 是 extension**（流程完全由代码执行、
-零 LLM：跑命令、门禁弹窗、观看命令预填、状态判据都走退出码/机器标记行，
-不靠 LLM 转述）；**① 是 prompt**——写视角是内容工作，本就需要 LLM 参与。
+| 入口 | 形态 | 作用 |
+|---|---|---|
+| `/multi-viewers-setup` | prompt | 建视角（建议 → 你定 → `--set-viewer` 落盘 → 给你审） |
+| `/multi-viewers "<主题>"` | extension | 分析：prepare → **暂停点弹窗** → start → 交付观看命令 |
+| `/multi-viewers-finish` | extension | 收尾：status → 确认 → cleanup（报告随清理打印并落盘） |
+| `/multi-viewers-say "<文本>"` | extension | 插话（human 消息，各视角可见可回应） |
+| `scripts/mv.sh <子命令>` | CLI | 终端侧等价入口（`--prepare` / `--start` / `--status` / `--view` / `--say` / `--report` / `--wait` / `--cleanup` / `--viewers` / `--set-viewer`）——pi 内命令内部也走它 |
+
+按使用顺序：先 `/multi-viewers-setup` 建视角（一次就够），之后 `/multi-viewers "<主题>"` 跑分析，
+分析进行中用 `/multi-viewers-say` 插话，结束后 `/multi-viewers-finish` 收尾。
+**后三个是 extension**（流程完全由代码执行、零 LLM：跑命令、门禁弹窗、观看命令交付、状态判据
+都走退出码/机器标记行，不靠 LLM 转述）；**`setup` 是 prompt**——写视角是内容工作，本就需要 LLM 参与。
 
 **目录可以省略**：`--view`/`--say`/`--status`/`--report`/`--wait`/`--cleanup`
 不带目录时自动定位"本 session 当前分析"（只匹配 `mv-<sessionId>-*` 最新；**未匹配
