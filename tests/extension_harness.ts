@@ -46,9 +46,14 @@ type Cli = { sid: string; argv: string };
 
 function mockPi() {
   const commands: Record<string, any> = {};
+  const sent: { msg: any; opts: any }[] = [];
   return {
     commands,
-    pi: { registerCommand: (n: string, o: any) => (commands[n] = o) },
+    sent,
+    pi: {
+      registerCommand: (n: string, o: any) => (commands[n] = o),
+      sendMessage: (msg: any, opts: any) => sent.push({ msg, opts }),
+    },
   };
 }
 
@@ -119,7 +124,7 @@ process.env.FAKE_DIR = SCEN;
 
 const mod: any = await import(EXT);
 const shared: any = await import(SHARED);
-const { commands, pi } = mockPi();
+const { commands, pi, sent } = mockPi();
 mod.default(pi);
 const MV = commands["multi-viewers"];
 const FIN = commands["multi-viewers-finish"];
@@ -192,6 +197,7 @@ console.log("=== /multi-viewers ===");
   writeFileSync(`${WORK}/mv-spec-1/question.md`, "x");
   writeFileSync(`${WORK}/mv-spec-1/models.md`, "y");
   const calls: Call[] = [];
+  const sentBefore = sent.length; // 顺序无关：只要求"取消前后不新增"
   await MV.handler("主题X", mockCtx(calls, false));
   check(
     "取消 → 无 start（只有 prepare 一次 CLI 调用）",
@@ -210,6 +216,11 @@ console.log("=== /multi-viewers ===");
       String(cm.m).includes("question.md") &&
       String(cm.m).includes("改完点「确认」继续"),
     cm.m,
+  );
+  check(
+    "取消 → 不写消息流（没启动就不留记录）",
+    sent.length === sentBefore,
+    { before: sentBefore, after: sent.length },
   );
   check(
     "取消提示给可执行的 --start 出路（绝对路径 mv.sh）+ sid 提醒",
@@ -240,6 +251,15 @@ console.log("=== /multi-viewers ===");
   );
   check("sid 注入（start）", cliCalls()[1]?.sid === SID, cliCalls()[1]);
   check("第 2 次调用 = --start <spec>", cliCalls()[1]?.argv.includes("--start /tmp/mv-harness/work/mv-spec-2"), cliCalls());
+  // 消息流持久出口（pi-web 的 notify 关掉就没；用户要求 message 流里也留一份）
+  check(
+    "sendMessage 写一条持久 custom_message（含 watch + display:true）",
+    sent.length === 1 &&
+      sent[0].msg.customType === "multi-viewers" &&
+      String(sent[0].msg.content).includes(WATCH) &&
+      sent[0].msg.display === true,
+    sent,
+  );
 }
 {
   scen({

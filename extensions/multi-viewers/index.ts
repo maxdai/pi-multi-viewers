@@ -16,9 +16,11 @@
  *
  * 与 CLI 的契约（标记行/退出码）与全部原语见 ./shared.ts。
  *
- * 观看命令交付 = `ctx.ui.setEditorText` 预填输入框（按 Enter 即执行）**并**
- * 在 notify 里带一份（预填会被后续输入覆盖——只留预填这一个出口，用户就
- * 再也找不到它；2026-09-25 首次真实使用暴露）。
+ * 观看命令交付 = **三个出口**（缺一不可，都是实测暴露的）：
+ * ① `ctx.ui.setEditorText` 预填输入框（按 Enter 即执行；**仅 TUI**，pi-web 忽略）
+ * ② `notify` 带一份（即时可见；但 pi-web 上关掉弹窗即消失）
+ * ③ `pi.sendMessage` 写一条 custom_message 进消息流（**持久可回滚复制**；
+ *    代价 = 参与 LLM 上下文的一行）
  */
 
 import {
@@ -89,8 +91,17 @@ export default function register(pi: any) {
         return;
       }
 
-      // ④ 观看命令：预填进输入框 + notify 里留一份副本（见文件头）
+      // ④ 观看命令：三个出口（见文件头）——预填（仅 TUI）+ notify（即时）+ 消息流（持久）
       ctx.ui.setEditorText(watch);
+      // 消息流里留一条持久记录：用户实测 pi-web 的 notify 会随弹窗关闭而消失，
+      // 关了窗口就再也找不到这行命令。custom_message 进会话（**参与 LLM 上下文**，
+      // 一行开销），在用户空闲时追加 → 立即显示、可回滚复制（agent-session.ts:
+      // 非 streaming + 无 triggerTurn → _appendCustomMessage，不触发回合）。
+      pi.sendMessage({
+        customType: "multi-viewers",
+        content: `多视角分析已启动：${dir}\n观看命令（复制执行，不进 LLM）：\n${watch}`,
+        display: true,
+      });
       ctx.ui.notify(
         `分析已启动：${dir}\n` +
           "观看（复制执行；TUI 下已预填进输入框）:\n" +
