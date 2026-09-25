@@ -338,6 +338,11 @@ def gen_agents_md(args, agent, participants, spec_background=None,
             f"查找：如有需要可查看相关文件以获取\n比本背景更详细的信息。\n")
     else:
         cwd_section = ""
+    # **这是「工具在不在」的第二次解析**（第一次在 setup 这里、第二次在 wake 实况
+    # meeting_loop）；窗口 = `--prepare` … `--start` 分离路径（默认 extension 流程
+    # 背靠背，秒级）。两者不一致的后果：prompt 承诺了而 wake 没给（agent 一次失败
+    # 调用，有界无害）或反之（少一句指引）。**重估触发**：出现第三份入口，或 prompt
+    # 需点名第二个工具 → 把入口表提成 `meeting_fs` 的单点再消费。
     # 历史检索节：**只在工具真的会到位时**才出现（2026-09-25 用户定）——
     # 否则 agents 会去找一个不存在的工具（"无静默/不下空指令"）。判据 = 策略允许
     # （mc-tools）**且**入口可解析（与 meeting_loop 的解析同一实现，不各写一套）。
@@ -491,14 +496,18 @@ def viewer_set_error(names, empty, where="viewers/"):
     return f"错误: {gap}" if gap else None
 
 
-def _viewer_set_errors(names, empty, where="viewers/"):
-    """集合级校验的**唯一组合点**：整组名字 + 空正文 + 数量 ≥2。
+def viewer_entry_errors(names, empty, where="viewers/"):
+    """**条目级**校验的组合入口：整组名字 + 空正文（**不查数量**）。
 
-    为什么单独存在：`--viewers`（只读检查）与 `--set-viewer`（写前校验）必须
-    用**同一套**判据——同一套规则曾在两处漂移过（文案与检查项不一致）。
-    `if empty` 是必要保护：否则 viewers/ 里只有一个**合法**视角时，
-    `viewer_set_error` 会因为数量不足而报错，把"建第 2 个视角"判成非法。
-    `names` 为空（目录缺失/无 .md）返回 None——那是"还没有视角"，不是错误。
+    为什么改名（2026-09-25 评审批 F2/S3）：原名 `_viewer_set_errors` 的 docstring 自称
+    "集合级校验的唯一组合点 + 数量 ≥2"，实测两件都不成立——它不查数量（`if empty`
+    保护 + `viewer_set_error` 只在有空正文时才顺带报数量，那条分支在本组合内不可达），
+    而且 `_snapshot_viewers` 与 `start` 路径各有自己的组合。**名实不符的风险**是后来者
+    按文档当全量校验用 → 静默漏掉 ≥2。
+    现在名字只说它做的事：`entry`（条目级）而非 `set`（集合级）；**≥2 由启动路径单独判**
+    （`viewer_set_error` / `viewers_count_gap`），CLI 允许单视角是合法中间状态。
+    去掉前导下划线：它已被 `mv_cli` 跨模块当稳定契约用（`_discover_viewers` 的下划线
+    属既有的命名债，本批不夹带）。
     """
     if not names:
         return None

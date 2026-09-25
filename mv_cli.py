@@ -186,7 +186,7 @@ def _validate_and_print_viewers(vdir):
             notes.append("空：没有视角内容")
         suffix = f"（{'；'.join(notes)}）" if notes else ""
         print(f"  {n}.md{suffix}")
-    err = spec_gen._viewer_set_errors(names, empty)
+    err = spec_gen.viewer_entry_errors(names, empty)
     if err:
         fail_verbatim(err)
     gap = spec_gen.viewers_count_gap(names)
@@ -225,7 +225,7 @@ def cmd_set_viewer(args):
     # （不守卫会让 validate_participants(None) 抛 TypeError——首次建视角即命中）。
     names, _briefs, empty = spec_gen._discover_viewers(vdir)
     if names:
-        err = spec_gen._viewer_set_errors(names, empty)
+        err = spec_gen.viewer_entry_errors(names, empty)
         if err:
             fail_verbatim(f"{err}\n（修正 viewers/ 后再建新视角——本次未写入任何文件）")
     body = sys.stdin.read().strip()

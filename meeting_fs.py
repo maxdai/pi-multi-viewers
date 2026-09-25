@@ -792,7 +792,7 @@ def parse_log_nameonly(output):
 #              agents 需要主项目背景（背景蒸馏机制已移除），这是它的补充通道；
 #              该入口**只注册工具、不装 hook** → historian/压缩不在其中
 #              （受控实测 historian 0/6、ctx_search 可用；成本未测得显著差异）。
-#              代价：本档**允许而非要求** MC（缺则可见降级为零扩展；严格模式见
+#              代价：本档两份入口**允许而非要求**（缺谁少谁、都可见降级；严格模式见
 #              MC_TOOLS_STRICT_ENV）
 #   none     : 零扩展——最快、**零依赖**（不依赖任何扩展；无 MC 的机器/CI 用这档）
 #   all      : 走 pi 默认扩展发现（A/B 实验与显式 opt-in 用）
@@ -800,7 +800,8 @@ def parse_log_nameonly(output):
 #  默认档看 DEFAULT_EXTENSION_POLICY）
 EXTENSION_POLICIES = ("mc-tools", "none", "all")
 DEFAULT_EXTENSION_POLICY = "mc-tools"
-# mc-tools 档**允许**（而非要求）MC：找不到 MC 时降级为零扩展，但必须**可见**
+# mc-tools 档**允许而非要求**两份入口（MC 的 ctx_search、MCP adapter 的 web 工具）：
+# 缺谁少谁、都必须**可见**；语义清单见 docs/design.md 决策 20
 # （打印一行说明 `ctx_search` 本次不可用）——无静默铁律。
 # 测试/探针要保真（确认"本场确实带着 ctx_search 在跑"）时，用环境变量把它变严格：
 #   MV_MC_TOOLS_STRICT=1 → 解析失败即报错退出（测试环境准确性优先，用户 2026-09-14 定）

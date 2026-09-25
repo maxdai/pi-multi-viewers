@@ -134,7 +134,7 @@ scripts/mv.sh --view                          # 一次性增量查看（主 pi �
 # 插话 / 状态 / 收尾（目录可省略——自动定位本 session 当前分析）
 scripts/mv.sh --say "<文本>"                   # 插话（命令行形态；pi 内用 /multi-viewers-say）
 scripts/mv.sh --status                        # 状态 + 路径（取值与含义以该命令输出为准）
-scripts/mv.sh --report                        # 只读报告（流程/配额/进程/LLM/档位对照；冷路径，不持久化）
+scripts/mv.sh --report                        # 只读报告（流程/配额/进程/LLM/档位对照；本命令不落盘——cleanup 会留存一份）
 scripts/mv.sh --cleanup                       # 收尾（result.md + 报告都留存到 <dir>-*.md/.txt）
 scripts/mv.sh --viewers                       # 列出+校验当前项目 viewers/（只读；建视角时用）
 scripts/mv.sh --set-viewer <名字>             # 新建视角文件（正文从 stdin 读；只新建不覆盖）

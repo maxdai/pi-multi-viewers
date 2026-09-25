@@ -655,7 +655,7 @@ def _report_extension_line(base, out):
         line += f"，降级：{reason.strip()}" if reason else ""
         line += "）"
         if d != e:
-            line += "  ⚠ 生效≠声明（降级：ctx_search 不可用）"
+            line += "  ⚠ 生效≠声明（降级：部分工具不可用——见登记行原因）"
         out.append(line)
     else:
         out.append(f"扩展策略：声明 {declared} ｜ 生效 n/a（日志中无登记行）")

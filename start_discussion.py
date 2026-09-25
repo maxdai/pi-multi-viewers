@@ -430,12 +430,16 @@ def _print_best_effort(*args, **kwargs):
 
     为什么需要：`cleanup_discussion` 的输出可能在管道关闭时抛
     `BrokenPipeError`（`| head`、终端断开、CI 截断）——实测复现：异常从 print
-    逃逸 → **`rmtree` 被跳过**，目录残留且 rc≠0，即"该清理的没清理"
-    （2026-09-25 评审批 ①(c)）。显示层从来不是主职责，失败只能被忽略。
+    逃逸 → **报告段之后的一切被跳过**（含删目录），目录残留且 rc≠0，即"该清理的
+    没清理"（2026-09-25 评审批 ①(c)）。显示层从来不是主职责，失败只能被忽略。
 
-    契约：`cleanup_discussion` 的**全部 stdout 都走本函数**（该函数内不得出现
-    裸 `print(`，可 grep 校验）；于是不变量成立——**rmtree 必达**，唯一例外
-    是产物留存真失败（那在 `_preserve_result_md` 里冒泡，见其注释）。
+    契约：`cleanup_discussion` 的**全部 stdout 都走本函数**——具体是"该函数 AST
+    子树内不得直接 `Call(Name('print'))`"，由 `tests/test_cleanup_contract.py`
+    断言（找不到该函数即红；本批起本仓有源码结构断言这一类别）。
+    本函数保证的是**显示层失败不上抛**（⇒ rc=0、后续段不跳过）；**"删目录必达"
+    的真正保证是 `cleanup_discussion` 里的 `try/finally`**——两者别混为一谈
+    （原 docstring 把 rmtree 必达归因到本函数，归因错了）。
+    唯一允许阻断删除的失败 = 产物留存真失败（`_preserve_result_md` 里冒泡）。
     """
     try:
         print(*args, **kwargs)
@@ -604,7 +608,7 @@ def main():
         choices=list(meeting_fs.EXTENSION_POLICIES),
         default=meeting_fs.DEFAULT_EXTENSION_POLICY,
         help="agents 的扩展策略：mc-tools=默认，只要 MC 的只读检索工具 "
-             "ctx_search（缺 MC 时可见降级为零扩展）；none=零扩展（零依赖）；"
+             "ctx_search + MCP 工具（缺谁少谁、可见降级）；none=零扩展（零依赖）；"
              "all=走 pi 默认发现")
     parser.add_argument("--start", action="store_true", help="创建后启动讨论")
     parser.add_argument("--skip-setup", action="store_true",

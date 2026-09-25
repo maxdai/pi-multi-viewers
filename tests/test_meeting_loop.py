@@ -855,10 +855,10 @@ class TestExtensionPolicy(unittest.TestCase):
         self.assertIn("模拟：没装 MCP adapter", out)
 
     def test_mc_tools_falls_back_visibly_when_missing(self):
-        """缺 MC → **降级为零扩展**（mc-tools 是"允许"而非"要求"），且必须可见。
+        """两份入口**都缺** → 降级为零扩展（mc-tools 是「允许」而非「要求」），且可见。
 
-        生产默认走这条路：命令形态 = 四个 `--no-*`、**无** `-e`；
-        同时打印一行说明（"本次按零扩展运行：ctx_search 不可用"）。
+        生产默认不走这条路（本机两份都在位）；这里模拟「都没装」的机器：命令形态 = 四个
+        `--no-*`、**无** `-e`（等价 none 档），并在日志里**逐入口点名**原因。
         """
         import meeting_fs
         import meeting_loop

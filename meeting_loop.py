@@ -364,14 +364,13 @@ def _build_wake_cmd(workdir, agent, sid, cfg, fork_source, fork_cwd,
     if first_wake:
         # 登记行（观测面的稳定字段；报告据此给"声明 vs 生效"）。只在首唤打：
         # 策略在一次运行内不变，变了也是配置错误（重跑即可）。
-        log(agent, f"扩展策略: 声明={extension_policy} 生效={effective_policy}"
-                   f" strict={int(meeting_fs.mc_tools_strict())}"
-                   + (f" 降级原因={downgrade_reason}" if downgrade_reason else ""))
+        # 降级时把"部分/完全"标进原因字段（S2：第二行是复述，已删——
+        # 报告只解析本行，`observability._report_extension_line` 的 regex 匹配行尾）。
+        reason = ""
         if downgrade_reason:
-              log(agent, f"mc-tools 档{'部分' if resolved else '完全'}未生效"
-                         f"（{downgrade_reason}）——本次按"
-                         f"{'已解析的入口' if resolved else '零扩展'}运行："
-                         f"缺失的工具在本次分析中不可用")
+            reason = f" 降级原因={'部分' if resolved else '完全'}：{downgrade_reason}"
+        log(agent, f"扩展策略: 声明={extension_policy} 生效={effective_policy}"
+                   f" strict={int(meeting_fs.mc_tools_strict())}{reason}")
     model = cfg.get("model") or ""
     if model:
         cmd += ["--model", model]

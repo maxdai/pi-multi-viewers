@@ -68,8 +68,8 @@ tests/               测试（unittest discover tests）
 
 | 档 | 唤醒命令 | 用途 |
 |---|---|---|
-| **mc-tools**（默认） | 四个 `--no-*` + `-e <MC 的 subagent-entry.js>` + `-e <pi-mcp-adapter 入口>` | 给 agents **按需检索**（协议模板里带一句「需要项目历史时用 ctx_search」的条件指引——仅在工具真到位时出现）（`ctx_search`）——背景蒸馏机制已移除，这是其补充通道。**允许而非要求 MC**：找不到 MC → 降级为零扩展 + 一行可见说明（`ctx_search` 本次不可用）|
-| **none** | 四个 `--no-*` | 零扩展、**零依赖**（无 MC 的机器/CI 用这档）|
+| **mc-tools**（默认） | 四个 `--no-*` + `-e <MC 的 subagent-entry.js>` + `-e <pi-mcp-adapter 入口>` | 给 agents **按需检索**（`ctx_search` 查项目历史、web_search 等查外部）——协议模板里带一句「需要项目历史时用 ctx_search」的条件指引（仅在工具真到位时出现）。**降级/严格/生效值语义见 docs/design.md 决策 20 的语义清单**（唯一权威段） |
+| **none** | 四个 `--no-*` | 零扩展、**零依赖**（无 MC 的机器/CI 用这档） |
 | **all** | 不加任何 `--no-*`（pi 默认发现）| A/B 实验与显式 opt-in |
 
 为什么**不能**用插件全档（`all`）：两类插件在**我们这种 session 形态**上都是分钟级负担、
@@ -83,12 +83,11 @@ tests/               测试（unittest discover tests）
 **mc-tools 档的实测**：entry **只注册工具、不装 hook** → historian 0/6 ✓（生产 0/3 ✓）；
 `ctx_search` 实测可用 ✓；成本**未测得显著差异**（受控探针 n 小、组内方差>组间差 ✗；
 生产基线：本场 strict=1、n=19，唤醒启动段中位 **0.68s**、收尾中位 0.04s ✓）。
-**入口解析 fail-fast**（`meeting_fs.resolve_mc_tools_entry`：从 pi 的 packages 找 MC 包 →
-读它声明的扩展入口 → 取同目录的 subagent-entry.js）；缺 MC 时**可见降级**为零扩展。
-**依赖边界**：mc-tools 档的**两份入口各自独立**（MC 的 ctx_search、MCP adapter 的 web_search 等）——**允许而非要求**，缺谁少谁、都**可见**
-（打印一行"本次按零扩展运行：ctx_search 不可用"；无静默铁律）；`none` 档零依赖
-（无 MC 的机器/CI 显式选它）。**测试/探针保真**：设 `MV_MC_TOOLS_STRICT=1` →
-缺 MC 即报错退出（否则测试可能在"没装 MC"下通过而 ctx_search 从未生效）。
+**入口解析**：`meeting_fs` 从 pi 的 packages 找包 → 读它自己声明的 `pi.extensions`
+（不硬编码布局）→ `resolve_mc_tools_entry`（取同目录 subagent-entry.js）与
+`resolve_mcp_adapter_entry`（取声明的入口本身）。**降级/严格模式/生效值语义**
+见 docs/design.md 决策 20 的语义清单——本文件不复述（本周刚付过一次漂移的账）。
+
 **主 pi 完全不受影响**（只改我们 spawn 的 agent 进程命令行；主 pi 的 MC/历史学家照常）。
 
 **关键约定**：pi sessions 目录编码 = `--` + 去首尾斜杠内斜杠换 `-` + `--`
