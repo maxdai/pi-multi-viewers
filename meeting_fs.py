@@ -47,6 +47,17 @@ def result_path(base):
     """
     return f"{base}-{RESULT_MD}"
 
+
+def report_path(base):
+    """分析报告的固定落盘位（`<分析目录>-report.txt`，与 result.md 同级）。
+
+    报告原本只在 `--cleanup` 时往终端打一次，目录一删就再也拿不到——复盘
+    （时长口径、配额、provider 失败这类）时无据可查（用户 2026-09-25 复盘
+    回算不出实际时长，正是此缺口）。观测数字应当可复查，故随清理落盘一份。
+    `--report` 命令本身仍不持久化（冷路径视图，三个出口共享同一实现）。
+    """
+    return f"{base}-report.txt"
+
 # 协议参数默认值（gen_protocol 固化进 protocol.json）——**唯一声明点**：
 # CLI default、engine 签名默认、observability 的兜底读取都引用这里
 # （此前 10/7 在三处各写一遍，改一处不改另一处就会漂移）。

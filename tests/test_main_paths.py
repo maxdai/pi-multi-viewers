@@ -316,6 +316,11 @@ class TestCleanupPrintsReport(unittest.TestCase):
             self.assertIn("配额：meeting", out)
             self.assertFalse(os.path.isdir(base))          # 清理完成
             self.assertTrue(os.path.exists(f"{base}-result.md"))
+            # 报告同时落盘（观测数字可复查；2026-09-25 复盘缺口）
+            rp = f"{base}-report.txt"
+            self.assertTrue(os.path.exists(rp), rp)
+            report = open(rp, encoding="utf-8").read()
+            self.assertIn("配额：meeting", report)
 
     def test_report_failure_does_not_block_cleanup(self):
         """报告生成失败 → 打印失败原因、**仍然删除目录**（fail-open 只在这一层）。"""
@@ -331,6 +336,8 @@ class TestCleanupPrintsReport(unittest.TestCase):
             self.assertIn("报告生成失败（不影响清理）", out)
             self.assertIn("RuntimeError", out)
             self.assertFalse(os.path.isdir(base))          # 清理未被阻断
+            # 报告生成失败 → 不落盘（不写空文件冒充报告）
+            self.assertFalse(os.path.exists(f"{base}-report.txt"))
 
 
 class TestBuildReport(unittest.TestCase):

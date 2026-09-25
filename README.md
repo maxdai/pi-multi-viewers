@@ -112,15 +112,16 @@ scripts/mv.sh --view                          # 一次性增量查看（主 pi �
 scripts/mv.sh --say "<文本>"                   # 插话（命令行形态；pi 内用 /multi-viewers-say）
 scripts/mv.sh --status                        # 状态 + 路径（取值与含义以该命令输出为准）
 scripts/mv.sh --report                        # 只读报告（流程/配额/进程/LLM/档位对照；冷路径，不持久化）
-scripts/mv.sh --cleanup                       # 收尾（result.md 自动留存到 <dir>-result.md）
+scripts/mv.sh --cleanup                       # 收尾（result.md + 报告都留存到 <dir>-*.md/.txt）
 scripts/mv.sh --viewers                       # 列出+校验当前项目 viewers/（只读；建视角时用）
+scripts/mv.sh --set-viewer <名字>             # 新建视角文件（正文从 stdin 读；只新建不覆盖）
 ```
 
 ## 视角文件写什么（`viewers/<视角名>.md`）
 
 建视角**推荐**走 `/multi-viewers-setup`（交互式：先给候选建议 → 你定建哪几个 →
-落盘 → 展示给你审）；也可以手写。写完用 `scripts/mv.sh --viewers` 自查（列出并
-用代码判据校验名字与空正文）。
+`--set-viewer` 落盘 → 展示给你审）；也可以手写，写完用 `scripts/mv.sh --viewers`
+自查（列出并用代码判据校验名字与空正文）。
 
 一个视角文件 = **一份视角说明**，纯内容、无格式要求（无 frontmatter、
 无需标题，**文件名就是全部元数据**）。三个要点（措辞经实验验证）：

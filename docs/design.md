@@ -103,7 +103,7 @@ compaction 的 `firstKeptEntryId` 起 + 其后的条目"——窗口内含 compa
 | `status-<agent>.json` | loop | `{"sessionID": ...}` | 流程（崩溃恢复） | 是（恢复用） | O(1) |
 | `pi-sessions/fork-src-*.jsonl` | pi | 文档化 session schema（`usage`/`stopReason`/`timestamp`/`thinkingLevel`） | fork 构建 + `--report` | 否（报告用） | O(MB) 全量 → **禁轮询** |
 | `result.md`（固定位） | resultWriter loop | 结论文档 | 人 | 是（收尾判据） | — |
-| `--report`（视图） | observability | 文本行 | 人（**三个出口**，见下） | **否**（不得升级为验收 gate） | 冷路径一次性 —— **O(session 大小)**：每 agent 读整个 fork-src jsonl（实测 3 × 789KB ≈ 2.4MB/次、50–150ms/次，×3 出口 <0.3s/次分析），**不得进入任何轮询路径**（e2e16 评审量化） |
+| `--report`（视图） | observability | 文本行（`--cleanup` 另落盘 `<base>-report.txt`） | 人（**三个出口**，见下） | **否**（不得升级为验收 gate） | 冷路径一次性 —— **O(session 大小)**：每 agent 读整个 fork-src jsonl（实测 3 × 789KB ≈ 2.4MB/次、50–150ms/次，×3 出口 <0.3s/次分析），**不得进入任何轮询路径**（e2e16 评审量化） |
 
 **报告的字段集**（e2e17 评审后定稿，后续增补不计数——字段行以本表为准）——
 **谓词分组 + 对照 + 事实行**，
@@ -168,7 +168,7 @@ BOUNDARY_TYPE`）——**显式登记"历史（fork 携带）/ 本轮"的分界*
 
 **报告的打印位置**：`--report`（手动，任意时刻）+ `--cleanup` 前（自动，
 删目录前最后一次可读——目录删后 `--report` 不可用）。cleanup 层对报告
-fail-open（报告失败不阻断清理，且**打印**失败原因不静默）。
+fail-open（报告失败不阻断清理，且**打印**失败原因不静默）。报告随 `--cleanup` **落盘**一份到 `<base>-report.txt`（与 `-result.md` 同级）——原先只在终端出现一次，目录删掉后无法复查（复盘时长口径时踩到，用户 2026-09-25 定）。
 
 消费规则：`meeting_fs.iter_after_boundary` 只产出边界之后的条目；**未找到
 边界（老产物/手工 session）→ 返回空、按 n/a 处理，不得退回全文扫描**
@@ -575,6 +575,10 @@ commit 是溯源记录、本节是长期引用点——不并存两份权威值�
     resume 新命令面、env 回退配置、`runCli` 超时、启动路径继续优化（已在 1–2s 地板）、
     给 stalled 加第三种动作。**契约例外**：扩展作为包内第一方消费者**直连**
     `mv_cli.py`（实测 shim 61ms vs 直连 58–66ms，性能上零差异；按契约一致性记例外一行）。
+    **建视角流程（`/multi-viewers-setup`，仍是 prompt）**：机械部分下移到
+    `mv.sh --set-viewer <名字>`（正文从 stdin 读）——**命名规则 / 不覆盖已有 / 空正文拒绝 /
+    写完校验并回显**四条由命令保证（此前是 prompt 里给 LLM 的纪律，会漏）；prompt 只负责
+    **看项目给候选 + 内容撰写 + 与用户来回**（那才是 LLM 该做的）。
     **UI 通道按 mode 分级（2026-09-25 实测）**：dialog（`select`/`confirm`/`input`/`editor`）
     全模式可用（RPC/web 走请求-响应子协议、阻塞等用户；不带 `timeout` 即不倒计时，
     暂停点成立）；`notify` 全模式可用（TUI = showStatus 行；pi-web = **追加进聊天流的

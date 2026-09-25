@@ -450,11 +450,24 @@ def cleanup_discussion(base):
     # 报告是附加信息、清理是主职责：报告生成失败**不阻断**清理
     # （fail-open 只在这一层兜底——build_report 内部各段已各自 fail-open）。
     print("[cleanup] —— 本次分析报告（删除目录前最后一次可读）——")
+    lines = None
     try:
-        for line in build_report(base):
+        lines = list(build_report(base))
+        for line in lines:
             print(line)
     except Exception as e:                       # noqa: BLE001（兜底不吞：打印）
         print(f"[cleanup] 报告生成失败（不影响清理）: {e!r}")
+    if lines is not None:
+        # 落盘一份（与 <base>-result.md 同级）：报告本来只在终端出现一次，
+        # 目录删掉后 --report 也不可用 → 观测数字不可复查（复盘时长口径时
+        # 踩过）。与 result.md 同样的 fail-open：写不动不阻断清理。
+        rp = meeting_fs.report_path(base)
+        try:
+            with open(rp, "w", encoding="utf-8") as f:
+                f.write("\n".join(lines) + "\n")
+            print(f"[cleanup] 报告已保存 → {rp}")
+        except OSError as e:
+            print(f"[cleanup] 报告保存失败（不影响清理）: {e!r}")
     shutil.rmtree(base)
     print(f"[cleanup] 已删除目录 {base}（含 pi-sessions）")
 

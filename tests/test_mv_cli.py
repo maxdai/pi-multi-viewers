@@ -430,6 +430,73 @@ class TestViewers(unittest.TestCase):
             rd.assert_not_called()
 
 
+class TestSetViewer(unittest.TestCase):
+    """`--set-viewer`：正文从 stdin 读；命名/不覆盖/空正文/写完校验全由机制保证。
+
+    为什么这层值得测：这四条本来是 prompt 里给 LLM 的纪律（会漏），现在移到
+    CLI —— 它们是"建视角"唯一可能静默出错的点（写成非法名、覆盖已有资产、
+    写空文件），且**只在真跑时才炸**（分析启动时才发现）。
+    """
+
+    def _run(self, cwd, args, stdin=""):
+        with mock.patch.object(mv_cli.os, "getcwd", return_value=cwd), \
+                mock.patch.object(mv_cli.sys, "stdin", io.StringIO(stdin)):
+            return run_main(args)
+
+    def test_creates_and_validates(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            os.makedirs(os.path.join(tmp, "viewers"))
+            rc, out, _err = self._run(tmp, ["--set-viewer", "甲"], "镜头：从甲看\n")
+            self.assertEqual(rc, 0, out)
+            path = os.path.join(tmp, "viewers", "甲.md")
+            self.assertTrue(os.path.exists(path))
+            self.assertEqual(open(path, encoding="utf-8").read(), "镜头：从甲看\n")
+            self.assertIn("[set-viewer] 已写入", out)
+            self.assertIn("镜头：从甲看", out)          # 回显正文
+            self.assertIn("校验：", out)               # 写完立即校验（同一实现）
+
+    def test_creates_viewers_dir_when_missing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            rc, _out, _err = self._run(tmp, ["--set-viewer", "乙"], "内容\n")
+            self.assertEqual(rc, 0)
+            self.assertTrue(os.path.isdir(os.path.join(tmp, "viewers")))
+
+    def test_refuses_overwrite(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            vdir = os.path.join(tmp, "viewers")
+            os.makedirs(vdir)
+            old = os.path.join(vdir, "甲.md")
+            with open(old, "w", encoding="utf-8") as f:
+                f.write("原有内容\n")
+            rc, _out, err = self._run(tmp, ["--set-viewer", "甲"], "新内容\n")
+            self.assertEqual(rc, 1)
+            self.assertIn("已存在，不覆盖", err)
+            self.assertEqual(open(old, encoding="utf-8").read(), "原有内容\n")
+
+    def test_rejects_invalid_name(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            for bad in ("human", "a/b", "有 空格", "x" * 40):
+                rc, _out, err = self._run(tmp, ["--set-viewer", bad], "内容\n")
+                self.assertEqual(rc, 1, bad)
+                self.assertIn("非法视角名", err)
+            self.assertFalse(os.path.isdir(os.path.join(tmp, "viewers")))
+
+    def test_rejects_empty_body(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            rc, _out, err = self._run(tmp, ["--set-viewer", "甲"], "   \n\n")
+            self.assertEqual(rc, 1)
+            self.assertIn("视角内容为空", err)
+            self.assertFalse(os.path.exists(os.path.join(tmp, "viewers", "甲.md")))
+
+    def test_rejects_wrong_arity(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            rc, _out, err = self._run(tmp, ["--set-viewer"], "内容\n")
+            self.assertEqual(rc, 1)
+            self.assertIn("用法", err)
+            rc2, _out2, err2 = self._run(tmp, ["--set-viewer", "甲", "乙"], "内容\n")
+            self.assertEqual(rc2, 1)
+
+
 if __name__ == "__main__":
     unittest.main()
 

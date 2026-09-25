@@ -54,6 +54,7 @@ USAGE = f"""用法:
   {PROG} --view    [dir] [--since <ref>]
   {PROG} --say     [dir] "<文本>"
   {PROG} --viewers                           # 列出并校验当前项目的 viewers/（只读；建视角时用）
+  {PROG} --set-viewer <名字>                 # 新建一个视角文件（正文从 stdin 读；只新建不覆盖）
 
 消费命令的 <dir> 可省略（自动发现本 session 当前分析——按 cwd 下
 mv-<PI_SESSION_ID>-* 最新；无匹配则报错要求显式传目录）
@@ -153,9 +154,6 @@ def cmd_viewers(args):
     目录**（消费命令的目录自动发现对此不适用——它找的是 mv-<sid>-*）。判据全部
     复用 `spec_gen` 的单一实现（列举 `list_agent_md` / 名字 `check_agent_name` /
     集合 `viewer_set_error`），这一层不另写一套规则。
-
-    数量不足（<2）在这里是**提示**不是错误：建 1 个是合法的中间状态，只有启动
-    一次分析时才要求 ≥2（那条判据仍由 `viewer_set_error` 独占）。
     """
     if args:
         fail(f"未知参数: {' '.join(args)}（--viewers 不接受参数——只检查项目 cwd 的 viewers/）")
@@ -163,6 +161,17 @@ def cmd_viewers(args):
     if not os.path.isdir(vdir):
         fail(f"未找到 {vdir}——视角文件放在项目 cwd 的 viewers/<视角名>.md"
              f"（文件名即视角名；可跑 /multi-viewers-setup 交互式建立）")
+    return _validate_and_print_viewers(vdir)
+
+
+def _validate_and_print_viewers(vdir):
+    """列出 + 校验 + 打印（`--viewers` 与 `--set-viewer` 的**同一实现**）。
+
+    判据全部复用 `spec_gen` 的单一实现（列举 `list_agent_md` / 名字
+    `check_agent_name` / 集合 `viewer_set_error`）——这一层不另写规则。
+    数量不足（<2）是**提示**不是错误：建 1 个是合法中间状态（只有启动一次
+    分析才要求 ≥2，那条判据由 `viewer_set_error` 独占）。
+    """
     names, _briefs, empty = spec_gen._discover_viewers(vdir)
     if not names:
         fail(f"{vdir} 下没有 *.md——文件名即视角名（如 viewers/效率.md）")
@@ -188,6 +197,38 @@ def cmd_viewers(args):
         return 0
     print(f"  校验：通过（{len(names)} 个视角，名字与内容均合法）")
     return 0
+
+
+def cmd_set_viewer(args):
+    """新建一个视角文件：`--set-viewer <名字>`，正文**从 stdin 读**。
+
+    为什么是命令而不是"让 LLM 直接写文件"：文件名即视角名，于是**命名规则 /
+    不覆盖已有 / 空正文拒绝 / 写完校验并回显**这四条本来只能写在 prompt 里当
+    纪律（LLM 会漏），现在由机制保证（判据复用 `spec_gen` 单一实现）。LLM/人
+    只负责**内容**——那是它该做的部分。不提供 `--force`：本命令语义 = 只新建，
+    改已有视角请直接编辑文件。
+    """
+    if len(args) != 1:
+        fail("用法: --set-viewer <名字>（正文从 stdin 读；如 "
+             "`mv.sh --set-viewer 效率 <<'EOF' … EOF`）")
+    name = args[0]
+    err = spec_gen.check_agent_name(name)
+    if err:
+        fail(f"非法视角名（{err}）：{name}")
+    vdir = os.path.join(os.getcwd(), "viewers")
+    target = os.path.join(vdir, f"{name}.md")
+    if os.path.exists(target):
+        fail(f"视角已存在，不覆盖: {target}（改名，或直接编辑该文件）")
+    body = sys.stdin.read().strip()
+    if not body:
+        fail(f"视角内容为空（{name}）——正文从 stdin 传入；空视角没有 lenses，"
+             f"分析会退化成同名随机视角")
+    os.makedirs(vdir, exist_ok=True)
+    with open(target, "w", encoding="utf-8") as f:
+        f.write(body + "\n")
+    print(f"[set-viewer] 已写入 {target}\n")
+    print(body + "\n")
+    return _validate_and_print_viewers(vdir)
 
 
 def cmd_status(args):
@@ -418,6 +459,8 @@ def main(argv=None):
         return cmd_start(rest[0], rest[1:])
     if cmd == "--viewers":
         return cmd_viewers(rest)
+    if cmd == "--set-viewer":
+        return cmd_set_viewer(rest)
     if cmd == "--status":
         return cmd_status(rest)
     if cmd == "--report":

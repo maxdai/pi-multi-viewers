@@ -28,13 +28,15 @@ human_sayer.py       【human 通道】插话命令（单次/stdin/交互 -i）
 scripts/mv.sh        稳定入口 shim（exec mv_cli.py；路径被 prompt/README 引用）
 scripts/pi-probe.sh  LLM 探针（跑 pi + 登记新 session → 残留检查器可追溯）
 scripts/check-residue.sh  残留检查（session/进程/目录三类；增删 scripts/ 时同步本节）
-mv_cli.py            命令行实现（prepare/start/status/report/wait/cleanup/view/say/viewers）
+scripts/archive-result.sh  归档 result.md（机械部分：逐字复制+校验/存档头骨架/索引行/删源副本）
+mv_cli.py            命令行实现（prepare/start/status/report/wait/cleanup/view/say/viewers/set-viewer）
 extensions/multi-viewers/  【单一扩展单元】index.ts = 三命令 + shared.ts = 助手
                            /multi-viewers 分析入口（prepare→暂停点弹窗→start→预填+打印观看命令）
                            /multi-viewers-finish 收尾（status→确认→cleanup）
                            /multi-viewers-say 插话（零 LLM，直接 spawn human_sayer.py）
                            ⚠ extensions/ 平级禁放 .ts 助手（加载器会把平级文件当独立扩展）
-prompts/multi-viewers-setup.md  /multi-viewers-setup 建视角入口（建议→你定→落盘→给审）
+prompts/multi-viewers-setup.md  /multi-viewers-setup 建视角入口（建议→你定→**mv.sh --set-viewer** 落盘→给审）
+                           # 那四条本来写进 prompt 的纪律（命名/不覆盖/非空/校验）改由命令保证
 docs/design.md       设计文档（fork 源模式与规模口径 + 决策记录）
 package.json         npm 包 pi-multi-viewers（pi.prompts 注册；**版本号唯一事实源**）
 templates/           AGENTS.md.tpl / agent.md.tpl / gitignore.tpl / spec-readme.md.tpl
