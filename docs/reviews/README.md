@@ -37,6 +37,7 @@
 | `2026-09-14-e2e25-doc-drift-review.md` | 文档 vs 代码一致性（文档漂移）+ ctx_search 的**自然使用**观察 | **三处文档仍写"兜底 mv-* 并警告"而代码是无兜底、未匹配报错**（行为语义相反）；README 缺 `--extension-policy`；报告字段列表过期；4 条缺失项；**根因 = 对实现的复述**（治本：引事实源不复制）；自然使用观察：`ctx_search` **0 次**、historian 0 次 | `ba204ef` |
 | `2026-09-25-multi-viewers-extension-review.md` | 把 `/multi-viewers` 改成 extension 这次的实现（extension 代码 / CLI 机器标记行契约 / 文档同步） | **P1：`stalled` 被当成 running → 让用户等一个永不到来的收尾**（唯一行为错误）；P2 `[result]` 只在 done 打印；P3 头注释与暂停点自相矛盾；P4 `/root/pi-multi-viewers` 单机死回退；P5 两扩展逐字重复 ≈35 行且已漂移（→ 合并为一单元三命令）；P6 取消提示缺 sid 提醒 + **扩展消费端零仓库内测试**；首用另暴露：主题带引号、观看命令只有预填一个出口 | 本批（合并 + P1–P6 + 首用两项 + harness 进仓库） |
 | `2026-09-25-multi-viewers-postfix-review.md` | 复验 0.8.0 的 extension 合并与 P1–P6（含 harness 覆盖审查） | **P1–P6 逐条到位、合并净简化**；新抓 **漏 A：`run_tests.sh --reuse` 的错误成功信号**（harness 失败仍算绿 → 命中旧绿 + exit 0，修法 ②′ 清指纹 + rc==0 才写回）；D2 通知里的不实断言（pi-web 忽略 `setEditorText`）；B1/B2 契约前缀与不可执行出路；7 类现存分支零覆盖 + sid 注入与 percent-encoding 两装置缺口；D1/D3 文档漂移；S1–S3 简化 | `69a415a`（+ `e92eacc` 第三交付出口） |
+| `2026-09-25-extension-mechanisms-review.md` | 复验 0.8.2 三处机制（报告落盘 / `--set-viewer` / 观看命令通道）+ 测试覆盖与断言强度 | **① 显示层失败会跳过清理**（BrokenPipe 逃逸 → rmtree 被跳过、目录残留；修法 `_print_best_effort` + rmtree 进 finally ⇒ 清理必达）；**② `--set-viewer` 半成功**（校验在写之后 → rc≠0 但文件已写入；改 B′ 校验前移）；③ 通道模型由「三出口」收敛为四通道角色表，并证实 custom_message 随 fork 进每场上下文；文档三处「不持久化」复述、断言偏弱、prompt 复述、fail-open 宽窄不对称 | `51a4535` |
 
 ## 环境口径（读报告时的背景）
 
