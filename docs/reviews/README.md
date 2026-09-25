@@ -33,6 +33,7 @@
 | `2026-09-14-e2e24-extension-policy-review.md` | 扩展策略三档（默认 mc-tools）的实现与证据链 + `ctx_search` 价值评估 | **S1：缺 MC 的降级路径提前 return → 命令被截断（缺 model/print/注入、cwd 错）**；S1a 测试判别力不足；E2 报告缺"声明 vs 生效"；E1 成本口径超出精度；T1–T3 文本矛盾；F5/F6/F7/S2/F9 解析链缺陷；**ctx_search 9 次调用全为问卷诱导、0 次决定性帮助、命中 1 条过期记忆** | `91a1171`（Batch 1+3）、`b9329fb`（Batch 2 删死代码）|
 | `2026-09-14-e2e25-doc-drift-review.md` | 文档 vs 代码一致性（文档漂移）+ ctx_search 的**自然使用**观察 | **三处文档仍写"兜底 mv-* 并警告"而代码是无兜底、未匹配报错**（行为语义相反）；README 缺 `--extension-policy`；报告字段列表过期；4 条缺失项；**根因 = 对实现的复述**（治本：引事实源不复制）；自然使用观察：`ctx_search` **0 次**、historian 0 次 | `ba204ef` |
 | `2026-09-25-multi-viewers-extension-review.md` | 把 `/multi-viewers` 改成 extension 这次的实现（extension 代码 / CLI 机器标记行契约 / 文档同步） | **P1：`stalled` 被当成 running → 让用户等一个永不到来的收尾**（唯一行为错误）；P2 `[result]` 只在 done 打印；P3 头注释与暂停点自相矛盾；P4 `/root/pi-multi-viewers` 单机死回退；P5 两扩展逐字重复 ≈35 行且已漂移（→ 合并为一单元三命令）；P6 取消提示缺 sid 提醒 + **扩展消费端零仓库内测试**；首用另暴露：主题带引号、观看命令只有预填一个出口 | 本批（合并 + P1–P6 + 首用两项 + harness 进仓库） |
+| `2026-09-25-multi-viewers-postfix-review.md` | 复验 0.8.0 的 extension 合并与 P1–P6（含 harness 覆盖审查） | **P1–P6 逐条到位、合并净简化**；新抓 **漏 A：`run_tests.sh --reuse` 的错误成功信号**（harness 失败仍算绿 → 命中旧绿 + exit 0，修法 ②′ 清指纹 + rc==0 才写回）；D2 通知里的不实断言（pi-web 忽略 `setEditorText`）；B1/B2 契约前缀与不可执行出路；7 类现存分支零覆盖 + sid 注入与 percent-encoding 两装置缺口；D1/D3 文档漂移；S1–S3 简化 | `69a415a`（+ `e92eacc` 第三交付出口） |
 
 ## 环境口径（读报告时的背景）
 
