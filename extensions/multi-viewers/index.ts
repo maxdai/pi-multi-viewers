@@ -16,13 +16,12 @@
  *
  * 与 CLI 的契约（标记行/退出码）与全部原语见 ./shared.ts。
  *
- * 观看命令交付 = **三个出口**（缺一不可，都是实测暴露的）：
- * ① `ctx.ui.setEditorText` 预填输入框（按 Enter 即执行；**仅 TUI**，pi-web 忽略）
- * ② `notify` 带一份（即时可见；但 pi-web 上关掉弹窗即消失）
- * ③ `pi.sendMessage` 写一条 custom_message 进消息流（持久；但 pi-web 渲染为
- *    **折叠的** `multi-viewers (click to expand)`，需点击/重载才展开）
- * ④ `ctx.ui.setWidget` 常驻面板（**一眼可见、不消失、不需点击**——pi-web 实测
- *    前三条都不够用；面板是 MC 待办用的同一通道）
+ * 观看命令交付 = **四个通道，各司其职**（每一个都是实测逼出来的，见 docs/design.md 决策 22）：
+ * ① `ctx.ui.setEditorText` 预填输入框——TUI 便利（能直接回车跑）；pi-web 忽略
+ * ② `notify`——即时反馈；pi-web 上关掉弹窗即消失
+ * ③ `pi.sendMessage`（custom_message）——**持久留痕**，跨重启仍在；但 pi-web 渲染为
+ *    **折叠的** `multi-viewers (click to expand)`，且随 fork 进入每场分析上下文
+ * ④ `ctx.ui.setWidget`——**运行期常驻可见**（一眼看到、不需点击；MC 待办用的同一通道）
  */
 
 import {
@@ -93,7 +92,8 @@ export default function register(pi: any) {
         return;
       }
 
-      // ④ 观看命令：三个出口（见文件头）——预填（仅 TUI）+ notify（即时）+ 消息流（持久）
+      // ④ 观看命令：四个通道各司其职（见文件头与决策 22）——预填（TUI）/ notify（即时）/
+      //    custom_message（留痕）/ widget（常驻可见）
       ctx.ui.setEditorText(watch);
       // 消息流里留一条持久记录：用户实测 pi-web 的 notify 会随弹窗关闭而消失，
       // 关了窗口就再也找不到这行命令。custom_message 进会话（**参与 LLM 上下文**，
@@ -178,7 +178,7 @@ export default function register(pi: any) {
       const ok = await ctx.ui.confirm(
         "确认收尾？",
         "将清理分析目录；结果会保存到 `<分析目录>-result.md`，" +
-          "清理时还会打印一次分析报告。",
+          "清理时还会打印并落盘一份报告（<分析目录>-report.txt）。",
       );
       if (!ok) {
         ctx.ui.notify("已取消收尾（分析目录保留）。", "info");

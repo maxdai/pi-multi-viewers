@@ -201,7 +201,7 @@ fail-open（报告失败不阻断清理，且**打印**失败原因不静默）�
 轮询路径消费 MB 面、不做运行期 LLM 评分（有效性判断留给人 + result.md）、
 不做目录内 retention（cleanup 是唯一清理点）、message frontmatter 不加
 时间戳（第二事实源 + 该字段由 LLM 写，不可信；权威时间 = commit 时间）、
-日志不 JSON 化（主消费者是人）、报告不自动落固定位（视图不占"家"）。
+日志不 JSON 化（主消费者是人）、报告不自动落固定位（视图不占“家”；**例外**：cleanup 删目录前打印并落盘一份快照 `<base>-report.txt`，见观测面契约）。
 
 ## 数字的归宿（一个数字只留一个"家"）
 
@@ -579,22 +579,27 @@ commit 是溯源记录、本节是长期引用点——不并存两份权威值�
     `mv.sh --set-viewer <名字>`（正文从 stdin 读）——**命名规则 / 不覆盖已有 / 空正文拒绝 /
     写完校验并回显**四条由命令保证（此前是 prompt 里给 LLM 的纪律，会漏）；prompt 只负责
     **看项目给候选 + 内容撰写 + 与用户来回**（那才是 LLM 该做的）。
+    **有意的 LLM 义务残留**：prompt 第 4 步要求「改完再跑 `--viewers` 复核」——它不新增
+    命令面，且有硬 gate 兜底（prepare/start 的集合校验不过就拒绝启动），故保留。
     **UI 通道按 mode 分级（2026-09-25 实测）**：dialog（`select`/`confirm`/`input`/`editor`）
     全模式可用（RPC/web 走请求-响应子协议、阻塞等用户；不带 `timeout` 即不倒计时，
-    暂停点成立）；`notify` 全模式可用（TUI = showStatus 行；pi-web = **追加进聊天流的
-    常驻行**，非瞬时提示）；**`setEditorText` 仅 TUI**——pi-web 忽略（`pi-web/static/app.js`
-    注释「set_editor_text … ignored」+ SDK `ui-context.ts` 里是空实现）。⇒ **交付观看命令
-    必须有 notify 兜底**（预填只是增强，不能当唯一出口）；需要分级时用 `ctx.mode`。
-    但 pi-web 实测**关掉 notify 弹窗即消失** ⇒ 观看命令还写一条 `pi.sendMessage`
-    （`customType: multi-viewers`、`display: true`）进消息流：持久留痕，代价 = 参与
-    LLM 上下文的一行（用户 2026-09-25 要求「message 流中也能显示」）。**pi-web 把
-    custom_message 渲染成折叠块**（`multi-viewers (click to expand)`，`static/app.js`
-    的 `renderCustom`）——一眼看不见 ⇒ 另加**常驻面板**：`ctx.ui.setWidget("multi-viewers", […])`
-    （pi-web 注释 "Persistent widget panel … Not a popup"；主 pi 的 MC 待办用同一通道），
-    收尾成功时 `setWidget(key, undefined)` 清掉。**四个出口各司其职**：预填=能直接跑（TUI）、
-    notify=即时、custom_message=会话留痕（折叠）、widget=常驻一眼可见。
-    被否决：A（handler 里 `sendUserMessage` 触发 LLM 回合改 spec——时序不可控）、
-    D（拆两条命令——把门禁成本转嫁用户；B1 变体/第三种即现形态）。
+    暂停点成立）；`notify` 全模式可用（TUI = showStatus 行；pi-web 会关闭即消失）；
+    **`setEditorText` 仅 TUI**——pi-web 忽略（`pi-web/static/app.js` 注释
+    「set_editor_text … ignored」+ SDK `ui-context.ts` 里是空实现）。⇒ 交付观看命令
+    不能只靠一个通道，**四个通道各司其职**：
+    | 通道 | 作用域 | 上下文成本 | 角色 |
+    |---|---|---|---|
+    | `setEditorText` 预填 | 仅 TUI | 0 | TUI 便利（能直接回车跑） |
+    | `notify` | 全模式 | 0 | 即时反馈（pi-web 关掉弹窗即消失） |
+    | `pi.sendMessage`（custom_message） | 全模式 | ~百 token（主 session）+ 随 fork 进每场分析 | 持久留痕（pi-web 渲染为折叠块） |
+    | `ctx.ui.setWidget` | 全模式 | 0（纯 UI） | 运行期常驻可见（一眼看到、不需点击） |
+    三条注记：① `sendMessage` 的 custom_message **会随 fork 进每场分析各视角的上下文**
+    （fork 源在首唤由主 session 条目构建，不做类型过滤）——~2 行/场，有界；不为它加
+    过滤（那会让构造层获得扩展类型知识，跨层耦合换几行噪音，不配）。② widget 是
+    **运行期**状态（fire-and-forget UI，非会话条目；reload/重启后不恢复——持久记录靠
+    custom_message）。③ 零上下文留痕档确实存在（`pi.appendEntry` + `registerEntryRenderer`，
+    明确不进 LLM 上下文），但其渲染器是 TUI 组件、pi-web 无渲染路径 ⇒
+    **可见 ∩ 零上下文 = 空集**，跨模式成本不可归零，接受现值。需要分级时用 `ctx.mode`。
 
 ### 被否决方案（含重估触发条件）
 

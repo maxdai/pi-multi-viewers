@@ -320,6 +320,11 @@ class TestCleanupPrintsReport(unittest.TestCase):
             rp = f"{base}-report.txt"
             self.assertTrue(os.path.exists(rp), rp)
             report = open(rp, encoding="utf-8").read()
+            # 落盘内容 ≡ 打印内容（同一份 lines；只断言"含某段"锁不住——只写前 3 行也能过）
+            printed = [str(c.args[0]) for c in mp.call_args_list if c.args]
+            banner = next(n for n, l in enumerate(printed) if "本次分析报告" in l)
+            saved = next(n for n, l in enumerate(printed) if "报告已保存" in l)
+            self.assertEqual(report.rstrip("\n"), "\n".join(printed[banner + 1:saved]).rstrip("\n"))
             self.assertIn("配额：meeting", report)
 
     def test_report_failure_does_not_block_cleanup(self):
@@ -340,6 +345,49 @@ class TestCleanupPrintsReport(unittest.TestCase):
             self.assertFalse(os.path.exists(f"{base}-report.txt"))
 
 
+
+    def test_report_write_failure_does_not_block_cleanup(self):
+        """落盘失败（磁盘/权限/IO）→ 打印失败原因、**仍然删除目录**（与生成段对称）。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            base = os.path.join(tmp, "mv-x-3")
+            os.makedirs(base)
+            import start_discussion as sd
+            with mock.patch.object(sd, "build_report", return_value=["[报告] x", "一行"]), \
+                    mock.patch("builtins.open", side_effect=OSError(28, "No space left")), \
+                    mock.patch("builtins.print") as mp:
+                sd.cleanup_discussion(base)
+            out = "\n".join(str(c.args[0]) for c in mp.call_args_list if c.args)
+            self.assertIn("报告保存失败（不影响清理）", out)
+            self.assertIn("No space left", out)
+            self.assertFalse(os.path.isdir(base))          # 仍清理
+
+    def test_display_failure_does_not_block_cleanup(self):
+        """**显示层失败也不阻断清理**（评审批 ①(c)）：stdout 持续写不出去
+        （管道关闭 / `| head` / 终端断开）时，rmtree 必达、不抛异常。
+
+        本批最重要的行为修复：修复前该场景让 BrokenPipeError 逃逸出
+        cleanup_discussion → **rmtree 被跳过 → 目录残留**（已实测复现）。
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            base = os.path.join(tmp, "mv-x-4")
+            os.makedirs(base)
+            import start_discussion as sd
+            real_print = print
+            n = {"i": 0}
+
+            def flaky(*a, **k):
+                n["i"] += 1
+                if n["i"] > 3:                              # 第 4 次起一律失败
+                    raise BrokenPipeError(32, "Broken pipe")
+                return real_print(*a, **k)
+
+            with mock.patch.object(sd, "build_report",
+                                   return_value=[f"line {i}" for i in range(20)]), \
+                    mock.patch("builtins.print", side_effect=flaky):
+                sd.cleanup_discussion(base)                 # 不得抛出
+            self.assertFalse(os.path.isdir(base), "显示层失败也必须完成清理")
+            self.assertTrue(os.path.exists(f"{base}-report.txt"),
+                            "落盘段仍应执行（不依赖 stdout）")
 class TestBuildReport(unittest.TestCase):
     """--report（观测面唯一机器消费出口）：各段取数 + fail-open。"""
 

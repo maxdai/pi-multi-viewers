@@ -1,8 +1,9 @@
 """观测层——状态判定 / --report / --wait（从 start_discussion 拆出，S2）。
 
 职责：**运行期只读观测**——check_status 状态机、--report 观测面聚合、
---wait 阻塞观察、loop 进程存活检测。不写任何产物（报告不落盘——
-观测面契约：冷路径一次性，不持久化）。
+--wait 阻塞观察、loop 进程存活检测。本层**不写任何文件**：报告的唯一落点
+在 `start_discussion.cleanup_discussion`（删目录前打印并落盘一份
+`<base>-report.txt`，观测数字可复查）——本模块只生成行、不负责落地。
 
 依赖方向：只准 import meeting_core / meeting_fs / meeting_engine /
 human_viewer（observability 是"读"侧，human_viewer.incremental 是它
@@ -214,8 +215,9 @@ def build_report(base):
 
     契约（design.md 观测面契约节）：
     - **冷路径一次性**：不常驻、不被轮询；调用方（人/主 pi）按需触发。
-    - **不持久化**：视图不占"数字的家"——数字的家是 bare（判定域）、
+    - **本函数不落盘**：视图不占"数字的家"——数字的家是 bare（判定域）、
       loop log 的登记字段、pi session 的文档化字段；报告只是它们的一次投影。
+      唯一的落盘点是 `cleanup_discussion`（删目录前写 `<base>-report.txt`）。
     - **fail-open**：任何一段读不出（缺目录/缺文件/格式变）→ 该段显示 n/a，
       不报错、不改判定、不阻塞。
     - **跨度分标**：进程跨度（elapsed_ms）≠ per-response 跨度（session

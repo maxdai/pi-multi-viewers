@@ -497,6 +497,35 @@ class TestSetViewer(unittest.TestCase):
             self.assertEqual(rc2, 1)
 
 
+
+    def test_refuses_to_write_when_existing_set_is_invalid(self):
+        """B′：viewers/ 里**已有**坏文件时，不得"先写成功、再以 rc≠0 退出"。
+
+        半成功是职责边界问题：rc≠0 却在磁盘上留下了新文件——调用方无法从
+        退出码判断"到底写没写"。所以集合级校验必须在**读 stdin / 写文件之前**。
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            vdir = os.path.join(tmp, "viewers")
+            os.makedirs(vdir)
+            with open(os.path.join(vdir, "甲.md"), "w", encoding="utf-8") as f:
+                f.write("")                                       # 坏：空正文
+            rc, out, err = self._run(tmp, ["--set-viewer", "乙"], "镜头乙\n")
+            self.assertEqual(rc, 1)
+            self.assertIn("视角任务书不能为空", err)
+            self.assertIn("本次未写入任何文件", err)
+            self.assertFalse(os.path.exists(os.path.join(vdir, "乙.md")), "不得有半成功")
+            self.assertNotIn("已写入", out)
+
+    def test_dangling_symlink_is_not_overwritten(self):
+        """`lexists`：悬空符号链接也算"已存在"（exists 会漏掉 → 变成覆盖写入）。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            vdir = os.path.join(tmp, "viewers")
+            os.makedirs(vdir)
+            os.symlink(os.path.join(tmp, "nowhere"), os.path.join(vdir, "甲.md"))
+            rc, _out, err = self._run(tmp, ["--set-viewer", "甲"], "内容\n")
+            self.assertEqual(rc, 1)
+            self.assertIn("不覆盖", err)
+            self.assertTrue(os.path.islink(os.path.join(vdir, "甲.md")))
 if __name__ == "__main__":
     unittest.main()
 

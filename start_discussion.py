@@ -424,52 +424,85 @@ def setup_environment(args, participants, base, spec_dir=None,
           f"extensionPolicy={args.extension_policy}")
 
 
+def _print_best_effort(*args, **kwargs):
+    """打印，但**绝不让显示层失败影响主职责**（清理 / 产物留存）。
+
+    为什么需要：`cleanup_discussion` 的输出可能在管道关闭时抛
+    `BrokenPipeError`（`| head`、终端断开、CI 截断）——实测复现：异常从 print
+    逃逸 → **`rmtree` 被跳过**，目录残留且 rc≠0，即"该清理的没清理"
+    （2026-09-25 评审批 ①(c)）。显示层从来不是主职责，失败只能被忽略。
+
+    契约：`cleanup_discussion` 的**全部 stdout 都走本函数**（该函数内不得出现
+    裸 `print(`，可 grep 校验）；于是不变量成立——**rmtree 必达**，唯一例外
+    是产物留存真失败（那在 `_preserve_result_md` 里冒泡，见其注释）。
+    """
+    try:
+        print(*args, **kwargs)
+    except Exception:                            # noqa: BLE001（显示层失败永不上抛）
+        pass
+
+
 def _preserve_result_md(base):
     """清理前保存 result.md（薄包装 → meeting_fs.preserve_result_md，
-    T2 合并：与 loop 退出路径共享同一实现）。"""
+    T2 合并：与 loop 退出路径共享同一实现）。
+
+    这里的失败**必须冒泡**（不吞）：result.md 的权威位置在 `<base>/repo.git`，
+    即**待删目录之内**——留存失败还继续删 = 永久丢失产物。所以它不包在
+    报告段的 try/finally 里（评审批 ①(c)：唯一允许阻断清理的失败）。
+    """
     dest = meeting_fs.preserve_result_md(base)
     if dest:
-        print(f"[cleanup] 已保存 result.md → {dest}")
+        _print_best_effort(f"[cleanup] 已保存 result.md → {dest}")
 
 
 def cleanup_discussion(base):
-    """清理一次讨论：保存 result.md（若存在）→ 删目录。
+    """清理一次讨论：保存 result.md（若存在）→ 打印并落盘报告 → 删目录。
 
     result.md 是讨论唯一产物（审核报告等）——清理前先从 bare git 历史
     复制到父级目录（<base名>-result.md），避免清理丢产物（用户建议）。
+    报告在本步**打印并落盘**到 `<base>-report.txt`（原先只在终端出现一次，
+    目录删掉后无法复查——复盘时长口径时踩到）：观测数字应当可复查。
     Pi 的 session 文件存放在 <base>/pi-sessions，随目录一起删除，无需
     额外清理全局 DB。
     不负责终止 loop 进程（职责边界，用户 2026-08-31 定）——loop 每轮
     检测到 repo.git 消失即自行退出（meeting_engine.agent_loop）。
+
+    失败语义（评审批 ①(c) 冻结）：**rmtree 必达**；报告生成 / 打印 / 落盘
+    失败都不阻断清理（fail-open，捕 `Exception` 而非只捕 `OSError`——两段
+    对称，不依赖"这些代码只可能抛 OSError"的脆弱推理）；唯一例外是
+    `_preserve_result_md` 真失败（I/O）→ 冒泡且**不删目录**。
+    清理成功返回 0（显示层失败不算失败）。
     """
     if not os.path.isdir(base):
-        print(f"[cleanup] 目录不存在: {base}")
+        _print_best_effort(f"[cleanup] 目录不存在: {base}")
         return
     _preserve_result_md(base)
-    # 报告（**删目录前最后一次可读**——目录删后 --report 不可用）。
-    # 报告是附加信息、清理是主职责：报告生成失败**不阻断**清理
-    # （fail-open 只在这一层兜底——build_report 内部各段已各自 fail-open）。
-    print("[cleanup] —— 本次分析报告（删除目录前最后一次可读）——")
-    lines = None
     try:
-        lines = list(build_report(base))
-        for line in lines:
-            print(line)
-    except Exception as e:                       # noqa: BLE001（兜底不吞：打印）
-        print(f"[cleanup] 报告生成失败（不影响清理）: {e!r}")
-    if lines is not None:
-        # 落盘一份（与 <base>-result.md 同级）：报告本来只在终端出现一次，
-        # 目录删掉后 --report 也不可用 → 观测数字不可复查（复盘时长口径时
-        # 踩过）。与 result.md 同样的 fail-open：写不动不阻断清理。
-        rp = meeting_fs.report_path(base)
+        # 报告（**删目录前最后一次可读**——目录删后 --report 不可用）。
+        # 报告是附加信息、清理是主职责：报告生成失败**不阻断**清理
+        # （fail-open 只在这一层兜底——build_report 内部各段已各自 fail-open）。
+        _print_best_effort("[cleanup] —— 本次分析报告（删除目录前最后一次可读）——")
+        lines = None
         try:
-            with open(rp, "w", encoding="utf-8") as f:
-                f.write("\n".join(lines) + "\n")
-            print(f"[cleanup] 报告已保存 → {rp}")
-        except OSError as e:
-            print(f"[cleanup] 报告保存失败（不影响清理）: {e!r}")
-    shutil.rmtree(base)
-    print(f"[cleanup] 已删除目录 {base}（含 pi-sessions）")
+            lines = list(build_report(base))
+            for line in lines:
+                _print_best_effort(line)
+        except Exception as e:                   # noqa: BLE001（兜底不吞：打印）
+            _print_best_effort(f"[cleanup] 报告生成失败（不影响清理）: {e!r}")
+        if lines is not None:
+            # 落盘一份（与 <base>-result.md 同级）：报告本来只在终端出现一次，
+            # 目录删掉后 --report 也不可用 → 观测数字不可复查（复盘时长口径时
+            # 踩过）。与 result.md 同样的 fail-open：写不动不阻断清理。
+            rp = meeting_fs.report_path(base)
+            try:
+                with open(rp, "w", encoding="utf-8") as f:
+                    f.write("\n".join(lines) + "\n")
+                _print_best_effort(f"[cleanup] 报告已保存 → {rp}")
+            except Exception as e:               # noqa: BLE001（同生成段：对称）
+                _print_best_effort(f"[cleanup] 报告保存失败（不影响清理）: {e!r}")
+    finally:
+        shutil.rmtree(base)                      # 必达（唯一例外见 docstring）
+    _print_best_effort(f"[cleanup] 已删除目录 {base}（含 pi-sessions）")
 
 
 

@@ -478,6 +478,21 @@ def viewer_set_error(names, empty, where="viewers/"):
     return f"错误: {gap}" if gap else None
 
 
+def _viewer_set_errors(names, empty, where="viewers/"):
+    """集合级校验的**唯一组合点**：整组名字 + 空正文 + 数量 ≥2。
+
+    为什么单独存在：`--viewers`（只读检查）与 `--set-viewer`（写前校验）必须
+    用**同一套**判据——同一套规则曾在两处漂移过（文案与检查项不一致）。
+    `if empty` 是必要保护：否则 viewers/ 里只有一个**合法**视角时，
+    `viewer_set_error` 会因为数量不足而报错，把"建第 2 个视角"判成非法。
+    `names` 为空（目录缺失/无 .md）返回 None——那是"还没有视角"，不是错误。
+    """
+    if not names:
+        return None
+    return (validate_participants(names)
+            or (viewer_set_error(names, empty, where) if empty else None))
+
+
 def _discover_viewers(viewers_dir):
     """发现 viewers 目录（多视角产品约定）：*.md 文件名即 agent 名。
 

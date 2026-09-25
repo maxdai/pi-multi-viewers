@@ -186,11 +186,9 @@ def _validate_and_print_viewers(vdir):
             notes.append("空：没有视角内容")
         suffix = f"（{'；'.join(notes)}）" if notes else ""
         print(f"  {n}.md{suffix}")
-    err = spec_gen.validate_participants(names)
+    err = spec_gen._viewer_set_errors(names, empty)
     if err:
         fail_verbatim(err)
-    if empty:
-        fail_verbatim(spec_gen.viewer_set_error(names, empty))
     gap = spec_gen.viewers_count_gap(names)
     if gap:
         print(f"  校验：{gap}（建 1 个是合法的中间状态）")
@@ -217,8 +215,19 @@ def cmd_set_viewer(args):
         fail(f"非法视角名（{err}）：{name}")
     vdir = os.path.join(os.getcwd(), "viewers")
     target = os.path.join(vdir, f"{name}.md")
-    if os.path.exists(target):
+    # lexists（不是 exists）：悬空符号链接在 exists 下为假 → 会被"覆盖"写入，
+    # 违背"绝不覆盖"的承诺（悬空链接是这条承诺目前的唯一破口）。
+    if os.path.lexists(target):
         fail(f"视角已存在，不覆盖: {target}（改名，或直接编辑该文件）")
+    # **写前**做集合级校验（评审 ② B′）：否则 viewers/ 里已有坏文件时，本命令
+    # 会"先写成功、再以 rc≠0 退出"——副作用已发生却报失败（半成功）。
+    # 用 if names 守卫：names 为 None 表示目录还不存在/还没有视角，那是合法起点
+    # （不守卫会让 validate_participants(None) 抛 TypeError——首次建视角即命中）。
+    names, _briefs, empty = spec_gen._discover_viewers(vdir)
+    if names:
+        err = spec_gen._viewer_set_errors(names, empty)
+        if err:
+            fail_verbatim(f"{err}\n（修正 viewers/ 后再建新视角——本次未写入任何文件）")
     body = sys.stdin.read().strip()
     if not body:
         fail(f"视角内容为空（{name}）——正文从 stdin 传入；空视角没有 lenses，"

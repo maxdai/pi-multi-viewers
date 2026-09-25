@@ -44,20 +44,24 @@ exit 0
 type Call = { kind: string; args: any };
 type Cli = { sid: string; argv: string };
 
+// 当前场景的日志数组：mockCtx 每次切换（pi.sendMessage 与 ctx.ui.* 写**同一份**日志，
+// 于是"四通道顺序"可以一次精确断言——评审 ③ 的单一日志要求）。
+let currentCalls: Call[] = [];
+
 function mockPi() {
   const commands: Record<string, any> = {};
-  const sent: { msg: any; opts: any }[] = [];
   return {
     commands,
-    sent,
     pi: {
       registerCommand: (n: string, o: any) => (commands[n] = o),
-      sendMessage: (msg: any, opts: any) => sent.push({ msg, opts }),
+      sendMessage: (msg: any, opts: any) =>
+        currentCalls.push({ kind: "sendMessage", args: { msg, opts } }),
     },
   };
 }
 
 function mockCtx(calls: Call[], answer?: any) {
+  currentCalls = calls;
   return {
     cwd: WORK,
     sessionManager: { getSessionId: () => SID },
@@ -126,7 +130,7 @@ process.env.FAKE_DIR = SCEN;
 
 const mod: any = await import(EXT);
 const shared: any = await import(SHARED);
-const { commands, pi, sent } = mockPi();
+const { commands, pi } = mockPi();
 mod.default(pi);
 const MV = commands["multi-viewers"];
 const FIN = commands["multi-viewers-finish"];
@@ -199,7 +203,6 @@ console.log("=== /multi-viewers ===");
   writeFileSync(`${WORK}/mv-spec-1/question.md`, "x");
   writeFileSync(`${WORK}/mv-spec-1/models.md`, "y");
   const calls: Call[] = [];
-  const sentBefore = sent.length; // 顺序无关：只要求"取消前后不新增"
   await MV.handler("主题X", mockCtx(calls, false));
   check(
     "取消 → 无 start（只有 prepare 一次 CLI 调用）",
@@ -220,9 +223,9 @@ console.log("=== /multi-viewers ===");
     cm.m,
   );
   check(
-    "取消 → 不写消息流（没启动就不留记录）",
-    sent.length === sentBefore,
-    { before: sentBefore, after: sent.length },
+    "取消 → 不写任何会话消息（没启动就不留痕）",
+    !kinds(calls).includes("sendMessage"),
+    kinds(calls),
   );
   check(
     "取消提示给可执行的 --start 出路（绝对路径 mv.sh）+ sid 提醒",
@@ -240,8 +243,8 @@ console.log("=== /multi-viewers ===");
   const calls: Call[] = [];
   await MV.handler("主题X", mockCtx(calls, true));
   check(
-    "确认 → confirm→setEditorText→setWidget→success",
-    eq(kinds(calls), ["confirm", "setEditorText", "setWidget", "notify:success"]),
+    "确认 → confirm→预填→sendMessage→setWidget→success（四通道齐发，顺序固定）",
+    eq(kinds(calls), ["confirm", "setEditorText", "sendMessage", "setWidget", "notify:success"]),
     calls,
   );
   {
@@ -262,15 +265,18 @@ console.log("=== /multi-viewers ===");
   }
   check("sid 注入（start）", cliCalls()[1]?.sid === SID, cliCalls()[1]);
   check("第 2 次调用 = --start <spec>", cliCalls()[1]?.argv.includes("--start /tmp/mv-harness/work/mv-spec-2"), cliCalls());
-  // 消息流持久出口（pi-web 的 notify 关掉就没；用户要求 message 流里也留一份）
-  check(
-    "sendMessage 写一条持久 custom_message（含 watch + display:true）",
-    sent.length === 1 &&
-      sent[0].msg.customType === "multi-viewers" &&
-      String(sent[0].msg.content).includes(WATCH) &&
-      sent[0].msg.display === true,
-    sent,
-  );
+  // 消息流持久留痕通道（pi-web 渲染为折叠块；用户要求「message 流中也能显示」）
+  {
+    const sm = calls.find((c) => c.kind === "sendMessage")!.args;
+    check(
+      "sendMessage 写一条自定义消息（customType + 含 watch + display:true）",
+      sm.msg.customType === "multi-viewers" &&
+        String(sm.msg.content).includes(WATCH) &&
+        String(sm.msg.content).includes("/tmp/mv-harness/work/mv-mv-testsid-9") &&
+        sm.msg.display === true,
+      sm,
+    );
+  }
 }
 {
   scen({
@@ -281,8 +287,8 @@ console.log("=== /multi-viewers ===");
   const calls: Call[] = [];
   await MV.handler("主题X", mockCtx(calls, true));
   check(
-    "start 失败 → error，不预填",
-    kinds(calls).includes("notify:error") && !kinds(calls).includes("setEditorText"),
+    "start 失败 → 精确只有 error（无预填/无留痕/无面板）",
+    eq(kinds(calls), ["confirm", "notify:error"]),
     calls,
   );
 }
@@ -295,8 +301,8 @@ console.log("=== /multi-viewers ===");
   const calls: Call[] = [];
   await MV.handler("主题X", mockCtx(calls, true));
   check(
-    "② 缺 watch 标记 → error，不预填",
-    kinds(calls).includes("notify:error") && !kinds(calls).includes("setEditorText"),
+    "② 缺 watch 标记 → 精确只有 error",
+    eq(kinds(calls), ["confirm", "notify:error"]),
     calls,
   );
 }
@@ -310,8 +316,8 @@ console.log("=== /multi-viewers ===");
   const calls: Call[] = [];
   await MV.handler("主题X", mockCtx(calls, true));
   check(
-    "⑦ 缺 dir 标记 → error，不预填（S2(b)）",
-    kinds(calls).includes("notify:error") && !kinds(calls).includes("setEditorText"),
+    "⑦ 缺 dir 标记 → 精确只有 error（S2(b)）",
+    eq(kinds(calls), ["confirm", "notify:error"]),
     calls,
   );
 }
