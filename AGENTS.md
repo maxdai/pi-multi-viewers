@@ -68,7 +68,7 @@ tests/               测试（unittest discover tests）
 
 | 档 | 唤醒命令 | 用途 |
 |---|---|---|
-| **mc-tools**（默认） | 四个 `--no-*` + `-e <MC 的 subagent-entry.js>` + `-e <pi-mcp-adapter 入口>` | 给 agents **按需检索项目背景**（`ctx_search`）——背景蒸馏机制已移除，这是其补充通道。**允许而非要求 MC**：找不到 MC → 降级为零扩展 + 一行可见说明（`ctx_search` 本次不可用）|
+| **mc-tools**（默认） | 四个 `--no-*` + `-e <MC 的 subagent-entry.js>` + `-e <pi-mcp-adapter 入口>` | 给 agents **按需检索**（协议模板里带一句「需要项目历史时用 ctx_search」的条件指引——仅在工具真到位时出现）（`ctx_search`）——背景蒸馏机制已移除，这是其补充通道。**允许而非要求 MC**：找不到 MC → 降级为零扩展 + 一行可见说明（`ctx_search` 本次不可用）|
 | **none** | 四个 `--no-*` | 零扩展、**零依赖**（无 MC 的机器/CI 用这档）|
 | **all** | 不加任何 `--no-*`（pi 默认发现）| A/B 实验与显式 opt-in |
 

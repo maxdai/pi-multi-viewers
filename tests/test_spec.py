@@ -769,5 +769,37 @@ class TestViewersCountGap(unittest.TestCase):
         self.assertIn("spec/agents/", gap)
 
 
+class TestHistorySection(unittest.TestCase):
+    """协议里的「需要项目历史时」节：**只在 ctx_search 真会到位时出现**。
+
+    （2026-09-25 用户定：agent 此前自发用 ctx_search 0 次——e2e25 自然使用观察；
+    加一句有条件指引。但若工具不在位还留着指引，agents 会去找一个不存在的工具。）
+    """
+
+    def _render(self, policy, resolvable=True):
+        import spec_gen
+        import meeting_fs
+        args = mock.MagicMock()
+        args.background = None
+        with mock.patch("meeting_fs.resolve_mc_tools_entry",
+                        return_value=((("/tmp/x.js") if resolvable else None),
+                                      ("" if resolvable else "模拟没装 MC"))):
+            return spec_gen.gen_agents_md(args, "a", ["a", "b"],
+                                          main_pi_cwd="/root/x",
+                                          extension_policy=policy)
+
+    def test_included_when_tool_available(self):
+        out = self._render("mc-tools", True)
+        self.assertIn("需要项目历史时", out)
+        self.assertIn("ctx_search", out)
+        self.assertIn("以文件为准", out)      # 过期风险的口径在里面
+
+    def test_hidden_when_policy_is_none(self):
+        self.assertNotIn("需要项目历史时", self._render("none", True))
+
+    def test_hidden_when_entry_missing(self):
+        """降级到零扩展时不留空指引（否则 agents 找一个不存在的工具）。"""
+        self.assertNotIn("需要项目历史时", self._render("mc-tools", False))
+
 if __name__ == "__main__":
     unittest.main()

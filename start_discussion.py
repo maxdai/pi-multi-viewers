@@ -391,7 +391,8 @@ def setup_environment(args, participants, base, spec_dir=None,
         workdir = os.path.join(base, f"work-{p}")
         with open(os.path.join(workdir, "AGENTS.md"), "w") as f:
             f.write(gen_agents_md(args, p, participants, spec_background,
-                                 main_pi_cwd=os.getcwd()))
+                                  main_pi_cwd=os.getcwd(),
+                                  extension_policy=args.extension_policy))
         mv = models[p]        # 归一后必有条目（见上方归一循环）
         with open(os.path.join(workdir, ".pi/agent", f"{p}.md"), "w") as f:
             f.write(gen_agent_def(p, participants, {p: mv[0]} if mv[0] else None,

@@ -311,7 +311,7 @@ def gen_spec_skeleton(spec_dir, participants, topic=None, background=None,
 
 
 def gen_agents_md(args, agent, participants, spec_background=None,
-                 main_pi_cwd=None):
+                 main_pi_cwd=None, extension_policy=None):
     """meeting 协议 AGENTS.md（共享协议 + background；身份/立场在 agent
     定义/question.md）。
 
@@ -338,6 +338,18 @@ def gen_agents_md(args, agent, participants, spec_background=None,
             f"查找：如有需要可查看相关文件以获取\n比本背景更详细的信息。\n")
     else:
         cwd_section = ""
+    # 历史检索节：**只在工具真的会到位时**才出现（2026-09-25 用户定）——
+    # 否则 agents 会去找一个不存在的工具（"无静默/不下空指令"）。判据 = 策略允许
+    # （mc-tools）**且**入口可解析（与 meeting_loop 的解析同一实现，不各写一套）。
+    policy = extension_policy or meeting_fs.DEFAULT_EXTENSION_POLICY
+    if policy == "mc-tools" and meeting_fs.resolve_mc_tools_entry()[0]:
+        history_section = (
+            "\n## 需要项目历史时\n\n"
+            "你的上下文来自发起分析的会话，覆盖不到更早的决策与实测记录。这类问题可以用\n"
+            "`ctx_search` 检索本项目的历史记忆。项目文件（代码/文档）优先——记忆可能落后于\n"
+            "代码，冲突时以文件为准。\n")
+    else:
+        history_section = ""
     out = tpl.format(
         AGENT_NAME=agent,
         N=str(len(participants)),
@@ -345,6 +357,7 @@ def gen_agents_md(args, agent, participants, spec_background=None,
         SAMPLE_OTHER=sample,
         BACKGROUND=background,
         MAIN_PI_CWD_SECTION=cwd_section,
+        HISTORY_SECTION=history_section,
     )
     return out
 

@@ -5,6 +5,7 @@
 
 ## 背景
 {BACKGROUND}
+{HISTORY_SECTION}
 
 ## 你被唤醒时做什么
 
