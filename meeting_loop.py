@@ -330,19 +330,36 @@ def _build_wake_cmd(workdir, agent, sid, cfg, fork_source, fork_cwd,
     if extension_policy == "none":
         cmd += no_ext
     elif extension_policy == "mc-tools":
-        entry, err = meeting_fs.resolve_mc_tools_entry()
-        if entry:
-            cmd += no_ext + ["-e", entry]
-        elif meeting_fs.mc_tools_strict():
-            # 严格模式（测试/探针保真）：缺 MC 即响，不降级——否则测试可能在
-            # "没装 MC"的环境里通过，而 ctx_search 从未生效
-            log(agent, f"[fatal] mc-tools 档入口解析失败（严格模式）：{err}")
-            raise RuntimeError(f"mc-tools 档不可用: {err}")
-        else:
-            # mc-tools **允许**而非要求 MC：缺 MC → 降级零扩展，但**可见**
-            effective_policy = "none"
-            downgrade_reason = err
-            cmd += no_ext
+        # mc-tools = 零扩展 + 显式加载**两份只读工具入口**（2026-09-25 用户裁定 B：
+        # 并入默认档，不再新增档位——保持简单）：
+        #   ① MC 的 subagent-entry（只注册工具、不装 hook）→ ctx_search
+        #   ② MCP adapter（web_search / web_reader / zread 等 MCP 工具）
+        # 为什么必须显式 -e：`--no-extensions` 关的是**发现**，显式路径照常生效
+        # （pi --help 原文）；MCP 工具此前因发现被关而对 agents 完全不可用。
+        # 两份入口**各自独立**降级（允许而非要求）——缺哪个就少哪个，都**可见**。
+        resolved = []          # [(label, entry)]
+        missing = []           # [(label, err)]
+        for label, resolver in (
+                ("ctx_search（MC 只读检索）", meeting_fs.resolve_mc_tools_entry),
+                ("MCP 工具（web_search 等）", meeting_fs.resolve_mcp_adapter_entry)):
+            entry, err = resolver()
+            if entry:
+                resolved.append((label, entry))
+            else:
+                missing.append((label, err))
+        cmd += no_ext
+        for _label, entry in resolved:
+            cmd += ["-e", entry]
+        if missing:
+            reason = "；".join(f"{label} 不可用（{err}）" for label, err in missing)
+            if meeting_fs.mc_tools_strict():
+                # 严格模式（测试/探针保真）：缺入口即响，不降级——否则测试可能在
+                # "没装某入口"的环境里通过，而该工具从未生效
+                log(agent, f"[fatal] mc-tools 档入口解析失败（严格模式）：{reason}")
+                raise RuntimeError(f"mc-tools 档不可用: {reason}")
+            # 允许而非要求：缺入口 → 少一份 -e，但**可见**
+            downgrade_reason = reason
+            effective_policy = ("mc-tools" if resolved else "none")
     # "all"：不加任何 --no-*（走 pi 默认发现）
     if first_wake:
         # 登记行（观测面的稳定字段；报告据此给"声明 vs 生效"）。只在首唤打：
@@ -351,8 +368,10 @@ def _build_wake_cmd(workdir, agent, sid, cfg, fork_source, fork_cwd,
                    f" strict={int(meeting_fs.mc_tools_strict())}"
                    + (f" 降级原因={downgrade_reason}" if downgrade_reason else ""))
         if downgrade_reason:
-            log(agent, f"mc-tools 档未生效（{downgrade_reason}）——本次按零扩展"
-                       f"运行：ctx_search 不可用")
+              log(agent, f"mc-tools 档{'部分' if resolved else '完全'}未生效"
+                         f"（{downgrade_reason}）——本次按"
+                         f"{'已解析的入口' if resolved else '零扩展'}运行："
+                         f"缺失的工具在本次分析中不可用")
     model = cfg.get("model") or ""
     if model:
         cmd += ["--model", model]

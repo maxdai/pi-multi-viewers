@@ -120,8 +120,9 @@ scripts/mv.sh --start <spec目录>              # 启动（自动挂载主 sessi
 #  可选：--fork-mode compaction|budget|full（见上表；一般不调）
 #  可选：--max-meeting 15 --max-rr 7 --stall-timeout 600
 #        （配额：建环境时固化进 protocol.json，之后不可改；meeting 配额是"每 agent"）
-#  可选：--extension-policy mc-tools|none|all（默认 mc-tools = agents 带 MC 的只读检索工具
-#        ctx_search；none = 零扩展、零依赖；all = 走 pi 默认发现。缺 MC 时 mc-tools 可见降级）
+#  可选：--extension-policy mc-tools|none|all（默认 mc-tools = 零扩展 + 两份只读工具入口：
+#        MC 的 ctx_search 与 MCP adapter 的 web 检索等；none = 零扩展、零依赖；
+#        all = 走 pi 默认发现。两份入口各自独立，缺谁少谁且可见降级）
 #  高级：--agents "a,b" 起一次性视角（不建 viewers/ 时用；prompt 入口不传它）
 
 # 观看：--start 会输出可直接执行的 !! 流式观看命令（复制执行）

@@ -126,32 +126,24 @@ def _package_dir(source, agent_dir):
     return cand if os.path.isdir(cand) else None
 
 
-def resolve_mc_tools_entry(agent_dir=None):
-    """解析 MC 的**只读工具入口**（`dist/subagent-entry.js`）——"mc-tools" 档用。
+def _packages_of(pkg_name, agent_dir=None):
+    """在 pi 的 packages 里找声明了 `pkg_name` 的包：返回 (candidates, err)。
 
-    为什么这样解析而不硬编码路径：MC 自己就是用"主入口的**兄弟文件**"
-    （其源码 `resolveSiblingEntryPath("subagent-entry.js")`）定位它。我们的
-    等价做法 = 从 pi 的注册表（settings.json.packages）找到 MC 包目录 → 读它
-    package.json 声明的扩展入口（`pi.extensions[0]`）→ 取同目录下的
-    subagent-entry.js。
+    candidates = [(source, pkg_dir)]，按注册顺序（可能有多个候选——包名相同但
+    来源不同）；err = 读注册表失败的原因（此时 candidates 为空）。
 
-    **失败语义**：任一步缺失返回 `(None, 原因)`——**由调用方按策略决定**：
-    loop 在生产态做**可见降级**（打印一行说明后按零扩展运行 ✓ 无静默），
-    在严格态（`MV_MC_TOOLS_STRICT=1`，测试/探针保真）直接报错。
-
-    依赖边界（决策 20）：mc-tools **允许而非要求** MC——缺 MC 即降级为零扩展；
-    `none` 档零依赖（无 MC 的机器/CI 显式选它）。
+    **匹配按裸包名精确相等**（F5）：不能用子串——`in` 会把
+    `@cortexkit/pi-magic-context-legacy` 也命中。npm 源直接比裸名；路径源读
+    它的 package.json.name。**遍历全部候选**（F6：首个匹配不可解析时继续看
+    后面的候选，否则"装着也报没装"，文案误导）。
     """
     agent_dir = agent_dir or pi_agent_dir()
     try:
         with open(os.path.join(agent_dir, "settings.json"), encoding="utf-8") as f:
             pkgs = json.load(f).get("packages") or []
     except (OSError, ValueError) as e:
-        return None, f"读不到 pi 的 packages（{agent_dir}/settings.json）: {e}"
-    # F5：按**裸包名精确相等**识别（npm 源直接比；路径源读其 package.json.name）；
-    # F6：遍历**全部**候选、取首个可解析（此前首个匹配失败即停，装着 MC 也会
-    #     报"没装"，文案误导）
-    seen = []          # 候选（source 字符串）——用于错误文案，说明"试过哪些"
+        return [], f"读不到 pi 的 packages（{agent_dir}/settings.json）: {e}"
+    out = []
     for entry in pkgs:
         source = _entry_source(entry)
         if not source:
@@ -167,32 +159,80 @@ def resolve_mc_tools_entry(agent_dir=None):
                     name = json.load(f).get("name") or ""
             except (OSError, ValueError):
                 name = ""
-        if name != MC_PACKAGE:
-            continue
-        seen.append(source)
+        if name == pkg_name:
+            out.append((source, pkg_dir))
+    return out, ""
+
+
+def _declared_extensions(pkg_name, agent_dir=None):
+    """包名 → (pkg_dir, exts, err)：包目录 + 它自己声明的扩展入口（已归一为列表）。
+
+    exts 来自包 package.json 的 `pi.extensions`（判据**由上游声明**，不硬编码布局）；
+    字符串形态归一为单元素列表（F7：直接取首字符会解析出错误路径）。
+    """
+    cands, err = _packages_of(pkg_name, agent_dir)
+    if err:
+        return None, [], err
+    if not cands:
+        return None, [], f"packages 里没有 {pkg_name}（pi install npm:{pkg_name}）"
+    last = ""
+    for source, pkg_dir in cands:
         try:
             with open(os.path.join(pkg_dir, "package.json"), encoding="utf-8") as f:
                 man = json.load(f)
         except (OSError, ValueError) as e:
-            return None, f"读不到 {MC_PACKAGE} 的 package.json: {e}"
+            last = f"读不到 {pkg_name} 的 package.json: {e}"
+            continue
         exts = (man.get("pi") or {}).get("extensions")
-        if isinstance(exts, str):          # F7：字符串形态（取首字符会解析错路径）
+        if isinstance(exts, str):
             exts = [exts]
         if not isinstance(exts, list) or not exts or not all(
                 isinstance(x, str) and x for x in exts):
-            return None, f"{MC_PACKAGE} 的 pi.extensions 形态不可用（版本不兼容？）"
-        cand = os.path.normpath(
-            os.path.join(pkg_dir, os.path.dirname(exts[0]), "subagent-entry.js"))
-        if os.path.isfile(cand):
-            return cand, ""
-        # 该候选不可解析 → 继续看后面的候选（F6）
-        last_missing = os.path.relpath(cand, pkg_dir)
-    if seen:
-        return None, (f"{MC_PACKAGE} 的只读工具入口不存在（{last_missing}）"
-                      f"——上游版本可能改了布局")
-    return None, (f"packages 里没有可解析的 {MC_PACKAGE}——装它"
-                  f"（pi install npm:{MC_PACKAGE}），或改用零扩展档："
-                  f"--extension-policy none")
+            last = f"{pkg_name} 的 pi.extensions 形态不可用（版本不兼容？）"
+            continue
+        return pkg_dir, exts, ""
+    return None, [], (last or f"{pkg_name} 的扩展入口不可用")
+
+
+def resolve_mc_tools_entry(agent_dir=None):
+    """解析 MC 的**只读工具入口**（`dist/subagent-entry.js`）——"mc-tools" 档用。
+
+    路径推理：MC 自己就是用"主入口的**兄弟文件**"（其源码
+    `resolveSiblingEntryPath("subagent-entry.js")`）定位它；我们等价地读它声明的
+    扩展入口（`pi.extensions[0]`），再取同目录下的 subagent-entry.js。
+
+    失败语义（与 resolve_mcp_adapter_entry 同）：任一步缺失返回 `(None, 原因)`
+    ——**由调用方按策略决定**：loop 生产态做**可见降级**，严格态
+    （`MV_MC_TOOLS_STRICT=1`）直接报错。
+    """
+    pkg_dir, exts, err = _declared_extensions(MC_PACKAGE, agent_dir)
+    if err:
+        return None, err
+    cand = os.path.normpath(
+        os.path.join(pkg_dir, os.path.dirname(exts[0]), "subagent-entry.js"))
+    if os.path.isfile(cand):
+        return cand, ""
+    return None, (f"{MC_PACKAGE} 的只读工具入口不存在"
+                  f"（{os.path.relpath(cand, pkg_dir)}）——上游版本可能改了布局")
+
+
+def resolve_mcp_adapter_entry(agent_dir=None):
+    """解析 MCP adapter 的扩展入口（它声明的 `pi.extensions[0]`）——mc-tools 第二份。
+
+    为什么需要：MCP 工具（web_search / web_reader / zread…）由 pi-mcp-adapter
+    提供，而 `--no-extensions` 关掉的是**扩展发现**——显式 `-e` 路径照常生效
+    （pi --help 原文）。不显式加载 = agents 完全没有联网检索能力。
+
+    与 MC 的差别：这里要的**就是主入口本身**（它注册 MCP 工具），不取兄弟文件。
+    """
+    pkg_dir, exts, err = _declared_extensions(MCP_ADAPTER_PACKAGE, agent_dir)
+    if err:
+        return None, err
+    cand = os.path.normpath(os.path.join(pkg_dir, exts[0]))
+    if os.path.isfile(cand):
+        return cand, ""
+    return None, (f"{MCP_ADAPTER_PACKAGE} 声明的入口不存在"
+                  f"（{os.path.relpath(cand, pkg_dir)}）")
 
 
 def pi_agent_dir():
@@ -777,6 +817,10 @@ def mc_tools_strict():
 # "mc-tools" 档引用的包（该档 = 那个包的能力，故具名引用而非通用机制：
 # 入口是它的内部文件，路径解析见 resolve_mc_tools_entry 的 docstring）
 MC_PACKAGE = "@cortexkit/pi-magic-context"
+
+# MCP 工具（web_search / web_reader / zread…）的提供者——mc-tools 档的第二份入口。
+# 名字**由 pi 的注册表给**（settings.json.packages），这里只做精确匹配用。
+MCP_ADAPTER_PACKAGE = "pi-mcp-adapter"
 
 FORK_MODES = ("budget", "compaction", "full")
 DEFAULT_FORK_MODE = "budget"
