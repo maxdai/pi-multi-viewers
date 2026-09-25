@@ -558,7 +558,7 @@ commit 是溯源记录、本节是长期引用点——不并存两份权威值�
     `/multi-viewers-finish` 由 prompt 改为 extension 命令——prepare → **门禁 = 暂停点**
     （`ui.confirm`：标题点明「暂停中，可在其它窗口修改 spec」，正文带 spec 路径 +
     文件清单；用户在**其它窗口**编辑该目录，改完点「确认」继续，取消则保留 spec）
-    → start → **观看命令    预填输入框**（`ctx.ui.setEditorText`，用户按 Enter 即执行）；收尾为 status →
+    → start → **观看命令预填输入框**（`ctx.ui.setEditorText` + notify 各一份，用户按 Enter 即执行）；收尾 status →
     确认 → cleanup。**为什么**：prompt 靠 LLM 逐步执行，每步都可能漏（实测：观看
     命令漏传 2 次、失败判据曾靠读中文报错文本、目录路径曾靠 LLM 记忆）；代码执行
     则天然不遗漏。**与 CLI 的契约 = 机器标记行**（`[prepare] spec=` / `[start] dir=` /
@@ -566,6 +566,14 @@ commit 是溯源记录、本节是长期引用点——不并存两份权威值�
     标记不可消失（`tests/test_mv_cli.py::TestMachineMarkers` 锁住）。**边界**：spec
     内容起草仍是真 LLM 工作（任务类型/产出形态），故为**两段式**——骨架零 LLM，
     起草/摘要走普通对话；门禁取消则保留 spec，用户编辑后自行 `mv.sh --start`。
+    **收尾状态语义（2026-09-25 评审）**：`running` 等待；`done | stalled` 并流进
+    "notify → confirm → cleanup"（`stalled` = 无存活 loop 的静止态，照 running 处理
+    会让用户等一个永不到来的收尾）；`stopped` 只提示手动清理。`stalled` 用独立文案
+    （其 result 由清理时保存，不复用 done 的"已留存"路径文案）；扩展是唯一守卫
+    （CLI 的 cleanup 无状态防护）。**本轮明确不做**（防翻案）：`--json` 输出模式、
+    resume 新命令面、env 回退配置、`runCli` 超时、启动路径继续优化（已在 1–2s 地板）、
+    给 stalled 加第三种动作。**契约例外**：扩展作为包内第一方消费者**直连**
+    `mv_cli.py`（实测 shim 61ms vs 直连 58–66ms，性能上零差异；按契约一致性记例外一行）。
     被否决：A（handler 里 `sendUserMessage` 触发 LLM 回合改 spec——时序不可控）、
     D（拆两条命令——把门禁成本转嫁用户；B1 变体/第三种即现形态）。
 

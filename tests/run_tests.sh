@@ -42,7 +42,7 @@ if [ "${#ARGS[@]}" -eq 0 ]; then
 fi
 
 # 源码指纹（内容 md5：mtime 变内容不变不失效）+ 命令参数
-FILES="$(cd "$HERE" && find . \( -name '*.py' -o -name '*.sh' -o -name '*.tpl' \) \
+FILES="$(cd "$HERE" && find . \( -name '*.py' -o -name '*.sh' -o -name '*.tpl' -o -name '*.ts' \) \
     -not -path './.git/*' -not -path './tests/.cache/*' | sort)"
 SRC_HASH="$(echo "$FILES" | xargs md5sum 2>/dev/null | md5sum | cut -d' ' -f1)"
 ARG_HASH="$(echo "${ARGS[*]}" | md5sum | cut -d' ' -f1)"
@@ -65,6 +65,28 @@ fi
 cd "$HERE"
 python3 -m unittest "${ARGS[@]}" 2>&1 | tee "$LAST_LOG"
 rc="${PIPESTATUS[0]}"
+
+# 扩展层 harness（TS，需 bun）。缺 bun → **可见跳过**（不静默变绿）；
+# MV_REQUIRE_BUN=1 时缺 bun 直接失败（测试/CI 要保真时用，防"从未跑过"）。
+BUN="$(command -v bun || true)"
+if [ -n "$BUN" ]; then
+    echo "" | tee -a "$LAST_LOG"
+    echo "[run_tests] 扩展 harness: $BUN run tests/extension_harness.ts" | tee -a "$LAST_LOG"
+    # 注意别用 `cmd | tee` 判 rc——管道里 rc 是 tee 的（曾踩过同类坑）
+    HOUT="$CACHE_DIR/harness.log"
+    if "$BUN" run "$HERE/tests/extension_harness.ts" > "$HOUT" 2>&1; then
+        :
+    else
+        rc=1
+    fi
+    cat "$HOUT" | tee -a "$LAST_LOG"
+elif [ "${MV_REQUIRE_BUN:-0}" = "1" ]; then
+    echo "[run_tests] MV_REQUIRE_BUN=1 但找不到 bun —— 严格模式判失败" | tee -a "$LAST_LOG"
+    rc=1
+else
+    echo "[run_tests] 跳过扩展层 harness：本机没有 bun（要强制请设 MV_REQUIRE_BUN=1）" | tee -a "$LAST_LOG"
+fi
+
 echo "${SRC_HASH}_${ARG_HASH}" > "$FP_FILE"
 echo "[run_tests] 完整输出已落盘: $LAST_LOG（观察用 grep xxx $LAST_LOG，0 秒）" >&2
 exit "$rc"

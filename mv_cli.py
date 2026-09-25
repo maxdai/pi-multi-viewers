@@ -360,6 +360,9 @@ def cmd_start(spec_dir, extra):
               "--spec", spec_dir] + extra):
         fail("环境创建失败，请查看上方输出")
 
+    # 删除与创建**绑定**在此步 = 一次性消费（spec 是视角任务书/背景/models 在
+    # 用户侧的唯一副本）。已知边界：launch（第 2 步）失败时 spec 已删——重估触发
+    # 条件 = 观测到一次 launch 失败，或将来引入 resume/retry 通道。
     if fnmatch.fnmatch(os.path.basename(os.path.normpath(spec_dir)),
                        "mv-spec-*"):
         print(f"[start] spec 已消费，删除（本工具生成形态）: {spec_dir}")
