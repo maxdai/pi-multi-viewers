@@ -260,7 +260,9 @@ loop、状态从 git 共享事实推导、单一事实源 = protocol.json、无�
 - **核验法**（照上游约定，不用命令行长度判断）：
   `readlink -f ~/.pi/agent/npm/node_modules/pi-multi-viewers` 指向仓库根，
   且该路径下 `scripts/mv.sh` 存在。
-- **registry 核验别只看 `/latest`**（实测踩两次）：npm 的 abbreviated 元数据
-  （`registry.npmjs.org/<pkg>/latest`）有缓存，发布后可能持续返回旧版本；
-  **权威判据 = 完整文档的 `dist-tags`**：
-  `curl -s https://registry.npmjs.org/pi-multi-viewers | python3 -c "import json,sys;print(json.load(sys.stdin)['dist-tags'])"`
+- **registry 传播有滞后，别把「读不到」当「没发成功」**（实测三次不同的滞后形态）：
+  `/latest`（abbreviated）可能持续返回旧版本；完整文档的 `dist-tags` 也可能滞后；
+  本次 0.9.1 **两个读端点都还是旧值**（版本专属端点一度 404），而发布其实已被接受。
+  **权威判据 = 本地发布日志**：`~/.npm/_logs/<最新>-debug-0.log` 里 `PUT https://registry.npmjs.org/<pkg> 202`
+  + `exit 0` + `info ok`（被接受）；随后再用**版本专属端点**确认已可读：
+  `curl -s -o /dev/null -w '%{http_code}\n' https://registry.npmjs.org/<pkg>/<version>`（200 = 已上架）
