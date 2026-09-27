@@ -46,6 +46,14 @@ fork 机制已让每个 agent 携带发起分析时的对话上下文（默认 b
 
 没有就留空。
 
+## startup.md —— 启动参数（自动生成，一般不用改）
+
+**作用**：本轮的配额等启动参数。`--prepare` 按你设的默认值写好；**直接改这里
+= 只影响本轮**（相当于"特别指定"），删掉某行则该键回落到默认值。
+
+可设：`max-meeting`（meeting 每 agent 发言配额）、`max-rr`（RR 轮次配额）、
+`stall-timeout`（无进展超时秒数）。改默认值：`/multi-viewers-config <键> <值>`。
+
 ## models.md —— 模型配置（可选）
 
 每行：`agent名: model, variant`（**两个槽都显式写出**，一眼可见本场跑在

@@ -348,11 +348,22 @@ def setup_environment(args, participants, base, spec_dir=None,
         shutil.rmtree(wa)
     _clone_work(base, participants[0])   # clone + git 身份 + 建目录
 
+    # 启动参数解析（**唯一实现**在 spec_gen.resolve_startup）：命令行显式 > spec >
+    # 默认值配置 > 内置默认。三个 flag 的 argparse 默认是 None，所以"没给"不会被
+    # 误当成"显式给了默认值"（2026-09-27 用户要求：不能有强制设置配额的操作）。
+    startup, startup_src, startup_notes = spec_gen.resolve_startup(
+        {"max-meeting": args.max_meeting, "max-rr": args.max_rr,
+         "stall-timeout": args.stall_timeout},
+        spec_dir=spec_dir)
+    for _n in startup_notes:
+        print(f"[startup] {_n}")
+
     # 共享配置（work-a 提交，setup commit 进 bare）
     with open(os.path.join(wa, "protocol.json"), "w") as f:
-        json.dump(gen_protocol(spec_topic or args.topic, participants, args.max_meeting,
-                               args.max_rr, args.extension_policy, args.result_writer,
-                               args.stall_timeout,
+        json.dump(gen_protocol(spec_topic or args.topic, participants,
+                               startup["max-meeting"],
+                               startup["max-rr"], args.extension_policy, args.result_writer,
+                               startup["stall-timeout"],
                                fork_source=getattr(args, "fork_source", None),
                                fork_cwd=os.getcwd(),
                                fork_mode=getattr(args, "fork_mode", meeting_fs.DEFAULT_FORK_MODE)),
@@ -420,7 +431,9 @@ def setup_environment(args, participants, base, spec_dir=None,
         shutil.copy(os.path.join(HERE, mod), os.path.join(base, mod))
     rw = args.result_writer or participants[-1]
     print(f"[setup] 环境就绪: {base}（{len(participants)} agents: {', '.join(participants)}）")
-    print(f"[setup] resultWriter={rw}, maxMeeting={args.max_meeting}, maxRR={args.max_rr}, "
+    # 生效值 + **来源**一并打印（用户 2026-09-27 的疑虑：默认值有没有被静默覆盖）
+    q = " · ".join(f"{k}={startup[k]}（{startup_src[k]}）" for k in meeting_fs.STARTUP_DEFAULTS)
+    print(f"[setup] resultWriter={rw}, 配额 {q}, "
           f"立场={'有' if (args.stances or spec_dir) else '无'}, "
           f"extensionPolicy={args.extension_policy}")
 
@@ -583,12 +596,17 @@ def main():
     parser.add_argument("--questions", default=None, help="待回答问题（|分隔，对齐 RR）")
     parser.add_argument("--models", default=None, help='JSON: {"a": "provider/model"}')
     parser.add_argument("--result-writer", default=None, help="resultWriter（默认最后一位参与者）")
-    parser.add_argument("--max-meeting", type=int, default=meeting_fs.DEFAULT_MAX_MEETING,
-                        help="meeting 阶段发言配额（每 agent）")
-    parser.add_argument("--max-rr", type=int, default=7, help="RR 阶段轮次配额（starter）")
-    parser.add_argument("--stall-timeout", type=int,
-                        default=meeting_fs.DEFAULT_STALL_TIMEOUT,
-                        help="无进展超时兜底（秒，默认 600；防 provider API 慢）")
+    # 配额三个 flag：**默认值一律 None**（2026-09-27 用户要求）——这样才能区分
+    # "命令行没给"（→ 交给 spec/默认值配置/内置默认，见 spec_gen.resolve_startup）
+    # 与"命令行显式给了"。此前的 default=DEFAULT_* 会在 `/multi-viewers` 这条
+    # 不带 flag 的路径上**无条件覆盖**用户设的默认值（用户的疑虑，已成事实：
+    # --start <spec> 无 flag → argparse 15 → protocol.json 15）。
+    parser.add_argument("--max-meeting", type=int, default=None,
+                        help="meeting 阶段发言配额（每 agent；不给则用默认值配置/spec）")
+    parser.add_argument("--max-rr", type=int, default=None,
+                        help="RR 阶段轮次配额（starter；不给则用默认值配置/spec）")
+    parser.add_argument("--stall-timeout", type=int, default=None,
+                        help="无进展超时兜底（秒；不给则用默认值配置/spec）")
     parser.add_argument("--spec-gen", metavar="DIR", default=None,
                         help="生成 spec 骨架到 DIR（如 --spec-gen myspec/；不需 --dir）")
     parser.add_argument("--spec", default=None,

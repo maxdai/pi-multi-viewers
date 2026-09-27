@@ -639,6 +639,22 @@ commit 是溯源记录、本节是长期引用点——不并存两份权威值�
 
 ---
 
+
+23. **启动参数默认值走「配置文件 → spec → protocol.json」**（2026-09-27 用户定）：
+    `/multi-viewers-config <键> <值>`（= `mv.sh --set-default`）改的是**默认值**，
+    存在 pi agent 目录的 `multi-viewers.json`（用户级；键名与 CLI flag 同名）。
+    **取值优先级（唯一实现在 `spec_gen.resolve_startup`）**：
+    `--start` 显式 flag > `spec/startup.md` > 默认值配置 > 内置默认。
+    为什么经 spec 而不是直接进 `protocol.json`：spec 是**用户审阅的产物**——
+    把值写进 `spec/startup.md` 让"这次到底用多少"在暂停点可见可改（= 本轮的
+    "特别指定"），运行期权威仍是 `protocol.json`（loop 每轮只读它，中途不可改）。
+    **踩过的坑（用户点名要确认的那件事）**：`--start` 三个 flag 原先
+    `default=DEFAULT_*`，而 `/multi-viewers` 这条路径不带 flag → argparse 默认值
+    **无条件覆盖**任何偏好（永远 15/7/600）。修法 = 默认值改 `None`，让"没指定"
+    与"指定成默认值"可区分；四层优先级由 `tests/test_startup_defaults.py` 锁
+    （含"谁都没设 → 内置默认"这条反例断言）。生效值与来源在启动时逐键打印
+    （`max-meeting=20（默认值配置）`），不存在静默覆盖。
+
 ## 四、记录项（不修；每项必带**现在就能用的观测点**）
 
 | 项 | 实测/性质（口径） | 触发条件（观测点） |

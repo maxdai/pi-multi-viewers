@@ -257,6 +257,9 @@ def gen_spec_skeleton(spec_dir, participants, topic=None, background=None,
     # README.md：从模板复制（内容不变——模板化，用户 7909）
     shutil.copyfile(os.path.join(TPL_DIR, "spec-readme.md.tpl"),
                     os.path.join(spec_dir, "README.md"))
+    # startup.md：本轮启动参数（= `--prepare` 时解析出的默认值；用户 2026-09-27）
+    # —— 写进 spec 的目的是**可见可改**：审阅暂停点里直接改这里 = 只影响本轮。
+    write_spec_startup(spec_dir, resolve_startup({})[0])
     # question.md：第一行说明 + 基本结构模板（用户 7713：提供基本结构）
     q = [
         "# question.md——分析起点（话题/立场/待答问题，自由 markdown）。本行是说明行，不会注入。",
@@ -385,6 +388,92 @@ def gen_question(topic, stances, background, questions):
     if questions:
         lines += ["", "## 待回答的问题"] + [f"- {q}" for q in questions] + [""]
     return "\n".join(lines)
+
+
+
+def spec_startup_path(spec_dir):
+    """spec 里的启动参数文件（`startup.md`）——`--prepare` 写、`--start` 读。"""
+    return os.path.join(spec_dir, "startup.md")
+
+
+_SPEC_STARTUP_HEADER = (
+    "# startup.md——本轮的启动参数（键: 值）。本行是说明行，不会注入。\n"
+    "#\n"
+    "# 这些值由 `--prepare` 按「你的默认值配置」填入；**在这里改 = 只影响本轮**\n"
+    "# （相当于\"特别指定\"）。删除某行 = 该键回落到默认值配置。\n"
+    "# 合法键：max-meeting（meeting 每 agent 发言配额）、max-rr（RR 轮次配额）、\n"
+    "#         stall-timeout（无进展超时秒数）。值必须是 ≥1 的整数。\n"
+)
+
+
+def write_spec_startup(spec_dir, values):
+    """写 `spec/startup.md`（prepare 时；values = 解析后的默认值）。"""
+    lines = [_SPEC_STARTUP_HEADER]
+    for k in meeting_fs.STARTUP_DEFAULTS:
+        if k in values:
+            lines.append(f"{k}: {values[k]}\n")
+    with open(spec_startup_path(spec_dir), "w", encoding="utf-8") as f:
+        f.write("".join(lines))
+
+
+def read_spec_startup(spec_dir):
+    """读 `spec/startup.md` → (values, error)。
+
+    容错：文件不存在 → ({}, "")（旧 spec 兼容，回落默认值）；坏行忽略但可见。
+    """
+    path = spec_startup_path(spec_dir)
+    if not os.path.exists(path):
+        return {}, ""
+    out, bad = {}, []
+    try:
+        with open(path, encoding="utf-8") as f:
+            for raw in f:
+                line = raw.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if ":" not in line:
+                    bad.append(line)
+                    continue
+                k, v = (x.strip() for x in line.split(":", 1))
+                val, err = meeting_fs.parse_startup_kv(k, v)
+                if err:
+                    bad.append(line)
+                    continue
+                out[k] = val
+    except OSError as e:
+        return {}, f"读不到 {path}: {e}"
+    return out, ("忽略这些行：" + "；".join(bad) if bad else "")
+
+
+def resolve_startup(cli_values, spec_dir=None):
+    """**取值优先级唯一实现** → (values, sources, notes)。
+
+    优先级（后者覆盖前者）：
+        内置默认 → 用户级配置（`meeting_fs.read_startup_config`）
+                 → `spec/startup.md` → 命令行显式 flag
+
+    cli_values：只放**命令行真的给了**的键（未指定 = 不在字典里 ✗）——
+    这正是 argparse 默认值必须改成 None 的原因：默认值会让"没指定"和
+    "指定成 15"无法区分，从而静默覆盖用户设的默认值。
+    """
+    values = dict(meeting_fs.STARTUP_DEFAULTS)
+    sources = {k: "内置默认" for k in values}
+    notes = []
+    cfg, warn = meeting_fs.read_startup_config()
+    if warn:
+        notes.append(warn)
+    for k, v in cfg.items():
+        values[k], sources[k] = v, "默认值配置"
+    if spec_dir:
+        spec_vals, warn2 = read_spec_startup(spec_dir)
+        if warn2:
+            notes.append(warn2)
+        for k, v in spec_vals.items():
+            values[k], sources[k] = v, "spec"
+    for k, v in (cli_values or {}).items():
+        if v is not None:
+            values[k], sources[k] = v, "命令行"
+    return values, sources, notes
 
 
 def gen_protocol(topic, participants, max_meeting, max_rr,

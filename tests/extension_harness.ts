@@ -135,10 +135,11 @@ mod.default(pi);
 const MV = commands["multi-viewers"];
 const FIN = commands["multi-viewers-finish"];
 const SAY = commands["multi-viewers-say"];
+const CFG = commands["multi-viewers-config"];
 
 console.log("=== 注册与装置 ===");
-check("注册三命令", !!(MV && FIN && SAY), Object.keys(commands));
-check("三个命令都有 argumentHint", [MV, FIN, SAY].every((c) => "argumentHint" in c || true));
+check("注册四命令", !!(MV && FIN && SAY && CFG), Object.keys(commands));
+check("四个命令都有 argumentHint", [MV, FIN, SAY, CFG].every((c) => "argumentHint" in c || true));
 check(
   "不再有 no-op getArgumentCompletions（S3）",
   [MV, FIN, SAY].every((c) => !("getArgumentCompletions" in c)),
@@ -493,6 +494,51 @@ console.log("=== /multi-viewers-say ===");
   check(
     "无分析 → error 带可执行出路（绝对路径 mv.sh --say）",
     eq(kinds(calls), ["notify:error"]) && String(calls[0].args).includes("scripts/mv.sh --say"),
+    calls,
+  );
+}
+
+console.log("=== /multi-viewers-config ===");
+{
+  scen({ "out.1": "已设默认值: max-meeting = 20（/tmp/agent/multi-viewers.json）\n" });
+  const calls: Call[] = [];
+  await CFG.handler("max-meeting 20", mockCtx(calls));
+  check(
+    "带参 → success + 输出",
+    eq(kinds(calls), ["notify:success"]) && String(calls[0].args).includes("max-meeting = 20"),
+    calls,
+  );
+  const cs = cliCalls();
+  check(
+    "调用 --set-default 且原样转发参数",
+    cs.length === 1 && cs[0].argv.includes("--set-default") && cs[0].argv.includes("max-meeting") && cs[0].argv.includes("20"),
+    cs,
+  );
+  check("sid 注入", cs[0]?.sid === SID, cs[0]);
+}
+{
+  scen({ "out.1": "默认值配置文件: /tmp/agent/multi-viewers.json（尚未创建）\n  max-meeting = 15（内置默认）\n" });
+  const calls: Call[] = [];
+  await CFG.handler("", mockCtx(calls));
+  check(
+    "无参 → 查看（仍调用 --set-default，不带键值）",
+    eq(kinds(calls), ["notify:success"]) && String(calls[0].args).includes("内置默认"),
+    calls,
+  );
+  const cs = cliCalls();
+  check(
+    "无参形态 argv 只有 --set-default（无多余参数）",
+    cs.length === 1 && String(cs[0].argv).trim().endsWith("--set-default"),
+    cs,
+  );
+}
+{
+  scen({ "out.1": "错误: 未知的键 'bogus'——合法键：max-meeting、max-rr、stall-timeout\n", "rc.1": 1 });
+  const calls: Call[] = [];
+  await CFG.handler("bogus 1", mockCtx(calls));
+  check(
+    "非法键 → error（文案来自 python 单点实现）",
+    eq(kinds(calls), ["notify:error"]) && String(calls[0].args).includes("未知的键"),
     calls,
   );
 }

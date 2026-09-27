@@ -30,10 +30,11 @@ scripts/pi-probe.sh  LLM 探针（跑 pi + 登记新 session → 残留检查器
 scripts/check-residue.sh  残留检查（session/进程/目录三类；增删 scripts/ 时同步本节）
 scripts/archive-result.sh  归档 result.md（机械部分：逐字复制+校验/存档头骨架/索引行/删源副本）
 mv_cli.py            命令行实现（prepare/start/status/report/wait/cleanup/view/say/viewers/set-viewer）
-extensions/multi-viewers/  【单一扩展单元】index.ts = 三命令 + shared.ts = 助手
+extensions/multi-viewers/  【单一扩展单元】index.ts = 四命令 + shared.ts = 助手
                            /multi-viewers 分析入口（prepare→暂停点弹窗→start→预填+打印观看命令）
                            /multi-viewers-finish 收尾（status→确认→cleanup）
                            /multi-viewers-say 插话（零 LLM，直接 spawn human_sayer.py）
+                             /multi-viewers-config 启动参数默认值（零 LLM，调 --set-default）
                            ⚠ extensions/ 平级禁放 .ts 助手（加载器会把平级文件当独立扩展）
 prompts/multi-viewers-setup.md  /multi-viewers-setup 建视角入口（建议→你定→**mv.sh --set-viewer** 落盘→给审）
                            # 那四条本来写进 prompt 的纪律（命名/不覆盖/非空/校验）改由命令保证
@@ -234,11 +235,11 @@ loop、状态从 git 共享事实推导、单一事实源 = protocol.json、无�
 
 ## 安装/发版状态（2026-09-11）
 
-- **当前形态**：prompt × 1（multi-viewers-setup 建视角）+ extension × 1（一单元注册三命令）
-  ——一个扩展单元内注册三命令（`multi-viewers` 分析 / `multi-viewers-finish` 收尾 /
-  `multi-viewers-say` 插话；前两个靠 CLI 机器标记行取值 `[prepare] spec=` /
-  `[start] dir=` / `[start] watch=` / `[status]`，后者零 LLM 直接 spawn human_sayer.py；
-  目录发现 = `<cwd>/mv-<sessionId>-*` 最新——**无兜底**：未匹配即报错 rc 1）+ wrapper。
+- **当前形态**：prompt × 1（multi-viewers-setup 建视角）+ extension × 1（一单元注册四命令）
+  ——一个扩展单元内注册四命令（`multi-viewers` 分析 / `multi-viewers-finish` 收尾 /
+  `multi-viewers-say` 插话 / `multi-viewers-config` 启动参数默认值）；前两个靠 CLI
+  机器标记行取值（`[prepare] spec=` / `[start] dir=` / `[start] watch=` / `[status]`），
+  say 与 config 零 LLM 直接转发给 `human_sayer.py` / `mv_cli`；
   扩展层测试：`tests/extension_harness.ts`（真扩展代码 + 假 python3 装置，零 LLM；
   `run_tests.sh` 自动带上——缺 bun 可见跳过、`MV_REQUIRE_BUN=1` 严格）。
   **npm 已发布**（版本以 `package.json` / registry 为准）。

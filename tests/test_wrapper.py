@@ -36,14 +36,20 @@ def run_wrapper(args, cwd=None, env=None):
                           capture_output=True, text=True, env=env)
 
 
-def run_with_sid(args, cwd, sid="sidZ"):
+def run_with_sid(args, cwd, sid="sidZ", agent_dir=None):
     """按指定 sid 运行 wrapper。
 
     必须清掉继承的 PI_SESSION_ID / PI_SESSION_FILE——测试进程可能跑在 pi
     会话里，继承会让"目录自动发现"指向真实分析目录（测试串到生产现场）。
+
+    agent_dir：可选的 pi agent 目录重定向（`PI_CODING_AGENT_DIR`）。`--set-default`
+    这类**会写文件**的命令必须传它，否则会改到用户真实的
+    `~/.pi/agent/multi-viewers.json`（测试碰生产配置 = 事故）。
     """
     env = {**os.environ, "PI_SESSION_ID": sid}
     env.pop("PI_SESSION_FILE", None)
+    if agent_dir:
+        env["PI_CODING_AGENT_DIR"] = agent_dir
     return subprocess.run(["bash", WRAPPER] + args, cwd=cwd, env=env,
                           capture_output=True, text=True)
 
@@ -355,6 +361,14 @@ class TestCommandFormMatrix(unittest.TestCase):
         (["--wait"], "env", 1, "未在运行且未收尾", None),
         (["--wait"], "none", 1, "未找到本 session 的分析目录", None),
         (["--wait", "{dir}"], "none", 1, "目录不存在", None),
+        # ---- --set-default（启动参数默认值；跑在重定向的 agent 目录里）----
+        (["--set-default"], "cfg", 0, "内置默认", None),
+        (["--set-default", "max-meeting", "20"], "cfg", 0, "max-meeting = 20",
+         "config_written"),
+        (["--set-default", "bogus", "1"], "cfg", 1, "未知的键", None),
+        (["--set-default", "max-rr", "0"], "cfg", 1, "需要 ≥1", None),
+        (["--set-default", "max-rr", "abc"], "cfg", 1, "需要整数", None),
+        (["--set-default", "max-meeting"], "cfg", 1, "用法:", None),
         # ---- --cleanup（破坏性操作：副作用必须断言）----
         (["--cleanup", "{dir}"], "env_decoy", 0, "已删除目录", "dir_gone"),
         (["--cleanup"], "env", 0, "已删除目录", "dir_gone"),
@@ -377,7 +391,11 @@ class TestCommandFormMatrix(unittest.TestCase):
                     elif precondition == "other":
                         make_env(tmp, self.OTHER_NAME)
                     argv = [a.replace("{dir}", dirpath) for a in args]
-                    r = run_with_sid(argv, tmp, self.SID)
+                    # cfg 前置：把 pi agent 目录指向 tmp（--set-default 才写得到这里）
+                    agent_dir = os.path.join(tmp, "agent") if precondition == "cfg" else None
+                    if agent_dir:
+                        os.makedirs(agent_dir, exist_ok=True)
+                    r = run_with_sid(argv, tmp, self.SID, agent_dir=agent_dir)
                     out = r.stdout + r.stderr
                     self.assertEqual(
                         r.returncode, want_rc,
@@ -393,6 +411,11 @@ class TestCommandFormMatrix(unittest.TestCase):
                             capture_output=True, text=True).stdout
                         self.assertIn("human/", names,
                                       "--say 写到了别处（未用显式目录）")
+                    elif effect == "config_written":
+                        cfg = os.path.join(tmp, "agent", "multi-viewers.json")
+                        with open(cfg, encoding="utf-8") as f:
+                            self.assertEqual(json.load(f), {"max-meeting": 20},
+                                             "--set-default 没写配置文件（或写了别处）")
                     elif effect == "no_decoy":
                         self.assertNotIn(DECOY_MARKER, out,
                                          "走了自动发现（选到诱饵环境）")

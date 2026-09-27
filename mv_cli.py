@@ -29,6 +29,7 @@ import sys
 from datetime import datetime
 
 import spec_gen  # --viewers 复用其单一判据（列举/名字/集合校验）
+import meeting_fs  # --set-default 的配置读写（单一实现）
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PYTHON = os.environ.get("PYTHON") or "python3"
@@ -55,6 +56,7 @@ USAGE = f"""用法:
   {PROG} --say     [dir] "<文本>"
   {PROG} --viewers                           # 列出并校验当前项目的 viewers/（只读；建视角时用）
   {PROG} --set-viewer <名字>                 # 新建一个视角文件（正文从 stdin 读；只新建不覆盖）
+    {PROG} --set-default [<键> <值>]          # 启动参数默认值（无参数=查看；键：max-meeting/max-rr/stall-timeout）
 
 消费命令的 <dir> 可省略（自动发现本 session 当前分析——按 cwd 下
 mv-<PI_SESSION_ID>-* 最新；无匹配则报错要求显式传目录）
@@ -194,6 +196,43 @@ def _validate_and_print_viewers(vdir):
         print(f"  校验：{gap}（建 1 个是合法的中间状态）")
         return 0
     print(f"  校验：通过（{len(names)} 个视角，名字与内容均合法）")
+    return 0
+
+
+def cmd_set_default(args):
+    """查看 / 修改**启动参数的默认值**：`--set-default [<键> <值>]`。
+
+    语义（用户 2026-09-27 定）：这里改的是**默认值**；`spec/startup.md` 或
+    `--start` 的显式 flag 属于"特别指定"，优先于它（取值优先级唯一实现在
+    `spec_gen.resolve_startup`）。无参数 = 打印当前默认值（含内置 fallback
+    与来源），便于自查"我设的值到底生效没有"。
+    """
+    if not args:
+        cfg, warn = meeting_fs.read_startup_config()
+        print(f"默认值配置文件: {meeting_fs.startup_config_path()}"
+              + ("" if os.path.exists(meeting_fs.startup_config_path()) else "（尚未创建）"))
+        for k, builtin in meeting_fs.STARTUP_DEFAULTS.items():
+            if k in cfg:
+                print(f"  {k} = {cfg[k]}（配置文件）")
+            else:
+                print(f"  {k} = {builtin}（内置默认）")
+        if warn:
+            print(f"  ⚠ {warn}", file=sys.stderr)
+        print("改法: --set-default <键> <值>   ｜  本轮单独指定: 改 spec/startup.md")
+        return 0
+    if len(args) != 2:
+        fail(f"用法: --set-default <键> <值>（无参数 = 查看当前默认值）；"
+             f"合法键: {'、'.join(meeting_fs.STARTUP_DEFAULTS)}")
+    key, raw = args
+    value, err = meeting_fs.parse_startup_kv(key, raw)
+    if err:
+        fail(err)
+    path, err2 = meeting_fs.write_startup_config(key, value)
+    if err2:
+        fail(err2)
+    print(f"已设默认值: {key} = {value}（{path}）")
+    print("以后 `/multi-viewers \"<主题>\"` 生成的 spec 会沿用；"
+          "想只给本轮不同 → 改 spec/startup.md 或 --start 时显式给 flag。")
     return 0
 
 
@@ -470,6 +509,8 @@ def main(argv=None):
         return cmd_viewers(rest)
     if cmd == "--set-viewer":
         return cmd_set_viewer(rest)
+    if cmd == "--set-default":
+        return cmd_set_default(rest)
     if cmd == "--status":
         return cmd_status(rest)
     if cmd == "--report":

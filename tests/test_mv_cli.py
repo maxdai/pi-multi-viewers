@@ -530,6 +530,76 @@ if __name__ == "__main__":
     unittest.main()
 
 
+class TestSetDefault(unittest.TestCase):
+    """`--set-default`（启动参数默认值）：写/读/校验/查看。
+
+    语义（用户 2026-09-27）：这里改的是**默认值**；spec/startup.md 与 --start 的
+    显式 flag 属"特别指定"，优先于它（优先级唯一实现 = spec_gen.resolve_startup，
+    端到端断言在 tests/test_startup_defaults.py）。
+    """
+
+    def setUp(self):
+        import tempfile
+        self.tmp = tempfile.mkdtemp()
+        self._old = os.environ.get("PI_CODING_AGENT_DIR")
+        os.environ["PI_CODING_AGENT_DIR"] = self.tmp
+
+    def tearDown(self):
+        if self._old is None:
+            os.environ.pop("PI_CODING_AGENT_DIR", None)
+        else:
+            os.environ["PI_CODING_AGENT_DIR"] = self._old
+
+    def test_view_when_empty(self):
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            rc = mv_cli.cmd_set_default([])
+        out = buf.getvalue()
+        self.assertEqual(rc, 0)
+        self.assertIn("内置默认", out)
+        self.assertIn("max-meeting = 15", out)
+        self.assertIn("尚未创建", out)
+
+    def test_set_then_view(self):
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            mv_cli.cmd_set_default(["max-meeting", "20"])
+        self.assertIn("max-meeting = 20", buf.getvalue())
+        import json as _json
+        cfg = _json.load(open(os.path.join(self.tmp, "multi-viewers.json")))
+        self.assertEqual(cfg, {"max-meeting": 20})
+        buf2 = io.StringIO()
+        with redirect_stdout(buf2):
+            mv_cli.cmd_set_default([])
+        self.assertIn("max-meeting = 20（配置文件）", buf2.getvalue())
+        self.assertIn("max-rr = 7（内置默认）", buf2.getvalue())
+
+    def test_preserves_other_keys(self):
+        with redirect_stdout(io.StringIO()):
+            mv_cli.cmd_set_default(["max-meeting", "20"])
+            mv_cli.cmd_set_default(["max-rr", "9"])
+        import json as _json
+        cfg = _json.load(open(os.path.join(self.tmp, "multi-viewers.json")))
+        self.assertEqual(cfg, {"max-meeting": 20, "max-rr": 9})
+
+    def test_rejects_unknown_key(self):
+        err = io.StringIO()
+        with redirect_stderr(err):
+            with self.assertRaises(SystemExit) as cm:
+                mv_cli.cmd_set_default(["bogus", "1"])
+        self.assertEqual(cm.exception.code, 1)
+        self.assertIn("未知的键", err.getvalue())
+
+    def test_rejects_bad_value_and_arity(self):
+        for args in (["max-rr", "abc"], ["max-rr", "0"], ["max-meeting"]):
+            with self.subTest(args=args):
+                err = io.StringIO()
+                with redirect_stderr(err):
+                    with self.assertRaises(SystemExit) as cm:
+                        mv_cli.cmd_set_default(args)
+                self.assertEqual(cm.exception.code, 1)
+
+
 class TestMachineMarkers(unittest.TestCase):
     """pi extension 与 CLI 的**机器契约**：标记行（扩展不解析人类文案）。
 

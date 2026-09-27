@@ -74,6 +74,99 @@ DEFAULT_STALL_TIMEOUT = 600
 # 显式档位），不是把默认值挪到便宜侧。
 DEFAULT_THINKING = "max"
 
+# ---------------------------------------------------------------
+# 启动参数的「默认值」配置（用户级）——`/multi-viewers-config` 与
+# `mv.sh --set-default` 写的就是它
+# ---------------------------------------------------------------
+# 为什么需要：配额此前只能在 `--start` 那一刻用命令行 flag 指定，而
+# `/multi-viewers` 这条主路径不带 flag → 永远拿 argparse 的 default。
+# 用户要的是"设一次默认值，以后每次生成 spec 就沿用"（2026-09-27 定）。
+#
+# **取值优先级（唯一实现见 spec_gen.resolve_startup）**：
+#   命令行显式 flag > spec/startup.md > 本配置文件 > 内置默认
+# 运行时权威仍是 protocol.json（--start 固化；loop 只读它、不接 flag）。
+#
+# 文件位置 = pi agent 目录下（`$PI_CODING_AGENT_DIR` 或 `~/.pi/agent`）——
+# 复用 `pi_agent_dir()` 单一实现，测试靠改该环境变量重定向（不新增测试专用开关）。
+# 形状：`{"max-meeting": 20, "max-rr": 10, "stall-timeout": 600}`
+# （键名与 CLI flag 同名，少一层映射）。
+STARTUP_DEFAULTS = {            # 键名 → 内置默认（引用上方常量，不重复字面量）
+    "max-meeting": DEFAULT_MAX_MEETING,
+    "max-rr": DEFAULT_MAX_RR,
+    "stall-timeout": DEFAULT_STALL_TIMEOUT,
+}
+
+
+def startup_config_path(agent_dir=None):
+    """用户级启动参数配置文件的路径（单一实现）。"""
+    return os.path.join(agent_dir or pi_agent_dir(), "multi-viewers.json")
+
+
+def read_startup_config(agent_dir=None):
+    """读用户级配置 → (overrides, error)。
+
+    只保留**已知键**且值合法（正整数）——未知键忽略但**可见**（warning），
+    坏文件返回 ({} , 原因) 由调用方决定如何提示（fail-open，不阻断分析）。
+    """
+    path = startup_config_path(agent_dir)
+    if not os.path.exists(path):
+        return {}, ""
+    try:
+        with open(path, encoding="utf-8") as f:
+            raw = json.load(f)
+    except (OSError, ValueError) as e:
+        return {}, f"读不到/解析失败 {path}: {e}"
+    if not isinstance(raw, dict):
+        return {}, f"{path} 顶层不是对象"
+    out, unknown = {}, []
+    for k, v in raw.items():
+        if k not in STARTUP_DEFAULTS:
+            unknown.append(k)
+            continue
+        try:
+            n = int(v)
+        except (TypeError, ValueError):
+            unknown.append(k)
+            continue
+        if n < 1:
+            unknown.append(k)
+            continue
+        out[k] = n
+    warn = f"{path} 里这些键被忽略（未知或非法）：{', '.join(unknown)}" if unknown else ""
+    return out, warn
+
+
+def write_startup_config(key, value, agent_dir=None):
+    """把 `key: value` 写进用户级配置（保留其它键）→ (path, error)。
+
+    校验在调用方（`parse_startup_kv`）——本函数只管读改写。
+    """
+    path = startup_config_path(agent_dir)
+    cur, _err = read_startup_config(agent_dir)
+    cur[key] = value
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(cur, f, indent=2, ensure_ascii=False)
+            f.write("\n")
+    except OSError as e:
+        return path, f"写不了 {path}: {e}"
+    return path, ""
+
+
+def parse_startup_kv(key, raw):
+    """校验 `--set-default <key> <value>` 的入参 → (value, error)。"""
+    if key not in STARTUP_DEFAULTS:
+        return None, (f"未知的键 {key!r}——合法键："
+                      + "、".join(STARTUP_DEFAULTS))
+    try:
+        n = int(raw)
+    except (TypeError, ValueError):
+        return None, f"{key} 需要整数，收到 {raw!r}"
+    if n < 1:
+        return None, f"{key} 需要 ≥1，收到 {n}"
+    return n, ""
+
 
 def _entry_source(entry):
     """pi 的 packages 条目 → 源字符串（两种形态共用；非字符串形态 → ""）。

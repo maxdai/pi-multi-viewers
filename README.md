@@ -93,6 +93,7 @@ ls ~/.pi/agent/npm/node_modules/pi-multi-viewers/scripts/mv.sh
 | `/multi-viewers "<主题>"` | extension | 分析：prepare → **暂停点弹窗** → start → 交付观看命令 |
 | `/multi-viewers-finish` | extension | 收尾：status → 确认 → cleanup（报告随清理打印并落盘） |
 | `/multi-viewers-say "<文本>"` | extension | 插话（human 消息，各视角可见可回应） |
+| `/multi-viewers-config [<键> <值>]` | extension | 查看/修改**启动参数默认值**（零 LLM） |
 | `scripts/mv.sh <子命令>` | CLI | 终端侧等价入口（`--prepare` / `--start` / `--status` / `--view` / `--say` / `--report` / `--wait` / `--cleanup` / `--viewers` / `--set-viewer`）——pi 内命令内部也走它 |
 
 按使用顺序：先 `/multi-viewers-setup` 建视角（一次就够），之后 `/multi-viewers "<主题>"` 跑分析，
@@ -138,7 +139,25 @@ scripts/mv.sh --report                        # 只读报告（流程/配额/进
 scripts/mv.sh --cleanup                       # 收尾（result.md + 报告都留存到 <dir>-*.md/.txt）
 scripts/mv.sh --viewers                       # 列出+校验当前项目 viewers/（只读；建视角时用）
 scripts/mv.sh --set-viewer <名字>             # 新建视角文件（正文从 stdin 读；只新建不覆盖）
+scripts/mv.sh --set-default [<键> <值>]       # 启动参数默认值（无参数=查看）
 ```
+
+## 启动参数与默认值
+
+配额这类参数可以在**跑之前**设成默认值，之后每次生成 spec 都会沿用：
+
+```
+/multi-viewers-config max-meeting 20      # 设默认值（等价 mv.sh --set-default max-meeting 20）
+/multi-viewers-config                     # 查看当前默认值（哪些来自配置文件、哪些是内置）
+```
+
+**取值优先级**（后者覆盖前者）：内置默认 → 你设的默认值 → `spec/startup.md`
+（每次分析生成，**你能看也能改** = 只影响本轮）→ `--start` 的显式 flag（临时覆盖一次）。
+生效值与来源在启动时打印；运行期唯一权威始终是分析环境里的 `protocol.json`
+（loop 每轮只读它，中途不可改）。
+
+可设的键：`max-meeting`（meeting 阶段每 agent 发言配额，默认 15）、
+`max-rr`（RR 轮次配额，默认 7）、`stall-timeout`（无进展超时秒数，默认 600）。
 
 ## 视角文件写什么（`viewers/<视角名>.md`）
 

@@ -233,4 +233,22 @@ export default function register(pi: any) {
       }
     },
   });
+
+  // ------------------------------------------------------ 启动参数默认值
+  // 零 LLM：直接调 `mv.sh --set-default`（写法与校验都在 python 侧单点实现）。
+  // 语义：这里改的是**默认值**；spec/startup.md 或 --start 的显式 flag 优先。
+  pi.registerCommand("multi-viewers-config", {
+    description: "查看/修改启动参数默认值（max-meeting / max-rr / stall-timeout）",
+    argumentHint: "[<键> <值>]",
+    handler: async (args: string, ctx: any) => {
+      const rest = args.trim().split(/\s+/).filter(Boolean);
+      const { rc, output } = await runCli(
+        ["--set-default", ...rest], ctx.cwd, ctx.sessionManager.getSessionId(),
+      );
+      ctx.ui.notify(
+        output.trim() || (rc === 0 ? "已处理" : "修改失败"),
+        rc === 0 ? "success" : "error",
+      );
+    },
+  });
 }
