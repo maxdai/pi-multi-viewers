@@ -390,7 +390,8 @@ class TestCleanupPrintsReport(unittest.TestCase):
 class TestBuildReport(unittest.TestCase):
     """--report（观测面唯一机器消费出口）：各段取数 + fail-open。"""
 
-    def _env(self, tmp, with_loop_log=True, with_session=True, commits=()):
+    def _env(self, tmp, with_loop_log=True, with_session=True, commits=(),
+             spaced_seconds=0):
         base = os.path.join(tmp, "mv-x-1")
         bare = os.path.join(base, "repo.git")
         os.makedirs(base)
@@ -405,11 +406,17 @@ class TestBuildReport(unittest.TestCase):
                        "maxMeetingRounds": 10}, f)
         subprocess.run(["git", "add", "-A"], cwd=w, check=True,
                        capture_output=True)
+        setup_env = dict(os.environ)
+        if spaced_seconds:
+            # 全仓统一用固定基准日（含 setup）——否则 setup 是"现在"、消息是
+            # 固定日，墙钟跨度会变成十几天的怪值（装置自身的不一致）
+            setup_env["GIT_AUTHOR_DATE"] = setup_env["GIT_COMMITTER_DATE"] = \
+                "@1789000000 +0000"
         subprocess.run(["git", "commit", "-qm", "discuss: setup"], cwd=w,
-                       check=True, capture_output=True)
+                       check=True, capture_output=True, env=setup_env)
         # 追加**真实消息文件**（装置对齐生产形状：消息存在于 bare 的
         # <agent>/NNNN.md，不是靠 commit subject 文本——报告按文件数统计）
-        for path, typ, mode in commits:
+        for idx, (path, typ, mode) in enumerate(commits):
             d = os.path.join(w, path.split("/")[0])
             os.makedirs(d, exist_ok=True)
             with open(os.path.join(w, path + ".md"), "w") as f:
@@ -417,8 +424,14 @@ class TestBuildReport(unittest.TestCase):
                         f"mode: {mode}\n---\n\n正文\n")
             subprocess.run(["git", "add", "-A"], cwd=w, check=True,
                            capture_output=True)
+            # spaced_seconds>0：给每个 commit 一个**固定且递增**的时间戳，
+            # 让"墙钟跨度"非 0——报告「跨度」段的派生量（并行度）才算得出来
+            env = dict(os.environ)
+            if spaced_seconds:
+                stamp = 1789000000 + (idx + 1) * spaced_seconds
+                env["GIT_AUTHOR_DATE"] = env["GIT_COMMITTER_DATE"] = f"@{stamp} +0000"
             subprocess.run(["git", "commit", "-qm", f"discuss: {path}"],
-                           cwd=w, check=True, capture_output=True)
+                           cwd=w, check=True, capture_output=True, env=env)
         subprocess.run(["git", "push", "-q", "origin", "HEAD"], cwd=w,
                        check=True, capture_output=True)
         if with_loop_log:
@@ -481,6 +494,27 @@ class TestBuildReport(unittest.TestCase):
                         "role": "assistant", "stopReason": "error",
                         "usage": {}}}) + "\n")
         return base
+
+    def test_report_span_section_computes_parallel_degree(self):
+        """「跨度」段的**派生量分支**：墙钟非 0 时必须算出并行度并写出算式。
+
+        为什么单独一条：另一条用例的装置首末 commit 同一秒（墙钟 0s）→ 走的是
+        `n/a（墙钟跨度为 0s）` 分支，`并行度` 的计算式**一行都没被覆盖**——
+        除法的量纲/算式若写错不会被任何断言发现（2026-09-27 补）。
+        """
+        import start_discussion as sd
+        with tempfile.TemporaryDirectory() as tmp:
+            # 两条消息相隔 300s；loop log 里 a 的唤醒跨度 120s（fixture 固定值）
+            base = self._env(tmp, commits=[("a/0001", "message", "meeting"),
+                                           ("b/0001", "message", "meeting")],
+                             spaced_seconds=300)
+            txt = "\n".join(sd.build_report(base))
+            # setup(基准) → 消息 1(+300s) → 消息 2(+600s)：墙钟跨度 = 10m00s
+            self.assertIn("墙钟跨度 10m00s（首末 commit 差 = 用户等待）", txt)
+            self.assertIn("Σ进程跨度 2m00s（各 agent 唤醒跨度相加", txt)
+            # 2m00s ÷ 10m00s = 0.20（本装置只有一个 agent 有登记字段 → <1 正常）
+            self.assertIn("并行度 0.20（= Σ进程跨度 ÷ 墙钟跨度；>1 = 唤醒有重叠）",
+                          txt)
 
     def test_sections(self):
         """四段齐备：流程/配额/进程（登记字段）/LLM（session 字段）。"""
