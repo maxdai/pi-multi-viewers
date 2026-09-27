@@ -883,8 +883,8 @@ def parse_log_nameonly(output):
 # DEFAULT_EXTENSION_POLICY 是**缺省填谁**（全仓引此常量）。
 #   mc-tools : **默认**——只要 MC 的**只读检索工具**（ctx_search）。为什么默认它：
 #              agents 需要主项目背景（背景蒸馏机制已移除），这是它的补充通道；
-#              该入口**只注册工具、不装 hook** → historian/压缩不在其中
-#              （受控实测 historian 0/6、ctx_search 可用；成本未测得显著差异）。
+#              该入口 = **工具注册 + 两个生命周期钩子**（开/关 DB），**无** historian/压缩执行钩子
+#              （真场计数 historian 0：e2e24 0/3、e2e25 0；ctx_search 可用；成本未测得显著差异）。
 #              代价：本档两份入口**允许而非要求**（缺谁少谁、都可见降级；严格模式见
 #              MC_TOOLS_STRICT_ENV）
 #   none     : 零扩展——最快、**零依赖**（不依赖任何扩展；无 MC 的机器/CI 用这档）

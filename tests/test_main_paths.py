@@ -214,7 +214,6 @@ class TestMeetingLoopMain(unittest.TestCase):
         """loop 门：protocol.json 的 extensionPolicy 非法 → [fatal] + 非零退出。
 
         与 forkMode 同款：值域守卫在**打开任何东西之前**（配置错误不进 engine
-        重试路径）。历史字段 `extensions: true` 走兼容路径（→ all）不受影响。
         """
         tmp, base, w = self._make_done_env()
         try:

@@ -733,12 +733,11 @@ class TestSpawnEnv(unittest.TestCase):
 class TestExtensionPolicy(unittest.TestCase):
     """agent 进程的扩展策略：三档（design.md 决策 20）——none / mc-tools / all。
 
-    实测依据：
-      · AFT：大 session 上进程退出前多活数分钟（受控 445.9s → 0.5s）；
-      · MC：historian 对"带大段未处理历史"的 session 每次必失败并立刻重试
-        （受控：同输入 447s → 10.3s，43 倍）；
-      · mc-tools 档（只要 MC 的只读工具入口）：historian 0/6、成本与零扩展
-        无差（受控 6 次：中位 7.8s vs 9.2s，差在噪音内）、ctx_search 实测可用。
+    本测试锁什么：三档唤醒命令的**形状**——`none` 无 `-e`、`mc-tools` 恰好
+    0–2 个 `-e`（两份入口各自降级）、`all` 无 `--no-*` 也无 `-e`；以及降级时
+    日志可见（登记行 + 逐入口点名）。
+    为什么这么设计、以及各档的成本依据（承接证据）见 `docs/design.md` 决策 20——
+    docstring 只写契约，不存放历史证据（2026-09-27 复盘审计）。
     """
 
     def _cmd(self, policy):
@@ -772,7 +771,7 @@ class TestExtensionPolicy(unittest.TestCase):
     def test_mc_tools_loads_the_tool_entries(self):
         """mc-tools（默认档）：零扩展 + 显式加载**只读工具入口**。
 
-        两份入口：MC 的 ctx_search（只注册工具、不装 hook）与 MCP adapter 的
+        两份入口：MC 的 ctx_search（工具注册 + 生命周期钩子，无 historian）与 MCP adapter 的
         web_search / web_reader / zread 等 MCP 工具。用户裁决 B（2026-09-25）：
         MCP adapter 并入默认档（不加档位、保持简单）——否则 `--no-extensions`
         会让 agents 完全无法联网检索。两份入口各自独立解析/降级。

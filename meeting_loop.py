@@ -317,7 +317,7 @@ def _build_wake_cmd(workdir, agent, sid, cfg, fork_source, fork_cwd,
     # 现在**只有一个出口**（本函数末尾），降级只是"少追加一个 -e"。
     #
     # 三档语义：mc-tools（默认）给 agents `ctx_search`（MC 的只读检索工具；
-    # entry 只注册工具、不装 hook → 不带 historian/压缩）；none 零扩展（零依赖）；
+    # entry = 工具注册 + 两个生命周期钩子 → 不带 historian/压缩）；none 零扩展（零依赖）；
     # all 走 pi 默认发现（A/B 与显式 opt-in，须有净收益账）。
     no_ext = ["--no-extensions", "--no-skills", "--no-prompt-templates",
               "--no-themes"]
@@ -332,7 +332,7 @@ def _build_wake_cmd(workdir, agent, sid, cfg, fork_source, fork_cwd,
     elif extension_policy == "mc-tools":
         # mc-tools = 零扩展 + 显式加载**两份只读工具入口**（2026-09-25 用户裁定 B：
         # 并入默认档，不再新增档位——保持简单）：
-        #   ① MC 的 subagent-entry（只注册工具、不装 hook）→ ctx_search
+        #   ① MC 的 subagent-entry（工具注册 + 生命周期钩子，无 historian）→ ctx_search
         #   ② MCP adapter（web_search / web_reader / zread 等 MCP 工具）
         # 为什么必须显式 -e：`--no-extensions` 关的是**发现**，显式路径照常生效
         # （pi --help 原文）；MCP 工具此前因发现被关而对 agents 完全不可用。
