@@ -326,6 +326,31 @@ def build_report(base):
                    f"{_dur(d['total_ms'] // 1000)} / 最大 "
                    f"{_dur(d['max_ms'] // 1000)} | rc≠0 {d['fails']} 次")
 
+    # ---- 跨度口径（两个直标量各自命名 + 一个派生量）----
+    # 起因（2026-09-27 复盘审计）：外部引用曾把两个 span 混算（Σ进程跨度 1538s ÷
+    # 墙钟 751s = 2.05，而按可核的 636s 得 2.42）——两个量都能"直标"，但报告没给
+    # 它们各自的名字与定义。这里各占一行、名字即口径；派生量显式写出算式，
+    # 免得读者自行相除去猜。**缺席一律 n/a，不写 0**。
+    # 判"缺席"一律用 `is None`——**0 是合法值**（同一秒提交、极短唤醒），
+    # 用真值判断会把它当缺失（0 ≠ 缺席，与"缺席≠0"同一条纪律的两面）。
+    total_proc_ms = sum(d["total_ms"] for d in proc.values()) if proc else None
+    wall_s = (rows[-1][0] - rows[0][0]) if rows else None
+    out.append("跨度（两个直标量 + 一个派生量；各自命名、不可互替）：")
+    out.append("  Σ进程跨度 "
+               + (f"{_dur(total_proc_ms // 1000)}" if total_proc_ms is not None else "n/a")
+               + "（各 agent 唤醒跨度相加；唤醒可并行 ⇒ 可能大于墙钟）")
+    out.append("  墙钟跨度 "
+               + (f"{_dur(wall_s)}" if wall_s is not None else "n/a")
+               + "（首末 commit 差 = 用户等待）")
+    # 派生量的定义**永远打出来**（n/a 时也打）——名字即口径，读者不必猜算式
+    if wall_s is None or total_proc_ms is None:
+        out.append("  并行度 n/a（= Σ进程跨度 ÷ 墙钟跨度；缺任一被除数）")
+    elif wall_s == 0:
+        out.append("  并行度 n/a（= Σ进程跨度 ÷ 墙钟跨度；墙钟跨度为 0s，无法相除）")
+    else:
+        out.append(f"  并行度 {total_proc_ms / 1000 / wall_s:.2f}"
+                   f"（= Σ进程跨度 ÷ 墙钟跨度；>1 = 唤醒有重叠）")
+
     # ---- LLM 运行事实（session 文档化字段；流式预过滤，不整文件解析） ----
     # ---- 扩展策略（声明 vs 生效）----
     _report_extension_line(base, out)

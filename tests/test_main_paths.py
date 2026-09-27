@@ -498,6 +498,14 @@ class TestBuildReport(unittest.TestCase):
             # 登记字段 elapsed_ms=42100 → 人类可读"进程跨度 总 42s"
             self.assertIn("进程跨度 总 2m00s", txt)
             self.assertIn("rc≠0 0 次", txt)
+            # 跨度段：两个直标量各自命名 + 派生量写出算式（2026-09-27 审计）
+            self.assertIn("跨度（两个直标量 + 一个派生量；各自命名、不可互替）", txt)
+            self.assertIn("Σ进程跨度 2m00s（各 agent 唤醒跨度相加", txt)
+            # 0 是合法值：fixture 的首末 commit 同一秒 → 必须打 "0s"，**不得**
+            # 因真值判断被当成缺失（判缺失一律 is None）
+            self.assertIn("墙钟跨度 0s（首末 commit 差 = 用户等待）", txt)
+            self.assertIn("并行度", txt)
+            self.assertIn("= Σ进程跨度 ÷ 墙钟跨度", txt)
             self.assertIn("cacheRead 183.6k", txt)
             self.assertIn("三者不可互替", txt)     # 跨度分标
             # 终止原因（只报事实与计数；本 fixture 无 pass/freezing → "未完成"）

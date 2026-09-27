@@ -360,7 +360,15 @@ def _build_wake_cmd(workdir, agent, sid, cfg, fork_source, fork_cwd,
             # 允许而非要求：缺入口 → 少一份 -e，但**可见**
             downgrade_reason = reason
             effective_policy = ("mc-tools" if resolved else "none")
-    # "all"：不加任何 --no-*（走 pi 默认发现）
+    elif extension_policy == "all":
+        # pi 默认发现：**不加**任何 --no-*、也不加 -e（A/B 与显式 opt-in）
+        pass
+    else:
+        # fail-closed：值域增长时这里响，而不是静默落进某个档（当前守卫下
+        # 不可达——上方 in-值域检查已拦；不留"最后一个分支兜住一切"的形状）。
+        raise RuntimeError(
+            f"扩展策略分派未穷尽: {extension_policy!r}"
+            f"（合法值: {'/'.join(meeting_fs.EXTENSION_POLICIES)}）")
     if first_wake:
         # 登记行（观测面的稳定字段；报告据此给"声明 vs 生效"）。只在首唤打：
         # 策略在一次运行内不变，变了也是配置错误（重跑即可）。

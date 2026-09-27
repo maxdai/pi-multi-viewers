@@ -939,11 +939,16 @@ class TestExtensionPolicy(unittest.TestCase):
             self.assertIn("mc-tools", str(cm.exception))
 
     def test_all_uses_default_discovery(self):
-        """all：不加任何 --no-*（走 pi 默认发现）。"""
+        """all 档的**命令形状**：既无 `--no-*`、也无 `-e`（走 pi 默认发现）。
+
+        两者都要断言：只测"没有 --no-*"时，若有人给 all 档误加 `-e <入口>`，
+        测试不会红（而那等于悄悄改了 all 的语义）。
+        """
         cmd = self._cmd("all")
         for flag in ("--no-extensions", "--no-skills",
                      "--no-prompt-templates", "--no-themes"):
             self.assertNotIn(flag, cmd)
+        self.assertNotIn("-e", cmd)
 
     def test_resolve_entry_or_clear_error(self):
         """解析器二态：要么给**存在**的入口文件，要么给非空原因（无静默）。"""
