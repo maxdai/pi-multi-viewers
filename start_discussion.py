@@ -626,8 +626,8 @@ def main():
         choices=list(meeting_fs.EXTENSION_POLICIES),
         default=meeting_fs.DEFAULT_EXTENSION_POLICY,
         help="agents 的扩展策略：mc-tools=默认，只要 MC 的只读检索工具 "
-             "ctx_search + MCP 工具（缺谁少谁、可见降级）；none=零扩展（零依赖）；"
-             "all=走 pi 默认发现")
+             "ctx_search + pi 内置 MCP 工具（MC 那份缺了可见降级）；"
+             "none=零扩展（零依赖）；all=走 pi 默认发现")
     parser.add_argument("--start", action="store_true", help="创建后启动讨论")
     parser.add_argument("--skip-setup", action="store_true",
                         help="跳过环境生成，只启动已有环境（需 --dir）")

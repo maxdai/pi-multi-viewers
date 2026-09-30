@@ -69,7 +69,7 @@ tests/               测试（unittest discover tests）
 
 | 档 | 唤醒命令 | 用途 |
 |---|---|---|
-| **mc-tools**（默认） | 四个 `--no-*` + `-e <MC 的 subagent-entry.js>` + `-e <pi-mcp-adapter 入口>` | 给 agents **按需检索**（`ctx_search` 查项目历史、web_search 等查外部）——协议模板里带一句「需要项目历史时用 ctx_search」的条件指引（仅在工具真到位时出现）。**降级/严格/生效值语义见 docs/design.md 决策 20 的语义清单**（唯一权威段） |
+| **mc-tools**（默认） | 四个 `--no-*` + `-e <MC 的 subagent-entry.js>` + `-e builtin:mcp`（pi **内置** MCP，零第三方依赖） | 给 agents **按需检索**（`ctx_search` 查项目历史、web_search 等查外部）——协议模板里带一句「需要项目历史时用 ctx_search」的条件指引（仅在工具真到位时出现）。**降级/严格/生效值语义见 docs/design.md 决策 20 的语义清单**（唯一权威段） |
 | **none** | 四个 `--no-*` | 零扩展、**零依赖**（无 MC 的机器/CI 用这档） |
 | **all** | 不加任何 `--no-*`（pi 默认发现）| A/B 实验与显式 opt-in |
 
@@ -88,10 +88,13 @@ MC 自己的 `context.db` #916；上限**可调**：主 pi 抬到 131072 后首�
 **无** historian/压缩执行钩子 → historian **0**（真场：e2e24 0/3、e2e25 0）；
 `ctx_search` 实测可用 ✓；成本**未测得显著差异**（受控探针 n 小、组内方差>组间差 ✗；
 生产基线：本场 strict=1、n=19，唤醒启动段中位 **0.68s**、收尾中位 0.04s ✓）。
-**入口解析**：`meeting_fs` 从 pi 的 packages 找包 → 读它自己声明的 `pi.extensions`
-（不硬编码布局）→ `resolve_mc_tools_entry`（取同目录 subagent-entry.js）与
-`resolve_mcp_adapter_entry`（取声明的入口本身）。**降级/严格模式/生效值语义**
-见 docs/design.md 决策 20 的语义清单——本文件不复述（本周刚付过一次漂移的账）。
+**入口解析**：MC 那份由 `meeting_fs.resolve_mc_tools_entry` 解析（从 pi 的 packages
+找包 → 读它自己声明的 `pi.extensions`，不硬编码布局 → 取同目录 subagent-entry.js）；
+MCP 那份是**常量** `meeting_fs.BUILTIN_MCP_ENTRY = "builtin:mcp"`（pi 0.99+ 自带，
+无需解析——第三方 `pi-mcp-adapter` 依赖已删，2026-09-30）。为什么必须显式 `-e`：
+`--no-extensions` 关的是"扩展发现**与内置扩展**"（pi --help 原文）。
+**降级/严格模式/生效值语义**见 docs/design.md 决策 20 的语义清单——
+本文件不复述（本周刚付过一次漂移的账）。
 
 **主 pi 完全不受影响**（只改我们 spawn 的 agent 进程命令行；主 pi 的 MC/历史学家照常）。
 

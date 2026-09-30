@@ -391,7 +391,7 @@ class TestBuildReport(unittest.TestCase):
     """--report（观测面唯一机器消费出口）：各段取数 + fail-open。"""
 
     def _env(self, tmp, with_loop_log=True, with_session=True, commits=(),
-             spaced_seconds=0):
+             spaced_seconds=None):
         base = os.path.join(tmp, "mv-x-1")
         bare = os.path.join(base, "repo.git")
         os.makedirs(base)
@@ -407,9 +407,11 @@ class TestBuildReport(unittest.TestCase):
         subprocess.run(["git", "add", "-A"], cwd=w, check=True,
                        capture_output=True)
         setup_env = dict(os.environ)
-        if spaced_seconds:
+        if spaced_seconds is not None:
             # 全仓统一用固定基准日（含 setup）——否则 setup 是"现在"、消息是
-            # 固定日，墙钟跨度会变成十几天的怪值（装置自身的不一致）
+            # 固定日，墙钟跨度会变成十几天的怪值（装置自身的不一致）。
+            # spaced_seconds=0 → 所有 commit 同一秒（墙钟跨度恒为 0s，确定性）；
+            # =N>0 → 每条消息 +N 秒（可算出期望的墙钟跨度）。
             setup_env["GIT_AUTHOR_DATE"] = setup_env["GIT_COMMITTER_DATE"] = \
                 "@1789000000 +0000"
         subprocess.run(["git", "commit", "-qm", "discuss: setup"], cwd=w,
@@ -427,7 +429,7 @@ class TestBuildReport(unittest.TestCase):
             # spaced_seconds>0：给每个 commit 一个**固定且递增**的时间戳，
             # 让"墙钟跨度"非 0——报告「跨度」段的派生量（并行度）才算得出来
             env = dict(os.environ)
-            if spaced_seconds:
+            if spaced_seconds is not None:
                 stamp = 1789000000 + (idx + 1) * spaced_seconds
                 env["GIT_AUTHOR_DATE"] = env["GIT_COMMITTER_DATE"] = f"@{stamp} +0000"
             subprocess.run(["git", "commit", "-qm", f"discuss: {path}"],
@@ -522,7 +524,8 @@ class TestBuildReport(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             base = self._env(tmp, commits=[("a/0001", "message", "meeting"),
                                            ("b/0001", "message", "meeting"),
-                                           ("human/0001", "message", "meeting")])
+                                           ("human/0001", "message", "meeting")],
+                             spaced_seconds=0)
             txt = "\n".join(sd.build_report(base))
             # 合计 = a/0001 + b/0001 + human/0001（human 单列明细但计入合计）
             self.assertIn("流程：2 agents | 消息 3", txt)
@@ -535,9 +538,12 @@ class TestBuildReport(unittest.TestCase):
             # 跨度段：两个直标量各自命名 + 派生量写出算式（2026-09-27 审计）
             self.assertIn("跨度（两个直标量 + 一个派生量；各自命名、不可互替）", txt)
             self.assertIn("Σ进程跨度 2m00s（各 agent 唤醒跨度相加", txt)
-            # 0 是合法值：fixture 的首末 commit 同一秒 → 必须打 "0s"，**不得**
-            # 因真值判断被当成缺失（判缺失一律 is None）
+            # 0 是合法值：本 fixture 用固定日期把首末 commit 钉在同一秒 → 必须打
+            # "0s"，**不得**因真值判断被当成缺失（判缺失一律 is None）。装置要点：
+            # spaced_seconds=0 才让这条断言确定性——否则提交跨秒边界时会变成 1s
+            # （2026-09-30 全量跑实测过一次这种 flaky）。
             self.assertIn("墙钟跨度 0s（首末 commit 差 = 用户等待）", txt)
+            self.assertIn("并行度 n/a（= Σ进程跨度 ÷ 墙钟跨度；墙钟跨度为 0s", txt)
             self.assertIn("并行度", txt)
             self.assertIn("= Σ进程跨度 ÷ 墙钟跨度", txt)
             self.assertIn("cacheRead 183.6k", txt)
@@ -623,12 +629,15 @@ class TestBuildReport(unittest.TestCase):
             self.assertIn("终止：stall 接管", txt)
 
     def test_extension_policy_line_declared_vs_effective(self):
-        """报告给「扩展策略：声明 vs 生效」——降级（生效≠声明）必须可见。"""
+        """报告给「扩展策略：声明 vs 生效」——降级必须可见。
+
+        本 fixture 的登记行是**降级形态**：声明 mc-tools、生效 none（MC 入口没解析
+        出来）+ 原因。报告的判定条件是「声明≠生效 **或** 有降级原因」——后半句是
+        2026-09-30 加的：内置 MCP 入口恒在，于是可能出现「声明=生效但仍降级」的
+        组合（那时只看声明≠生效会把降级漏掉）。
+        """
         with tempfile.TemporaryDirectory() as tmp:
             base = self._env(tmp, commits=[("a/0001", "message", "meeting")])
-            # 协议声明 mc-tools；日志登记行显示降级到 none（无 MC 的机器）
-            with open(os.path.join(base, "work-a", "protocol.json"), "a") as f:
-                pass
             w = os.path.join(base, "work-a")
             with open(os.path.join(w, "protocol.json")) as f:
                 proto = json.load(f)
@@ -648,7 +657,37 @@ class TestBuildReport(unittest.TestCase):
             txt = "\n".join(observability.build_report(base))
         self.assertIn("扩展策略：声明 mc-tools ｜ 生效 none", txt)
         self.assertIn("降级：packages 里没有可解析的包", txt)
-        self.assertIn("⚠ 生效≠声明", txt)
+        self.assertIn("⚠ 降级", txt)
+
+    def test_extension_policy_line_degraded_but_same_effective(self):
+        """声明==生效、但有降级原因 → 仍要打 ⚠（2026-09-30 的触发条件扩展）。
+
+        为什么值得单测：只按「声明≠生效」判定时，这一形态完全静默——而它正是新版
+        默认档最可能出现的一种降级（内置 MCP 恒在 ⇒ 生效仍是 mc-tools，缺的是 MC
+        那份 ctx_search）。
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            base = self._env(tmp, commits=[("a/0001", "message", "meeting")])
+            w = os.path.join(base, "work-a")
+            with open(os.path.join(w, "protocol.json")) as f:
+                proto = json.load(f)
+            proto["extensionPolicy"] = "mc-tools"
+            with open(os.path.join(w, "protocol.json"), "w") as f:
+                json.dump(proto, f)
+            subprocess.run(["git", "add", "-A"], cwd=w, check=True,
+                           capture_output=True)
+            subprocess.run(["git", "commit", "-qm", "policy"], cwd=w, check=True,
+                           capture_output=True)
+            subprocess.run(["git", "push", "-q", "origin", "HEAD"], cwd=w,
+                           check=True, capture_output=True)
+            with open(os.path.join(base, "loop-a.log"), "a") as f:
+                f.write("[2026-09-30T11:27:46.000] a: 扩展策略: 声明=mc-tools "
+                        "生效=mc-tools strict=0 "
+                        "降级原因=没装 MC；内置 MCP 工具不受影响\n")
+            import observability
+            txt = "\n".join(observability.build_report(base))
+        self.assertIn("扩展策略：声明 mc-tools ｜ 生效 mc-tools", txt)
+        self.assertIn("⚠ 降级", txt)
 
     def test_extension_policy_line_absent_is_na(self):
         """没有字段也没有登记行（旧产物）→ n/a，不报错。"""

@@ -768,36 +768,40 @@ class TestExtensionPolicy(unittest.TestCase):
         self.assertIn("mc-tools", meeting_fs.EXTENSION_POLICIES)
         self.assertIn("none", meeting_fs.EXTENSION_POLICIES)   # 零依赖备选仍在
 
-    def test_mc_tools_loads_the_tool_entries(self):
-        """mc-tools（默认档）：零扩展 + 显式加载**只读工具入口**。
+    def test_mc_tools_loads_builtin_mcp_and_mc_entry(self):
+        """mc-tools（默认档）：零扩展 + 两份显式入口（MC 的检索工具 + **内置** MCP）。
 
-        两份入口：MC 的 ctx_search（工具注册 + 生命周期钩子，无 historian）与 MCP adapter 的
-        web_search / web_reader / zread 等 MCP 工具。用户裁决 B（2026-09-25）：
-        MCP adapter 并入默认档（不加档位、保持简单）——否则 `--no-extensions`
-        会让 agents 完全无法联网检索。两份入口各自独立解析/降级。
+        为什么第二份写成 `builtin:mcp` 而不是第三方 adapter 的路径：
+        `--no-extensions` 关的是"扩展发现**与内置扩展**"（pi --help 原文），
+        而 MCP 是 pi 的内置扩展（`{ name: "mcp", builtin: true }`）——不显式加载
+        就等于 agents 没有 MCP 工具；`-e` 接受 `builtin:<name>` 所以写得出来。
+        （2026-09-30 用户裁决：pi 原生支持 MCP，去掉第三方 adapter 依赖。）
         """
         import meeting_fs
         cmd = self._cmd("mc-tools")
         for flag in ("--no-extensions", "--no-skills",
                      "--no-prompt-templates", "--no-themes"):
             self.assertIn(flag, cmd)
-        self.assertIn("-e", cmd)                  # 至少一份入口
-        self.assertLessEqual(cmd.count("-e"), 2)  # 最多两份，不重复
-        for resolver in (meeting_fs.resolve_mc_tools_entry,
-                         meeting_fs.resolve_mcp_adapter_entry):
-            entry, err = resolver()
-            if entry:                             # 本机装了就校验具体入口
-                self.assertIn(entry, cmd)
-            else:
-                self.assertTrue(err)              # 缺入口必须给出原因
+        # 内置 MCP：**常量入口**，恒定恰好在场一次
+        self.assertIn(meeting_fs.BUILTIN_MCP_ENTRY, cmd)
+        self.assertEqual(cmd.count(meeting_fs.BUILTIN_MCP_ENTRY), 1)
+        # MC：本机装了就校验具体入口；没装必须给出原因（无静默）
+        entry, err = meeting_fs.resolve_mc_tools_entry()
+        if entry:
+            self.assertIn(entry, cmd)
+            self.assertEqual(cmd.count("-e"), 2)   # 两份入口，不重复
+        else:
+            self.assertTrue(err)
+            self.assertEqual(cmd.count("-e"), 1)   # 只剩内置 MCP
 
-    def test_downgrade_command_is_identical_to_none(self):
-        """S1 验收（e2e24 评审）：降级返回与 none 返回**逐字同形** + cwd 一致。
+    def test_downgrade_keeps_full_command_and_builtin_mcp(self):
+        """MC 解析失败时：命令**仍然完整**，且内置 MCP 照常在。
 
-        修复前的 bug：降级分支自己拼前缀后提前 return → 截断掉
-        `--model`/`--thinking`/`--append-system-prompt`/`--print` 与 spawn cwd
-        （在"无 MC 的机器"上产出残缺命令）。装置要点：**同一 base**（否则路径
-        天然不同、逐字比较无意义）+ **非空配置**（空值会削弱本用例判别力）。
+        为什么不是"逐字等于 none 档"了：内置 MCP 入口现在恒在（常量、无第三方
+        依赖），降级只剩"少 MC 那份 -e"这一种形态。要守住的性质有两条——
+        ① 其余 token 一个不少（S1 那个"降级分支提前 return 把 model/print/
+        system-prompt/cwd 全截断"的 bug 不再复发）；
+        ② 降级**不牵连内置 MCP**（否则"缺 MC"会静默连带失去联网检索）。
         """
         import meeting_loop
         with tempfile.TemporaryDirectory() as tmp:
@@ -809,19 +813,24 @@ class TestExtensionPolicy(unittest.TestCase):
                     os.path.join(base, "pi-sessions"), False)
             with mock.patch("meeting_fs.resolve_mc_tools_entry",
                             return_value=(None, "模拟：没装 MC")), \
-                            mock.patch("meeting_fs.resolve_mcp_adapter_entry", return_value=(None, "模拟：没装 MCP adapter")), \
                     mock.patch.dict(os.environ,
                                     {meeting_fs.MC_TOOLS_STRICT_ENV: ""}):
                 deg, cwd_deg = meeting_loop._build_wake_cmd(*args, "mc-tools", "唤醒")
-                none, cwd_none = meeting_loop._build_wake_cmd(*args, "none", "唤醒")
-        self.assertEqual(deg, none)              # 逐字同形（无 -e、其余全同）
-        self.assertEqual(cwd_deg, cwd_none)      # spawn cwd 一致
+            plain, cwd_plain = meeting_loop._build_wake_cmd(*args, "none", "唤醒")
+        self.assertEqual(cwd_deg, cwd_plain)      # spawn cwd 与 none 档一致
         self.assertFalse(cwd_deg.endswith("pi-sessions"))   # ≠ session 目录
         for flag in ("--model", "--thinking", "--print", "--approve"):
             self.assertIn(flag, deg)
+        # 降级形态 = none 档 + 内置 MCP 那一对（"-e", "builtin:mcp"）——去掉后逐字相同
+        self.assertEqual(deg.count("-e"), 1)
+        stripped = list(deg)
+        i = stripped.index("-e")
+        self.assertEqual(stripped[i + 1], meeting_fs.BUILTIN_MCP_ENTRY)
+        del stripped[i:i + 2]
+        self.assertEqual(stripped, plain)
 
     def test_first_wake_logs_policy_line(self):
-        """首唤打**登记行**（声明/生效/strict）——报告据此给"声明 vs 生效"。"""
+        """首唤打**登记行**（声明/生效/strict/降级原因）——报告据此给"声明 vs 生效"。"""
         import contextlib
         import io
         import meeting_loop
@@ -837,7 +846,6 @@ class TestExtensionPolicy(unittest.TestCase):
             buf = io.StringIO()
             with mock.patch("meeting_fs.resolve_mc_tools_entry",
                             return_value=(None, "模拟：没装 MC")), \
-                            mock.patch("meeting_fs.resolve_mcp_adapter_entry", return_value=(None, "模拟：没装 MCP adapter")), \
                     mock.patch.dict(os.environ,
                                     {meeting_fs.MC_TOOLS_STRICT_ENV: ""}), \
                     contextlib.redirect_stdout(buf):
@@ -846,18 +854,18 @@ class TestExtensionPolicy(unittest.TestCase):
                                      "prompt_file": ""}, src, tmp,
                     os.path.join(base, "pi-sessions"), True, "mc-tools", "唤醒")
         out = buf.getvalue()
+        # 生效以本档核心能力（MC 的 ctx_search）为准；内置 MCP 恒在、在原因里说明
         self.assertIn("扩展策略: 声明=mc-tools 生效=none", out)
         self.assertIn("strict=0", out)
-        # 降级原因现在**逐入口点名**（两份入口各自可缺）
         self.assertIn("降级原因=", out)
         self.assertIn("模拟：没装 MC", out)
-        self.assertIn("模拟：没装 MCP adapter", out)
+        self.assertIn("内置 MCP 工具不受影响", out)
 
     def test_mc_tools_falls_back_visibly_when_missing(self):
-        """两份入口**都缺** → 降级为零扩展（mc-tools 是「允许」而非「要求」），且可见。
+        """缺 MC 的机器：四个 `--no-*` + **只剩内置 MCP**，且日志点名原因。
 
-        生产默认不走这条路（本机两份都在位）；这里模拟「都没装」的机器：命令形态 = 四个
-        `--no-*`、**无** `-e`（等价 none 档），并在日志里**逐入口点名**原因。
+        mc-tools 是「允许」而非「要求」——分析照样跑得起来（这里断言命令形状），
+        少的是 ctx_search（项目历史检索），不是 MCP 工具。
         """
         import meeting_fs
         import meeting_loop
@@ -867,7 +875,6 @@ class TestExtensionPolicy(unittest.TestCase):
             os.makedirs(wd)
             with mock.patch("meeting_fs.resolve_mc_tools_entry",
                             return_value=(None, "模拟：没装 MC")), \
-                            mock.patch("meeting_fs.resolve_mcp_adapter_entry", return_value=(None, "模拟：没装 MCP adapter")), \
                     mock.patch.dict(os.environ,
                                     {meeting_fs.MC_TOOLS_STRICT_ENV: ""}):
                 cmd, _ = meeting_loop._build_wake_cmd(
@@ -878,41 +885,9 @@ class TestExtensionPolicy(unittest.TestCase):
         for flag in ("--no-extensions", "--no-skills",
                      "--no-prompt-templates", "--no-themes"):
             self.assertIn(flag, cmd)
-        self.assertNotIn("-e", cmd)          # 没有显式入口 → 等价 none 档
+        self.assertEqual(cmd.count("-e"), 1)                     # 只剩内置 MCP
+        self.assertEqual(cmd[cmd.index("-e") + 1], meeting_fs.BUILTIN_MCP_ENTRY)
 
-
-    def test_mc_tools_partial_degradation_keeps_working_entry(self):
-        """**部分降级**：只缺一份入口时，另一份照常加载（命令仍有它的 -e）。
-
-        为什么值得单测：两份入口的降级此前是"全有或全无"（只有一份入口），
-        并入 MCP adapter 后必须证明缺一份不会把另一份也丢掉——否则"缺 MCP"
-        会静默连带失去 ctx_search（反向也是）。
-        """
-        import meeting_fs
-        import meeting_loop
-        with tempfile.TemporaryDirectory() as tmp:
-            base = os.path.join(tmp, "mv-x")
-            wd = os.path.join(base, "work-a")
-            os.makedirs(wd)
-            fake = os.path.join(tmp, "fake-entry.js")
-            with open(fake, "w") as f:
-                f.write("// stub\n")
-            with mock.patch("meeting_fs.resolve_mc_tools_entry",
-                            return_value=(None, "模拟：没装 MC")), \
-                    mock.patch("meeting_fs.resolve_mcp_adapter_entry",
-                               return_value=(fake, "")), \
-                    mock.patch.dict(os.environ,
-                                    {meeting_fs.MC_TOOLS_STRICT_ENV: ""}):
-                cmd, _ = meeting_loop._build_wake_cmd(
-                    wd, "a", "sid",
-                    {"model": "", "thinking": "", "prompt_file": ""},
-                    None, tmp, os.path.join(base, "pi-sessions"), False,
-                    "mc-tools", "唤醒")
-        self.assertIn(fake, cmd)                  # 还在的那份照常加载
-        self.assertEqual(cmd.count("-e"), 1)      # 只加载了它
-        for flag in ("--no-extensions", "--no-skills",
-                     "--no-prompt-templates", "--no-themes"):
-            self.assertIn(flag, cmd)
     def test_mc_tools_missing_entry_fails_loud(self):
         """`MV_MC_TOOLS_STRICT=1`（测试/探针保真）→ 缺 MC 必须**响亮失败**。
 
@@ -924,10 +899,8 @@ class TestExtensionPolicy(unittest.TestCase):
             base = os.path.join(tmp, "mv-x")
             wd = os.path.join(base, "work-a")
             os.makedirs(wd)
-            import meeting_fs
             with mock.patch("meeting_fs.resolve_mc_tools_entry",
                             return_value=(None, "模拟：没装 MC")), \
-                            mock.patch("meeting_fs.resolve_mcp_adapter_entry", return_value=(None, "模拟：没装 MCP adapter")), \
                     mock.patch.dict(os.environ,
                                     {meeting_fs.MC_TOOLS_STRICT_ENV: "1"}):
                 with self.assertRaises(RuntimeError) as cm:

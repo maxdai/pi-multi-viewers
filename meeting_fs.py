@@ -294,9 +294,9 @@ def resolve_mc_tools_entry(agent_dir=None):
     `resolveSiblingEntryPath("subagent-entry.js")`）定位它；我们等价地读它声明的
     扩展入口（`pi.extensions[0]`），再取同目录下的 subagent-entry.js。
 
-    失败语义（与 resolve_mcp_adapter_entry 同）：任一步缺失返回 `(None, 原因)`
-    ——**由调用方按策略决定**：loop 生产态做**可见降级**，严格态
-    （`MV_MC_TOOLS_STRICT=1`）直接报错。
+    失败语义：任一步缺失返回 `(None, 原因)` ——**由调用方按策略决定**：loop
+    生产态做**可见降级**（本档唯一"可失败"的入口就是它；内置 MCP 入口是常量），
+    严格态（`MV_MC_TOOLS_STRICT=1`）直接报错。
     """
     pkg_dir, exts, err = _declared_extensions(MC_PACKAGE, agent_dir)
     if err:
@@ -307,25 +307,6 @@ def resolve_mc_tools_entry(agent_dir=None):
         return cand, ""
     return None, (f"{MC_PACKAGE} 的只读工具入口不存在"
                   f"（{os.path.relpath(cand, pkg_dir)}）——上游版本可能改了布局")
-
-
-def resolve_mcp_adapter_entry(agent_dir=None):
-    """解析 MCP adapter 的扩展入口（它声明的 `pi.extensions[0]`）——mc-tools 第二份。
-
-    为什么需要：MCP 工具（web_search / web_reader / zread…）由 pi-mcp-adapter
-    提供，而 `--no-extensions` 关掉的是**扩展发现**——显式 `-e` 路径照常生效
-    （pi --help 原文）。不显式加载 = agents 完全没有联网检索能力。
-
-    与 MC 的差别：这里要的**就是主入口本身**（它注册 MCP 工具），不取兄弟文件。
-    """
-    pkg_dir, exts, err = _declared_extensions(MCP_ADAPTER_PACKAGE, agent_dir)
-    if err:
-        return None, err
-    cand = os.path.normpath(os.path.join(pkg_dir, exts[0]))
-    if os.path.isfile(cand):
-        return cand, ""
-    return None, (f"{MCP_ADAPTER_PACKAGE} 声明的入口不存在"
-                  f"（{os.path.relpath(cand, pkg_dir)}）")
 
 
 def pi_agent_dir():
@@ -885,17 +866,17 @@ def parse_log_nameonly(output):
 #              agents 需要主项目背景（背景蒸馏机制已移除），这是它的补充通道；
 #              该入口 = **工具注册 + 两个生命周期钩子**（开/关 DB），**无** historian/压缩执行钩子
 #              （真场计数 historian 0：e2e24 0/3、e2e25 0；ctx_search 可用；成本未测得显著差异）。
-#              代价：本档两份入口**允许而非要求**（缺谁少谁、都可见降级；严格模式见
-#              MC_TOOLS_STRICT_ENV）
+#              代价：MC 那份入口**允许而非要求**（缺它 = 可见降级；严格模式见
+#              MC_TOOLS_STRICT_ENV）；内置 MCP 是常量入口、恒在
 #   none     : 零扩展——最快、**零依赖**（不依赖任何扩展；无 MC 的机器/CI 用这档）
 #   all      : 走 pi 默认扩展发现（A/B 实验与显式 opt-in 用）
 # （顺序只影响 CLI 帮助的罗列——**不承载语义**，勿按下标取值：
 #  默认档看 DEFAULT_EXTENSION_POLICY）
 EXTENSION_POLICIES = ("mc-tools", "none", "all")
 DEFAULT_EXTENSION_POLICY = "mc-tools"
-# mc-tools 档**允许而非要求**两份入口（MC 的 ctx_search、MCP adapter 的 web 工具）：
-# 缺谁少谁、都必须**可见**；语义清单见 docs/design.md 决策 20
-# （打印一行说明 `ctx_search` 本次不可用）——无静默铁律。
+# mc-tools 档**允许而非要求** MC 那份入口（ctx_search）——它现在是唯一"可失败"的
+# 入口（内置 MCP 是常量、恒在），缺失时**可见**（登记行点名原因）；
+# 语义清单见 docs/design.md 决策 20——无静默铁律。
 # 测试/探针要保真（确认"本场确实带着 ctx_search 在跑"）时，用环境变量把它变严格：
 #   MV_MC_TOOLS_STRICT=1 → 解析失败即报错退出（测试环境准确性优先，用户 2026-09-14 定）
 MC_TOOLS_STRICT_ENV = "MV_MC_TOOLS_STRICT"
@@ -912,9 +893,14 @@ def mc_tools_strict():
 # 入口是它的内部文件，路径解析见 resolve_mc_tools_entry 的 docstring）
 MC_PACKAGE = "@cortexkit/pi-magic-context"
 
-# MCP 工具（web_search / web_reader / zread…）的提供者——mc-tools 档的第二份入口。
-# 名字**由 pi 的注册表给**（settings.json.packages），这里只做精确匹配用。
-MCP_ADAPTER_PACKAGE = "pi-mcp-adapter"
+# mc-tools 档的第二份入口 = pi 的**内置** MCP 扩展（pi 0.99+ 自带，无第三方包）。
+# 为什么写成常量：它不需要"解析"——名字由 pi 自己注册（`builtin:` 前缀 + 名字）；
+# 这是有意去掉一个外部依赖（`pi-mcp-adapter` 的入口解析/版本漂移全没了）。
+# 为什么必须显式 `-e`：`--no-extensions` 关的是"扩展发现**与内置扩展**"（pi --help
+# 原文）——内置 MCP 也在关停范围；证据：上游 `core/extensions/index.ts` 里
+# `{ name: "mcp", builtin: true }`，`core/resource-loader.ts` 在 noExtensions 时
+# 只保留 CLI 显式 `-e` 的扩展（2026-09-30 读源码核实）。
+BUILTIN_MCP_ENTRY = "builtin:mcp"
 
 FORK_MODES = ("budget", "compaction", "full")
 DEFAULT_FORK_MODE = "budget"

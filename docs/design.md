@@ -510,7 +510,7 @@ commit 是溯源记录、本节是长期引用点——不并存两份权威值�
 
     | 档 | 唤醒命令 | 语义 |
     |---|---|---|
-    | `mc-tools`（默认） | 四个 `--no-*` + `-e <MC subagent-entry.js>` + `-e <pi-mcp-adapter 入口>`（任一份入口缺失即**部分降级**：缺谁少谁、都可见；全缺 = 等价 none）
+    | `mc-tools`（默认） | 四个 `--no-*` + `-e <MC subagent-entry.js>` + `-e builtin:mcp`（MC 入口缺 → 可见降级：少它那份 `-e`、生效=none；内置 MCP 恒在）
     | `none` | 四个 `--no-*` | 零扩展：最快、**零依赖** |
     | `all` | 不加任何 `--no-*` | pi 默认发现（A/B 与显式 opt-in）|
 
@@ -518,19 +518,19 @@ commit 是溯源记录、本节是长期引用点——不并存两份权威值�
     是必要的 background 补充”）：**fork 本身是主背景通道**（agent 继承主会话的开发
     上下文），覆盖面受 ① fork 源内容 ② `budget` 裁剪比例限制；`ctx_search` 是它的
     **兜底**（按需检索记忆/文档/历史）。MC 的
-    **两份入口的结构句与检测覆盖面（2026-09-27 复盘审计订正）**：
+    **两份入口的结构句与检测覆盖面（2026-09-27 复盘审计订正；2026-09-30 第二份改为内置）**：
     - **MC 的 `subagent-entry.js`**（MC 自己给"搜索类子代理"用的入口）= **工具注册 +
       两个生命周期钩子**（`session_start` 开 DB / `session_shutdown` 关 DB），**没有**
       historian / 压缩 / 打标类执行钩子 → agents 得到按需检索能力（memories / docs /
       历史）。*（此前写作"只注册工具、不装任何 hook"，与上游 0.43.2 源码不符，已订正。）*
       **检测覆盖面三面**：唤醒命令的**启动段**、报告**收尾列**、MC 自己的 `context.db` 账本。
-    - **pi-mcp-adapter** = **7 个钩子**，其中 5 个按事件触发（`input` / `tool_result` /
-      `before_agent_start` / `session_tree` / `resources_discover`）⇒ 只有 init 落在
-      **启动段**（实测边际 ≈ +0.2s/唤、收尾 ≈0）；**每轮钩子的成本 = 已知盲区**（落在
-      LLM 主导的"事件内"段，现有列分辨不出）。**兜底 = 两份入口可独立移除**（怀疑
-      adapter 就去掉第二条 `-e`）。
-    - **重估触发**：上游 MC / adapter **升版**，或报告**尾列出现分钟级离群** → 重核
-      （MC：`session_start`/`session_shutdown` 内是否新增工作；adapter：每轮钩子是否变重）。
+    - **pi 内置 MCP 扩展**（`builtin:mcp`）= 在 **`session_start`** 建立连接（上游
+      `extensions/mcp/index.ts` 的 `pi.on("session_start", …)`），连接后按服务器逐个
+      `registerTool` ⇒ 成本落在**启动段**（"首个 prompt 最多等 10 秒"是上游文档写明的
+      上界；先前第三方 adapter 的实测边际是 **+0.2s/唤**，内置实现**待测**——见 §假与口径）。
+      **兜底 = 换档**（要零扩展就显式 `--extension-policy none`）。
+    - **重估触发**：上游 MC / pi **升版**，或报告**启动段/尾列出现分钟级离群** → 重核
+      （MC：`session_start`/`session_shutdown` 内是否新增工作；MCP：连接时长与工具注册数）。
     - **探针双向句**：那 2 臂探针（16–23s vs 4s）验的是**能力与卡死/收尾**，
       **不测钩子成本**。
 
@@ -539,7 +539,6 @@ commit 是溯源记录、本节是长期引用点——不并存两份权威值�
     首次真场 strict=1、n=19 → 唤醒启动段中位 **0.68s**、收尾中位 0.04s ✓）。
     *口径项*：fork 源随唤醒增长（构建时 606 条 / 1.40MB → 读数时 729–800 条 /
     1.44–1.56MB）——**是文件在涨，不是时间在涨**，不构成成本项。
-
     **入口解析 fail-fast**（`resolve_mc_tools_entry`：pi 的 packages → MC 包 →
     它声明的扩展入口 → 同目录 `subagent-entry.js`）；缺 MC 时**可见降级**（严格模式
     `MV_MC_TOOLS_STRICT=1` 才报错退出）。
@@ -562,21 +561,39 @@ commit 是溯源记录、本节是长期引用点——不并存两份权威值�
     这是**能力取舍判据、不是性能开关**；数据来源 = 各场 `result.md` 的元信息
     （不设计数器/监控）。*前置限定不可省*——否则会把"需求不在窗口内"当成负证据
     （2026-09-27 那场即此情形：主题所需事实全在窗口/仓库内）。
-    **两份入口（2026-09-25 用户裁决 B）**：`mc-tools` 除 MC 的只读检索工具外，再显式
-    `-e` 加载 **pi-mcp-adapter**（web_search / web_reader / zread 等 MCP 工具）。
+    **两份入口（2026-09-25 用户裁决 B；2026-09-30 第二份改为 pi 内置 MCP）**：
+    `mc-tools` 除 MC 的只读检索工具外，再显式 `-e builtin:mcp` 得到 MCP 工具
+    （web_search / web_reader / zread 等）。**为什么改成内置**（用户 2026-09-30：
+    "pi 原生支持 mcp，不需要另装插件了"）：pi 0.99+ 自带 MCP 扩展，配置写在
+    `~/.pi/agent/mcp.json`（或项目 `.pi/mcp.json`）、工具名 `mcp__<server>__<tool>`；
+    换成它 = **去掉一个第三方依赖**（`pi-mcp-adapter` 的入口解析/版本漂移全没了，
+    `resolve_mcp_adapter_entry` 已删）。
     **语义清单（唯一权威段，别处引用不复述）**：
-    ① 两份入口**各自独立降级**（缺谁少谁）、**都可见**、**允许而非要求**——缺入口
-       不阻断分析（机器上没装其中之一照样能跑）；
-    ② `MV_MC_TOOLS_STRICT=1`（测试/探针保真）→ **任一**入口缺失即报错退出
-       （否则测试可能在"没装某入口"的环境里通过，而该工具从未生效）；
-    ③ 生效值语义：**部分降级仍 `生效=mc-tools`**（只是少了那份 `-e`），（`生效` = 入口解析成功；命令形状由测试锁：none / mc-tools / all 各一）
-       两份全失才 `生效=none`；
-    ④ 为什么必须显式 `-e`：`--no-extensions` 关的是**扩展发现**，显式路径照常生效
-       （pi `--help` 原文）——不加载就等于 agents 完全失去该能力（MCP 那侧 = 失去
-       联网检索）。
-    不新增档位（保持简单）。`none` 零依赖（无 MC/adapter 的机器/CI 显式选它）。
-
-    **依赖边界**：见上方清单 ①（允许而非要求、缺谁少谁、都可见）——本段不再复述。
+    ① MC 入口**允许而非要求**：解析失败不阻断分析（缺 MC 的机器照样跑）——它现在是
+       **唯一"可失败"的入口**；内置 MCP 是常量入口、恒在（无第三方、无解析）。
+    ② `MV_MC_TOOLS_STRICT=1`（测试/探针保真）→ MC 入口缺失即报错退出
+       （否则测试可能在"没装 MC"的环境里通过，而 `ctx_search` 从未生效）；
+       内置 MCP 不参与该判定（名字由 pi 注册、无需解析）。
+    ③ 生效值语义：**以本档核心能力为准** —— MC 入口解析成功 → `生效=mc-tools`；
+       失败 → `生效=none`（本档核心 `ctx_search` 缺失），原因字段**同时说明内置 MCP
+       仍在**。*（旧措辞"部分降级仍生效=mc-tools"出自"两份入口都会被解析"的时代，
+       已随第二份改为常量入口而失效。）*
+    ④ 为什么必须显式 `-e`：`--no-extensions` 关的是"扩展发现**与内置扩展**"
+       （pi `--help` 原文）——内置 MCP 也在关停范围，不显式加载 = agents 完全没有
+       MCP 工具；`-e <path>` 接受 `builtin:<name>`（同一份 help）。上游证据：
+       `core/extensions/index.ts` 里 `{ name: "mcp", builtin: true }`，
+       `core/resource-loader.ts` 在 `noExtensions` 时只保留 CLI 显式 `-e` 的扩展。
+    ⑤ **exposure 是配置层的事**（不属于本档）：`mcp.json` 里每个 server 的
+       `exposure` 默认 `codemode`（工具**不声明给模型**，只能从 codemode 脚本调用）；
+       要让 agents 直接调用（= 先前 adapter 的体验）需在 `mcp.json` 写
+       `"exposure": "direct"`——**该文件是用户级配置、也影响主 pi**（2026-09-30 用户裁
+       决选 direct）。
+    不新增档位（保持简单）。`none` 零依赖（无 MC 的机器/CI 显式选它）。
+    **待测（诚实标注）**：内置 MCP 在**每次唤醒**都于 `session_start` 建连接（上游
+    "首个 prompt 最多等 10 秒"）——**每次唤醒的启动段成本尚未实测**；量它的位置 =
+    报告「唤醒构成」表的**启动段**列（此前 adapter 的边际 ≈ +0.2s/唤）。
+    **依赖边界**：见上方清单 ①（MC 允许而非要求；内置 MCP 是 pi 自带）——本段不再复述。
+    第三方依赖为零：本档只用 pi 内置扩展 + 用户自己选的 MC 包。
     **死代码纪律**：`--extensions` 别名与 `extensions: true` 历史字段（只存在约 1 天）
     **已删净**（无移除条件的兼容层不留）；扩展策略只有一个入口：`--extension-policy`
     + 协议字段 `extensionPolicy`。

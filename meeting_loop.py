@@ -330,36 +330,31 @@ def _build_wake_cmd(workdir, agent, sid, cfg, fork_source, fork_cwd,
     if extension_policy == "none":
         cmd += no_ext
     elif extension_policy == "mc-tools":
-        # mc-tools = 零扩展 + 显式加载**两份只读工具入口**（2026-09-25 用户裁定 B：
-        # 并入默认档，不再新增档位——保持简单）：
+        # mc-tools = 零扩展 + 显式加载**两份能力**（零第三方依赖）：
         #   ① MC 的 subagent-entry（工具注册 + 生命周期钩子，无 historian）→ ctx_search
-        #   ② MCP adapter（web_search / web_reader / zread 等 MCP 工具）
-        # 为什么必须显式 -e：`--no-extensions` 关的是**发现**，显式路径照常生效
-        # （pi --help 原文）；MCP 工具此前因发现被关而对 agents 完全不可用。
-        # 两份入口**各自独立**降级（允许而非要求）——缺哪个就少哪个，都**可见**。
-        resolved = []          # [(label, entry)]
-        missing = []           # [(label, err)]
-        for label, resolver in (
-                ("ctx_search（MC 只读检索）", meeting_fs.resolve_mc_tools_entry),
-                ("MCP 工具（web_search 等）", meeting_fs.resolve_mcp_adapter_entry)):
-            entry, err = resolver()
-            if entry:
-                resolved.append((label, entry))
-            else:
-                missing.append((label, err))
+        #   ② pi **内置** MCP 扩展 → web_search / web_reader / zread 等
+        # 为什么必须显式 -e：`--no-extensions` 关的是"扩展发现**与内置扩展**"
+        # （pi --help 原文）——内置 MCP 也在关停范围，不显式加载 agents 就没有
+        # MCP 工具；`-e <path>` 同时接受 `builtin:<name>`（pi --help 原文）。
+        # 为什么用内置而不再用第三方 adapter：pi 0.99+ 自带，少一个外部依赖
+        # （用户 2026-09-30 定）；此前的 adapter 入口解析机制随之删除。
+        # 降级语义：唯一"可失败"的入口是 MC（解析第三方包的内部文件）——
+        # 失败则**本档核心能力（ctx_search）不到位** → 生效=none，原因里点名；
+        # 内置 MCP 是常量入口、恒在，故降级不影响它（原因字段会说明这一点）。
         cmd += no_ext
-        for _label, entry in resolved:
+        cmd += ["-e", meeting_fs.BUILTIN_MCP_ENTRY]
+        entry, err = meeting_fs.resolve_mc_tools_entry()
+        if entry:
             cmd += ["-e", entry]
-        if missing:
-            reason = "；".join(f"{label} 不可用（{err}）" for label, err in missing)
+        else:
             if meeting_fs.mc_tools_strict():
                 # 严格模式（测试/探针保真）：缺入口即响，不降级——否则测试可能在
-                # "没装某入口"的环境里通过，而该工具从未生效
-                log(agent, f"[fatal] mc-tools 档入口解析失败（严格模式）：{reason}")
-                raise RuntimeError(f"mc-tools 档不可用: {reason}")
-            # 允许而非要求：缺入口 → 少一份 -e，但**可见**
-            downgrade_reason = reason
-            effective_policy = ("mc-tools" if resolved else "none")
+                # "没装 MC"的环境里通过，而 ctx_search 从未生效
+                log(agent, f"[fatal] mc-tools 档入口解析失败（严格模式）：{err}")
+                raise RuntimeError(f"mc-tools 档不可用: {err}")
+            # 允许而非要求：缺 MC → 少一份 -e，但**可见**
+            downgrade_reason = f"{err}；内置 MCP 工具不受影响"
+            effective_policy = "none"
     elif extension_policy == "all":
         # pi 默认发现：**不加**任何 --no-*、也不加 -e（A/B 与显式 opt-in）
         pass
@@ -372,11 +367,11 @@ def _build_wake_cmd(workdir, agent, sid, cfg, fork_source, fork_cwd,
     if first_wake:
         # 登记行（观测面的稳定字段；报告据此给"声明 vs 生效"）。只在首唤打：
         # 策略在一次运行内不变，变了也是配置错误（重跑即可）。
-        # 降级时把"部分/完全"标进原因字段（S2：第二行是复述，已删——
-        # 报告只解析本行，`observability._report_extension_line` 的 regex 匹配行尾）。
-        reason = ""
-        if downgrade_reason:
-            reason = f" 降级原因={'部分' if resolved else '完全'}：{downgrade_reason}"
+        # 降级时把原因写进**登记行的同一行**（S2：第二行是复述，已删——报告只解析
+        # 本行，`observability._report_extension_line` 的 regex 匹配到行尾）。
+        # 不再有"部分/完全"标签：本档只有 MC 一个入口需要解析（内置 MCP 是常量），
+        # 失败即"核心能力缺失"，原因本身会点名（2026-09-30）。
+        reason = f" 降级原因={downgrade_reason}" if downgrade_reason else ""
         log(agent, f"扩展策略: 声明={extension_policy} 生效={effective_policy}"
                    f" strict={int(meeting_fs.mc_tools_strict())}{reason}")
     model = cfg.get("model") or ""

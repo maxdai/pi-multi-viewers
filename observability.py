@@ -679,8 +679,12 @@ def _report_extension_line(base, out):
         line = f"扩展策略：声明 {d} ｜ 生效 {e}（strict={strict}"
         line += f"，降级：{reason.strip()}" if reason else ""
         line += "）"
-        if d != e:
-            line += "  ⚠ 生效≠声明（降级：部分工具不可用——见登记行原因）"
+        # 触发条件：声明≠生效 **或** 有降级原因——2026-09-30 起「生效」以本档
+        # 核心能力（MC 的 ctx_search）为准，而内置 MCP 入口恒在：可能出现
+        # 「声明=生效但仍降级」的组合，只看 d != e 会把降级漏掉（观测面纪律：
+        # 降级必须可见）。
+        if d != e or reason:
+            line += "  ⚠ 降级（工具能力不全——见本行「降级」字段）"
         out.append(line)
     else:
         out.append(f"扩展策略：声明 {declared} ｜ 生效 n/a（日志中无登记行）")
