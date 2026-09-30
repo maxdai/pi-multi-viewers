@@ -658,13 +658,21 @@ class TestBuildReport(unittest.TestCase):
         self.assertIn("扩展策略：声明 mc-tools ｜ 生效 none", txt)
         self.assertIn("降级：packages 里没有可解析的包", txt)
         self.assertIn("⚠ 降级", txt)
+        # 平台能力位：本档可能加载 MCP ⇒ 必须显式写"未观测"（缺席≠0 的同一纪律）
+        self.assertIn("平台能力：未观测", txt)
 
     def test_extension_policy_line_degraded_but_same_effective(self):
-        """声明==生效、但有降级原因 → 仍要打 ⚠（2026-09-30 的触发条件扩展）。
+        """声明==生效、但有降级原因 → 仍要打 ⚠（触发条件是「声明≠生效 **或** 有原因」）。
 
-        为什么值得单测：只按「声明≠生效」判定时，这一形态完全静默——而它正是新版
-        默认档最可能出现的一种降级（内置 MCP 恒在 ⇒ 生效仍是 mc-tools，缺的是 MC
-        那份 ctx_search）。
+        **真实理由 = reader/writer 跨版本解耦**（不是"新版默认档可能出现"）：
+        分析目录里只有 4 个模块的运行快照（`start_discussion.py` 复制
+        meeting_loop/fs/core/engine；`observability` **不在**快照里）——`--report`
+        永远用**主仓今天**的代码读**当时** writer 写下的 loop 日志。所以判定必须
+        容得下"旧 writer 产出 d==e 且 reason 非空"这一形态：
+        `git show af9ee53^:meeting_loop.py` 第 361-362 行正是
+        `生效=mc-tools 降级原因=部分：…`（当时内置 MCP 恒在、MC 那份缺失）。
+        **移除条件**：当不再存在"af9ee53 之前启动、且仍需 `--report`"的分析目录时
+        可把 `or reason` 收掉（现行 writer 已保证 reason ⇒ d≠e）。
         """
         with tempfile.TemporaryDirectory() as tmp:
             base = self._env(tmp, commits=[("a/0001", "message", "meeting")])
@@ -683,7 +691,7 @@ class TestBuildReport(unittest.TestCase):
             with open(os.path.join(base, "loop-a.log"), "a") as f:
                 f.write("[2026-09-30T11:27:46.000] a: 扩展策略: 声明=mc-tools "
                         "生效=mc-tools strict=0 "
-                        "降级原因=没装 MC；内置 MCP 工具不受影响\n")
+                        "降级原因=没装 MC\n")
             import observability
             txt = "\n".join(observability.build_report(base))
         self.assertIn("扩展策略：声明 mc-tools ｜ 生效 mc-tools", txt)
@@ -697,6 +705,30 @@ class TestBuildReport(unittest.TestCase):
             txt = "\n".join(observability.build_report(base))
         self.assertIn("扩展策略：n/a", txt)
 
+
+    def test_platform_capability_line_absent_for_none_policy(self):
+        """none 档不写「平台能力」行——没有 MCP 可谈，写了反而是噪声。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            base = self._env(tmp, commits=[("a/0001", "message", "meeting")])
+            w = os.path.join(base, "work-a")
+            with open(os.path.join(w, "protocol.json")) as f:
+                proto = json.load(f)
+            proto["extensionPolicy"] = "none"
+            with open(os.path.join(w, "protocol.json"), "w") as f:
+                json.dump(proto, f)
+            subprocess.run(["git", "add", "-A"], cwd=w, check=True,
+                           capture_output=True)
+            subprocess.run(["git", "commit", "-qm", "policy"], cwd=w,
+                           check=True, capture_output=True)
+            subprocess.run(["git", "push", "-q", "origin", "HEAD"], cwd=w,
+                           check=True, capture_output=True)
+            with open(os.path.join(base, "loop-a.log"), "a") as f:
+                f.write("[2026-09-30T11:27:46.000] a: 扩展策略: 声明=none "
+                        "生效=none strict=0\n")
+            import observability
+            txt = "\n".join(observability.build_report(base))
+        self.assertIn("扩展策略：声明 none", txt)
+        self.assertNotIn("平台能力：未观测", txt)
     def test_level_mismatch_visible(self):
         """声明值 ≠ 生效值 → 报告显式 ⚠ 不一致（这是 e2e17 §1 要的可见性：
         声明值从来没人跟生效值对照过）。"""

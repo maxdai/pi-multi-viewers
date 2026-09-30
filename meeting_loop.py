@@ -353,14 +353,21 @@ def _build_wake_cmd(workdir, agent, sid, cfg, fork_source, fork_cwd,
                 log(agent, f"[fatal] mc-tools 档入口解析失败（严格模式）：{err}")
                 raise RuntimeError(f"mc-tools 档不可用: {err}")
             # 允许而非要求：缺 MC → 少一份 -e，但**可见**
-            downgrade_reason = f"{err}；内置 MCP 工具不受影响"
+            # 原因只写**入口层**事实（err 来自解析）。不写“MCP 工具不受影响”：
+            # 工具是否可用我们观测不到（非交互模式下 server 状态不进任何产物，
+            # 见 docs/design.md 决策 20「平台能力的可见性」）。
+            downgrade_reason = err
             effective_policy = "none"
     elif extension_policy == "all":
         # pi 默认发现：**不加**任何 --no-*、也不加 -e（A/B 与显式 opt-in）
         pass
     else:
-        # fail-closed：值域增长时这里响，而不是静默落进某个档（当前守卫下
-        # 不可达——上方 in-值域检查已拦；不留"最后一个分支兜住一切"的形状）。
+        # 失败模式不同，与上面 :326 的守卫不可互相替代：
+        #   · :326 拦**元组之外**的值（用户传错）
+        #   · 这里拦**元组之内、但无分支**的值（加值忘加分支；此时 :326 不响）
+        # 删掉的代价不对称：新策略值会静默落进 `all` 档（= pi 默认发现 =
+        # 载入 AFT/MC 全档，分钟×N 级且无信号）；保留 0 成本。当前三档都有
+        # 分支 ⇒ 本分支不可达，但**不是死代码**。
         raise RuntimeError(
             f"扩展策略分派未穷尽: {extension_policy!r}"
             f"（合法值: {'/'.join(meeting_fs.EXTENSION_POLICIES)}）")
@@ -513,6 +520,14 @@ def wake_llm(workdir, agent, prompt,
     if new_sid:
         save_session_id(workdir, agent, new_sid)
     if r.returncode != 0:
+        # 通用诊断（**只落盘、不解析、不作分支**）：rc≠0 时 stderr 此前只被读来
+        # 判断“是不是 session 失效”，其余丢弃——诊断信息本可留在 loop 日志。
+        # 截断 200 字符（先例 meeting_fs 的 [:200]）并**显式标注截断口径**。
+        # 注意：这**不**解决“MCP server 静默失效”——那种情形 rc=0、stderr 为空
+        # （上游 notify 在非交互模式是 no-op），见 design.md 决策 20。
+        err_txt = (r.stderr or "").strip().replace("\n", " ⏎ ")
+        if err_txt:
+            log(agent, f"pi stderr（截断 200 字符）: {err_txt[:200]}")
         # 常见可重试失败：session 文件损坏/不存在。pi 对 --session-id
         # 通常自动创建；保留 stderr 日志便于诊断。明确 "No session
         # found" 则清空 status 后下轮新建。

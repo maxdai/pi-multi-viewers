@@ -686,6 +686,14 @@ def _report_extension_line(base, out):
         if d != e or reason:
             line += "  ⚠ 降级（工具能力不全——见本行「降级」字段）"
         out.append(line)
+        # 平台能力位（2026-09-30 自审结论）：**本档不采集** MCP server 的连接状态——
+        # 非交互模式下失败只走 `ctx.ui.notify`，而它是 no-op；session 也不落工具集。
+        # 所以 rc=0 **不等于**工具可用；报告必须把「未观测」说出来（缺席≠0 的同一
+        # 纪律）。**判定用声明或生效任一命中**：内置 MCP 与 MC 入门是两份入口，
+        # MC 降级时内置那份仍在（生效=none ≠ 没有 MCP 工具）。none 档不写此行。
+        if d in ("mc-tools", "all") or e in ("mc-tools", "all"):
+            out.append("平台能力：未观测（MCP server 连接状态不采集——rc=0 ≠ 工具"
+                       "可用；见 docs/design.md 决策 20）")
     else:
         out.append(f"扩展策略：声明 {declared} ｜ 生效 n/a（日志中无登记行）")
 

@@ -230,6 +230,33 @@ class TestWakeLlm(unittest.TestCase):
         self.assertTrue(os.path.exists(status))
 
 
+    def test_wake_logs_stderr_when_rc_nonzero(self):
+        """⑦ 通用诊断（2026-09-30 自审批）：rc≠0 时 stderr 截断落 loop 日志。
+
+        断言三件事：① 落了一行；② **单行**（换行压成 `⏎`，日志可逐行 grep）；
+        ③ 带**截断口径**字样（读到的不等于全部）。它是"只落不解析"的：rc 语义与
+        返回值不受影响（本用例只断言落盘这一件事）。
+        """
+        import contextlib
+        import io
+        proc = FakeProc("ok", rc=2, err="boom line1\nboom line2\n")
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            self._run(proc)
+        out = buf.getvalue()
+        self.assertIn("pi stderr（截断 200 字符）", out)
+        self.assertIn("boom line1 ⏎ boom line2", out)   # 压成单行（可逐行 grep）
+
+    def test_wake_does_not_log_stderr_when_rc_zero(self):
+        """rc=0 时不落 stderr 行——别把"正常但话多"的进程噪音灌进日志。"""
+        import contextlib
+        import io
+        proc = FakeProc("ok", rc=0, err="warning: something\n")
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            self._run(proc)
+        self.assertNotIn("pi stderr", buf.getvalue())
+
 class TestSigtermHandler(unittest.TestCase):
     def test_terminates_current_proc(self):
         """SIGTERM handler：terminate 唤醒中的 pi + SystemExit。"""
@@ -734,7 +761,7 @@ class TestExtensionPolicy(unittest.TestCase):
     """agent 进程的扩展策略：三档（design.md 决策 20）——none / mc-tools / all。
 
     本测试锁什么：三档唤醒命令的**形状**——`none` 无 `-e`、`mc-tools` 恰好
-    0–2 个 `-e`（两份入口各自降级）、`all` 无 `--no-*` 也无 `-e`；以及降级时
+1–2 个 `-e`（内置 MCP 恒在 = 1；MC 入口解析成功 = 2）
     日志可见（登记行 + 逐入口点名）。
     为什么这么设计、以及各档的成本依据（承接证据）见 `docs/design.md` 决策 20——
     docstring 只写契约，不存放历史证据（2026-09-27 复盘审计）。
@@ -801,7 +828,8 @@ class TestExtensionPolicy(unittest.TestCase):
         依赖），降级只剩"少 MC 那份 -e"这一种形态。要守住的性质有两条——
         ① 其余 token 一个不少（S1 那个"降级分支提前 return 把 model/print/
         system-prompt/cwd 全截断"的 bug 不再复发）；
-        ② 降级**不牵连内置 MCP**（否则"缺 MC"会静默连带失去联网检索）。
+        ② 命令里**仍有**那一对 `-e builtin:mcp`（**入口层**事实：我们确实请求了
+        内置 MCP；至于它连没连上，本档观测不到——见 docs/design.md 决策 20）。
         """
         import meeting_loop
         with tempfile.TemporaryDirectory() as tmp:
@@ -859,7 +887,7 @@ class TestExtensionPolicy(unittest.TestCase):
         self.assertIn("strict=0", out)
         self.assertIn("降级原因=", out)
         self.assertIn("模拟：没装 MC", out)
-        self.assertIn("内置 MCP 工具不受影响", out)
+        # 原因只写入口层事实（不写"内置 MCP 不受影响"——工具可用性不可观测）
 
     def test_mc_tools_falls_back_visibly_when_missing(self):
         """缺 MC 的机器：四个 `--no-*` + **只剩内置 MCP**，且日志点名原因。
