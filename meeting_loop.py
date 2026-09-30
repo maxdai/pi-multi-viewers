@@ -330,19 +330,23 @@ def _build_wake_cmd(workdir, agent, sid, cfg, fork_source, fork_cwd,
     if extension_policy == "none":
         cmd += no_ext
     elif extension_policy == "mc-tools":
-        # mc-tools = 零扩展 + 显式加载**两份能力**（零第三方依赖）：
-        #   ① MC 的 subagent-entry（工具注册 + 生命周期钩子，无 historian）→ ctx_search
-        #   ② pi **内置** MCP 扩展 → web_search / web_reader / zread 等
-        # 为什么必须显式 -e：`--no-extensions` 关的是"扩展发现**与内置扩展**"
-        # （pi --help 原文）——内置 MCP 也在关停范围，不显式加载 agents 就没有
-        # MCP 工具；`-e <path>` 同时接受 `builtin:<name>`（pi --help 原文）。
-        # 为什么用内置而不再用第三方 adapter：pi 0.99+ 自带，少一个外部依赖
-        # （用户 2026-09-30 定）；此前的 adapter 入口解析机制随之删除。
-        # 降级语义：唯一"可失败"的入口是 MC（解析第三方包的内部文件）——
-        # 失败则**本档核心能力（ctx_search）不到位** → 生效=none，原因里点名；
-        # 内置 MCP 是常量入口、恒在，故降级不影响它（原因字段会说明这一点）。
+          # mc-tools = 零扩展 + 显式加载**三份能力**（零第三方依赖）：
+          #   ① MC 的 subagent-entry（工具注册 + 生命周期钩子，无 historian）→ ctx_search
+          #   ② pi **内置** MCP 扩展 → web_search / web_reader / zread 等
+          #   ③ pi **内置** codemode 扩展 → 让 ② 的工具真正可达（见下方“为什么 ③ 必需”）
+          # 为什么必须显式 -e：`--no-extensions` 关的是"扩展发现**与内置扩展**"
+          # （pi --help 原文）——内置 MCP 与 codemode 都在关停范围；`-e <path>` 同时
+          # 接受 `builtin:<name>`（pi --help 原文）。
+          # 为什么 ③ 必需：server 用 pi 默认 `exposure: codemode` 时，其工具不声明给
+          # 模型、只能从 codemode 脚本调用；少了 ③，MCP 扩展的 ensureDiscoveryActive
+          # 找不到 codemode 工具，只发一条 ui.notify 警告（而我们的非交互模式里 notify
+          # 是 no-op）⇒ 工具注册了却调不到、且静默（2026-09-30 读源码 + 用户裁决走原生）。
+          # 降级语义：唯一"可失败"的入口是 MC（解析第三方包的内部文件）——失败则
+          # **本档核心能力（ctx_search）不到位** → 生效=none，原因里点名；②③ 是常量
+          # 入口、恒在，故降级不涉及它们（原因字段只写入口层事实）。
         cmd += no_ext
         cmd += ["-e", meeting_fs.BUILTIN_MCP_ENTRY]
+        cmd += ["-e", meeting_fs.BUILTIN_CODEMODE_ENTRY]
         entry, err = meeting_fs.resolve_mc_tools_entry()
         if entry:
             cmd += ["-e", entry]

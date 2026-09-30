@@ -69,7 +69,7 @@ tests/               测试（unittest discover tests）
 
 | 档 | 唤醒命令 | 用途 |
 |---|---|---|
-| **mc-tools**（默认） | 四个 `--no-*` + `-e <MC 的 subagent-entry.js>` + `-e builtin:mcp`（pi **内置** MCP，零第三方依赖） | 给 agents **按需检索**（`ctx_search` 查项目历史、web_search 等查外部）——协议模板里带一句「需要项目历史时用 ctx_search」的条件指引（仅在工具真到位时出现）。**降级/严格/生效值语义见 docs/design.md 决策 20 的语义清单**（唯一权威段） |
+| **mc-tools**（默认） | 四个 `--no-*` + `-e builtin:mcp` + `-e builtin:codemode` + `-e <MC 的 subagent-entry.js>`（两份内置常量 + 一份可失败入口，零第三方依赖） | 给 agents **按需检索**（`ctx_search` 查项目历史、web_search 等查外部）——协议模板里带一句「需要项目历史时用 ctx_search」的条件指引（仅在工具真到位时出现）。**降级/严格/生效值语义见 docs/design.md 决策 20 的语义清单**（唯一权威段） |
 | **none** | 四个 `--no-*` | 零扩展、**零依赖**（无 MC 的机器/CI 用这档） |
 | **all** | 不加任何 `--no-*`（pi 默认发现）| A/B 实验与显式 opt-in |
 

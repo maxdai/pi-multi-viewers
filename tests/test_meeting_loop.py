@@ -761,7 +761,7 @@ class TestExtensionPolicy(unittest.TestCase):
     """agent 进程的扩展策略：三档（design.md 决策 20）——none / mc-tools / all。
 
     本测试锁什么：三档唤醒命令的**形状**——`none` 无 `-e`、`mc-tools` 恰好
-1–2 个 `-e`（内置 MCP 恒在 = 1；MC 入口解析成功 = 2）
+2–3 个 `-e`（两份内置常量恒在 = 2；MC 入口解析成功 = 3）
     日志可见（登记行 + 逐入口点名）。
     为什么这么设计、以及各档的成本依据（承接证据）见 `docs/design.md` 决策 20——
     docstring 只写契约，不存放历史证据（2026-09-27 复盘审计）。
@@ -795,31 +795,38 @@ class TestExtensionPolicy(unittest.TestCase):
         self.assertIn("mc-tools", meeting_fs.EXTENSION_POLICIES)
         self.assertIn("none", meeting_fs.EXTENSION_POLICIES)   # 零依赖备选仍在
 
-    def test_mc_tools_loads_builtin_mcp_and_mc_entry(self):
-        """mc-tools（默认档）：零扩展 + 两份显式入口（MC 的检索工具 + **内置** MCP）。
+    def test_mc_tools_loads_builtin_entries_and_mc_entry(self):
+        """mc-tools（默认档）：零扩展 + **三份**显式入口（MC 检索 + 内置 MCP + 内置 codemode）。
 
-        为什么第二份写成 `builtin:mcp` 而不是第三方 adapter 的路径：
-        `--no-extensions` 关的是"扩展发现**与内置扩展**"（pi --help 原文），
-        而 MCP 是 pi 的内置扩展（`{ name: "mcp", builtin: true }`）——不显式加载
-        就等于 agents 没有 MCP 工具；`-e` 接受 `builtin:<name>` 所以写得出来。
-        （2026-09-30 用户裁决：pi 原生支持 MCP，去掉第三方 adapter 依赖。）
+        为什么必须写 `builtin:` 形式：`--no-extensions` 关的是"扩展发现**与内置扩展**"
+        （pi --help 原文），而 MCP 与 codemode 都是 pi 的内置扩展
+        （`{ name: "mcp", builtin: true }` / `{ name: "codemode", builtin: true }`）
+        ——不显式加载就等于 agents 没有 MCP 工具；`-e` 接受 `builtin:<name>` 所以写得出来。
+        （2026-09-30 用户裁决：改用 pi 原生 MCP + pi 默认的 codemode 调用方式。）
+
+        **codemode 为什么必需**：server 用 pi 默认 `exposure: codemode` 时工具不声明给
+        模型、只能从 codemode 脚本调用；而 codemode 工具由**独立的**内置扩展提供 ——
+        少了它，MCP 扩展的 `ensureDiscoveryActive` 找不到 codemode，只发一条
+        `ui.notify` 警告（"…they cannot be called."），在我们的非交互模式下是 no-op
+        ⇒ 工具注册了却调不到、且**静默**。
         """
         import meeting_fs
         cmd = self._cmd("mc-tools")
         for flag in ("--no-extensions", "--no-skills",
                      "--no-prompt-templates", "--no-themes"):
             self.assertIn(flag, cmd)
-        # 内置 MCP：**常量入口**，恒定恰好在场一次
-        self.assertIn(meeting_fs.BUILTIN_MCP_ENTRY, cmd)
-        self.assertEqual(cmd.count(meeting_fs.BUILTIN_MCP_ENTRY), 1)
+        # 两份**常量入口**：恒定恰好在场一次
+        for const in (meeting_fs.BUILTIN_MCP_ENTRY, meeting_fs.BUILTIN_CODEMODE_ENTRY):
+            self.assertIn(const, cmd)
+            self.assertEqual(cmd.count(const), 1)
         # MC：本机装了就校验具体入口；没装必须给出原因（无静默）
         entry, err = meeting_fs.resolve_mc_tools_entry()
         if entry:
             self.assertIn(entry, cmd)
-            self.assertEqual(cmd.count("-e"), 2)   # 两份入口，不重复
+            self.assertEqual(cmd.count("-e"), 3)   # 三份入口，不重复
         else:
             self.assertTrue(err)
-            self.assertEqual(cmd.count("-e"), 1)   # 只剩内置 MCP
+            self.assertEqual(cmd.count("-e"), 2)   # 只剩两份内置
 
     def test_downgrade_keeps_full_command_and_builtin_mcp(self):
         """MC 解析失败时：命令**仍然完整**，且内置 MCP 照常在。
@@ -849,12 +856,13 @@ class TestExtensionPolicy(unittest.TestCase):
         self.assertFalse(cwd_deg.endswith("pi-sessions"))   # ≠ session 目录
         for flag in ("--model", "--thinking", "--print", "--approve"):
             self.assertIn(flag, deg)
-        # 降级形态 = none 档 + 内置 MCP 那一对（"-e", "builtin:mcp"）——去掉后逐字相同
-        self.assertEqual(deg.count("-e"), 1)
+        # 降级形态 = none 档 + 两对内置常量入口（mcp / codemode）——去掉后逐字相同
+        self.assertEqual(deg.count("-e"), 2)
         stripped = list(deg)
-        i = stripped.index("-e")
-        self.assertEqual(stripped[i + 1], meeting_fs.BUILTIN_MCP_ENTRY)
-        del stripped[i:i + 2]
+        for const in (meeting_fs.BUILTIN_MCP_ENTRY, meeting_fs.BUILTIN_CODEMODE_ENTRY):
+            i = stripped.index("-e")
+            self.assertEqual(stripped[i + 1], const)
+            del stripped[i:i + 2]
         self.assertEqual(stripped, plain)
 
     def test_first_wake_logs_policy_line(self):
@@ -913,8 +921,10 @@ class TestExtensionPolicy(unittest.TestCase):
         for flag in ("--no-extensions", "--no-skills",
                      "--no-prompt-templates", "--no-themes"):
             self.assertIn(flag, cmd)
-        self.assertEqual(cmd.count("-e"), 1)                     # 只剩内置 MCP
-        self.assertEqual(cmd[cmd.index("-e") + 1], meeting_fs.BUILTIN_MCP_ENTRY)
+        self.assertEqual(cmd.count("-e"), 2)                     # 只剩两份内置
+        entries = [cmd[i + 1] for i, t in enumerate(cmd) if t == "-e"]
+        self.assertEqual(entries, [meeting_fs.BUILTIN_MCP_ENTRY,
+                                   meeting_fs.BUILTIN_CODEMODE_ENTRY])
 
     def test_mc_tools_missing_entry_fails_loud(self):
         """`MV_MC_TOOLS_STRICT=1`（测试/探针保真）→ 缺 MC 必须**响亮失败**。

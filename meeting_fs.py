@@ -902,6 +902,18 @@ MC_PACKAGE = "@cortexkit/pi-magic-context"
 # 只保留 CLI 显式 `-e` 的扩展（2026-09-30 读源码核实）。
 BUILTIN_MCP_ENTRY = "builtin:mcp"
 
+# mc-tools 档的**第三份**入口 = pi 的 `codemode` 工具（同样是内置扩展）。
+# 为什么必需：MCP server 若用 pi 默认的 `exposure: codemode`，其工具**不声明**给模型，
+# 只能从 codemode 脚本里调用（pi 在 server 连上时会自动激活 codemode 工具）；而
+# `codemode` 是**独立的内置扩展**（上游 `core/extensions/index.ts` 的
+# `{ name: "codemode", builtin: true }`），`--no-extensions` 会一并关掉它 —— 于是
+# MCP 扩展的 `ensureDiscoveryActive` 找不到 codemode 工具，只发一条 `ui.notify`
+# 警告（"MCP tools are only reachable from the codemode or tool_search tool…
+# they cannot be called."），而我们的非交互模式里 notify 是 no-op ⇒ 工具注册了却
+# 调不到、且**静默**（2026-09-30 读源码 + 用户裁决走 pi 原生方式）。
+# 同样是常量：名字由 pi 注册，无需解析（零第三方依赖）。
+BUILTIN_CODEMODE_ENTRY = "builtin:codemode"
+
 FORK_MODES = ("budget", "compaction", "full")
 DEFAULT_FORK_MODE = "budget"
 #

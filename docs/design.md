@@ -510,7 +510,7 @@ commit 是溯源记录、本节是长期引用点——不并存两份权威值�
 
     | 档 | 唤醒命令 | 语义 |
     |---|---|---|
-    | `mc-tools`（默认） | 四个 `--no-*` + `-e <MC subagent-entry.js>` + `-e builtin:mcp`（MC 入口缺 → 可见降级：少它那份 `-e`、生效=none；内置 MCP 恒在）
+    | `mc-tools`（默认） | 四个 `--no-*` + `-e builtin:mcp` + `-e builtin:codemode` + `-e <MC subagent-entry.js>`（MC 入口缺 → 可见降级：少它那份 `-e`、生效=none；**两份内置常量恒在**）
     | `none` | 四个 `--no-*` | 零扩展：最快、**零依赖** |
     | `all` | 不加任何 `--no-*` | pi 默认发现（A/B 与显式 opt-in）|
 
@@ -573,22 +573,36 @@ commit 是溯源记录、本节是长期引用点——不并存两份权威值�
        **唯一"可失败"的入口**；内置 MCP 是常量入口、恒在（无第三方、无解析）。
     ② `MV_MC_TOOLS_STRICT=1`（测试/探针保真）→ MC 入口缺失即报错退出
        （否则测试可能在"没装 MC"的环境里通过，而 `ctx_search` 从未生效）；
-       内置 MCP 不参与该判定（名字由 pi 注册、无需解析）。
+       两份**内置常量**入口（`builtin:mcp` / `builtin:codemode`）不参与该判定
+       （名字由 pi 注册、无需解析、不会失败）。
     ③ 生效值语义：**以本档核心能力为准** —— MC 入口解析成功 → `生效=mc-tools`；失败 →
        `生效=none`（本档核心 `ctx_search` 缺失）；原因字段 = **入口层失败原因**（不写
        工具可用性——那件事本档观测不到，见下方「平台能力的可见性」）。
        *（旧措辞「部分降级仍生效=mc-tools」出自「两份入口都会被解析」的时代，已随第二份
        改为常量入口而失效。）*
     ④ 为什么必须显式 `-e`：`--no-extensions` 关的是"扩展发现**与内置扩展**"
-       （pi `--help` 原文）——内置 MCP 也在关停范围，不显式加载 = agents 完全没有
-       MCP 工具；`-e <path>` 接受 `builtin:<name>`（同一份 help）。上游证据：
+       （pi `--help` 原文）——内置 MCP **与 codemode** 都在关停范围，不显式加载 =
+       agents 完全没有 MCP 工具（或被注册但调不到，见 ⑤）；`-e <path>` 接受
+       `builtin:<name>`（同一份 help）。上游证据：
        `core/extensions/index.ts` 里 `{ name: "mcp", builtin: true }`，
        `core/resource-loader.ts` 在 `noExtensions` 时只保留 CLI 显式 `-e` 的扩展。
-    ⑤ **exposure 是配置层的事**（不属于本档）：`mcp.json` 里每个 server 的
-       `exposure` 默认 `codemode`（工具**不声明给模型**，只能从 codemode 脚本调用）；
-       要让 agents 直接调用（= 先前 adapter 的体验）需在 `mcp.json` 写
-       `"exposure": "direct"`——**该文件是用户级配置、也影响主 pi**（2026-09-30 用户裁
-       决选 direct）。
+    ⑤ **exposure 回到 pi 默认（`codemode`）**，agents 也走**原生调用方式**（2026-09-30 用户裁决；
+    此前一天曾短暂改成 `direct`，理由 = "更贴合 pi 的原生设计"）：
+       - `codemode` = 工具**不声明**给模型，列在 **codemode 工具的描述**里，模型**写脚本**调用
+         （`tools` / `ALL_TOOLS` / `text()` / `return` …）；pi 在 server 连上时**自动激活**
+         codemode 工具。好处：大工具面不进模型声明、脚本内可**并行调多个工具**、大结果先筛后回
+         （直调 >20KB 会被掐中间）。
+       - **代价**：脚本比直调多一步；且**必须显式加载 codemode 扩展**（见 ④）——`codemode` 是
+         独立的内置扩展，`--no-extensions` 会关掉它；少了它，MCP 扩展只发一条
+         `ui.notify("…they cannot be called.")`，而我们的非交互模式里 notify 是 **no-op**
+         ⇒ 工具注册了却调不到、且**静默**（2026-09-30 读 `extensions/mcp/index.ts:336-359`
+         + `core/extensions/runner.ts` 的 `noOpUIContext`）。**这是本档必须同时 `-e builtin:codemode`
+         的全部理由。**
+       - 该设置住在 `~/.pi/agent/mcp.json`（**用户级、也影响主 pi**）；项目级 `.pi/mcp.json`
+         只按 **server 同名覆盖**且需 cwd 被 trust。**没有 env 覆盖**（2026-09-30 读 `config.ts`）。
+    - 命令形状（三档都只是 `-e` 的有无）：
+      `none` = 四个 `--no-*`；`mc-tools` = 四个 `--no-*` + 两份**内置常量**入口 + MC 入口；
+      `all` = 不加任何 `--no-*`、也不加 `-e`（pi 默认发现）。
     不新增档位（保持简单）。`none` 零依赖（无 MC 的机器/CI 显式选它）。
     **实测（2026-09-30 真场，38 次唤醒）**：内置 MCP 的**每唤醒成本 ≈ 0**——逐唤醒「启
     动前」中位 **−1.3s**（测量偏置）、三 agent 合计 −2s / −5s / +19s、收尾中位 1.1s；
@@ -619,9 +633,11 @@ commit 是溯源记录、本节是长期引用点——不并存两份权威值�
       **cwd = fork_cwd** 启动（项目级 `.pi/mcp.json` + trust 会改变 agents 所见，别把近似当事实）、
       文档写明只覆盖**持续性**失效（不覆盖"启动正常、中途断"）。**两条已证伪的错路**：成功路径
       stderr（notify 是 no-op）与 session 文件（工具集不上盘）——别再捡。
-    - **exposure 的成本与口径**：`direct` 的代价实测 = **+1,025 tok/请求**（差值口径；n=2，
-      配置 = 3 server / 5 工具全 direct；人口 = agent 侧探针会话；**机制外推**：主 pi 每请求同量级
-      ≈ +1k，**未测**）。数字随 server 数 / exposure 变化而作废；写**差值**不写绝对值。
+    - **exposure 的成本与口径**：`direct` 时代实测 **+1,025 tok/请求**（差值口径；n=2；配置 =
+      3 server / 5 工具全 direct；人口 = agent 侧探针会话）——该配置**已于 2026-09-30 回退**为
+      pi 默认 `codemode`（见语义清单 ⑤），所以这笔数字**只作历史对照**，不代表现行成本；
+      `codemode` 的现行成本（工具描述 + 脚本往返）**未测**。数字随 server 数 / exposure 变化而
+      作废；写**差值**不写绝对值。
     - **三档边界**（可复用的判据）：① 上游**文档化结构接口**（`pi mcp list --json` 字段、
       session 条目）→ **可作机器判据**，字段缺失/形状变 ⇒ 记"未知"；② 上游**人类 prose**
       （stderr / notify 文案）→ **只落盘留痕、不做分支**；③ 上游**内部布局**（第三方包
