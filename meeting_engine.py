@@ -409,6 +409,26 @@ def commit_new_files(workdir, agent, head, mode):
     return True
 
 
+def _uncommitted_slots(workdir, agent):
+    """列出**写了但未提交**的消息槽位（`NNNN.md`）——用于异常路径的可见化。
+
+    为什么需要它（2026-10-03 自审批 (丙)）：异常路径（超时/被杀/git 异常）走不到
+    `commit_new_files`，而 agent 可能**已经写出了合法消息**。那条文件留在工作树里，
+    序号又由**已提交**文件推导（`next_msg_id` 源 `git ls-files`）⇒ 下一唤醒会写
+    **同一槽位**覆盖它：既不提交、也不回收、**loop 侧零日志**。
+
+    代价上限有界（内容已在会话层，下次唤醒同 sid 可重建 ≈ 一次短生成），所以修法
+    按**比例相称**取"日志级"：**只记一行**，不建进度记忆 / 恢复机制——那等于把库内
+    状态塞进状态机（本地版），正是"运行时归属不转移"红线禁止的（本场自审批 §4）。
+    """
+    agent_dir = os.path.join(workdir, agent)
+    if not os.path.isdir(agent_dir):
+        return []
+    return sorted(f for f in os.listdir(agent_dir)
+                  if re.match(r"^\d{4}\.md$", f)
+                  and not _is_committed(workdir, f"{agent}/{f}"))
+
+
 def _is_committed(workdir, path):
     """文件是否已提交（tracked）。
 
@@ -751,5 +771,12 @@ def agent_loop(workdir, agent, responder,
             # → agent 永久失联 → RR next 链阻塞。单次异常不终止讨论：
             # 记 log + 下一轮继续（设计 11.4 的异常路径扩展）。
             log(agent, f"异常（不终止讨论）: {type(e).__name__}: {e}")
+            # 未提交产出的可见化（2026-10-03 自审批 (丙)）：异常路径到不了
+            # commit_new_files，而 agent 可能已写出合法消息——那条文件会被下一
+            # 唤醒**同槽覆盖**。只记一行（不建恢复机制，理由见 _uncommitted_slots）。
+            orphans = _uncommitted_slots(workdir, agent)
+            if orphans:
+                log(agent, "⚠ 未提交产出将被同槽覆盖: " + "、".join(orphans)
+                           + "（内容在会话层，下次唤醒可重建）")
             time.sleep(poll_interval)
 

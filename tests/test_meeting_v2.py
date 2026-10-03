@@ -198,3 +198,77 @@ class TestFullChain(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestOrphanLogOnException(unittest.TestCase):
+    """异常路径的「未提交产出」可见化（2026-10-03 自审批 (丙)）。
+
+    场景（真实可达）：唤醒被超时杀掉时，agent **可能已经写出了合法消息**；异常
+    路径走不到 `commit_new_files` ⇒ 那条文件留在工作树、序号又由已提交文件推导
+    ⇒ 下一唤醒写**同一槽位**覆盖它。此前 loop 侧**零日志**（静默）。
+
+    本用例让 responder 在首次调用时"写文件 + 抛异常"，之后正常作答，然后断言：
+      ① 引擎异常边界打出了「⚠ 未提交产出将被同槽覆盖」并点名槽位；
+      ② 该槽位最终仍被**提交**（序号复用语义正确——覆盖是"同一 agent 自己
+         文件"，不产生空洞）。
+    """
+
+    def test_orphan_logged_when_responder_raises(self):
+        import contextlib
+        import io
+        import threading
+        import time
+
+        from meeting_engine import agent_loop, aggregate_mode
+        from meeting_fs import next_msg_id, write_message
+
+        base, bare, wd = setup_env("orphan-log", ["a", "b"])
+        self.addCleanup(shutil.rmtree, base)
+        raised = set()
+
+        def responder(workdir, agent, head, meta, is_first, rr_turn, retry,
+                      finalizing=False, finalize_reason=None):
+            if agent not in raised:
+                raised.add(agent)
+                mid = next_msg_id(workdir, agent)
+                write_message(workdir, f"{agent}/{mid}.md",
+                              {"type": "message", "summary": "写了但没提交"},
+                              "正文")
+                raise RuntimeError("模拟唤醒异常（超时被杀）")
+            mid = next_msg_id(workdir, agent)
+            if rr_turn:
+                write_message(workdir, f"{agent}/{mid}.md",
+                              {"type": "pass", "summary": "pass"}, "无异议")
+            else:
+                write_message(workdir, f"{agent}/{mid}.md",
+                              {"type": "message", "summary": "正常响应"}, "正文")
+            return True
+
+        buf = io.StringIO()
+        threads = []
+        with contextlib.redirect_stdout(buf):
+            for ag in ("a", "b"):
+                t = threading.Thread(
+                    target=agent_loop, args=(wd[ag], ag, responder),
+                    kwargs={"max_meeting": 1, "max_rr": 5, "poll_interval": 0.1},
+                    daemon=True)
+                t.start()
+                threads.append(t)
+            deadline = time.time() + 90
+            while time.time() < deadline:
+                if aggregate_mode(bare, ["a", "b"]) == "concluded":
+                    break
+                time.sleep(0.2)
+
+        out = buf.getvalue()
+        self.assertIn("⚠ 未提交产出将被同槽覆盖", out, "异常路径必须留下可见日志")
+        self.assertIn("0001.md", out, "日志应点名被覆盖的槽位")
+        self.assertIn("模拟唤醒异常", out, "原异常仍要记录（不吞异常）")
+        # ② 槽位复用语义：孤儿最终被提交（不是空洞、不是额外文件）
+        from meeting_engine import _is_committed, _uncommitted_slots
+        for ag in ("a", "b"):
+            self.assertTrue(_is_committed(wd[ag], f"{ag}/0001.md"),
+                            f"{ag}/0001.md 应已被提交（序号复用）")
+            self.assertEqual(_uncommitted_slots(wd[ag], ag), [],
+                             f"{ag}: 收敛后不应残留未提交槽位")
+

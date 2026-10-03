@@ -22,7 +22,8 @@ from meeting_engine import (
     each_agent_last, aggregate_mode, rr_next_speaker, rr_active_count,
     human_msg_count, _produced, write_af_if_no_rr,
     write_protocol_signal, respond_with_fallback, commit_new_files,
-    _is_committed, _stall_elapsed, _result_md_valid, finalize_discussion,
+    _is_committed, _uncommitted_slots, _stall_elapsed, _result_md_valid,
+    finalize_discussion,
     _commit_result_md,
     setup_commit,
     new_messages_with_meta,
@@ -313,6 +314,37 @@ class TestQuota(unittest.TestCase):
 
 class TestProtocolSignal(unittest.TestCase):
     """E12-E13。"""
+
+    def test_uncommitted_slots(self):
+        """未提交槽位检测（2026-10-03 自审批 (丙) 的可见化基础）。
+
+        口径：只认 `NNNN.md` 形状且**未被 git 跟踪**的文件——与
+        `commit_new_files`/`next_msg_id` 同一判据（tracked = 已提交，
+        `_is_committed` 用 `git ls-files`，不用 `git status` 以免把
+        "已提交但被覆盖"误判为新消息）。异常路径靠它把"将被同槽覆盖"
+        这件事写进 loop 日志（此前是静默的）。
+        """
+        tmp, base, bare, works = make_env()
+        try:
+            wd = works["a"]
+            self.assertEqual(_uncommitted_slots(wd, "a"), [])      # agent 目录不存在
+            os.makedirs(os.path.join(wd, "a"), exist_ok=True)
+            # 写一个未提交槽位 + 一个非槽位文件（不应被列出）
+            with open(os.path.join(wd, "a", "0001.md"), "w") as f:
+                f.write("---\ntype: message\n---\n正文\n")
+            with open(os.path.join(wd, "a", "notes.txt"), "w") as f:
+                f.write("随手记\n")
+            self.assertEqual(_uncommitted_slots(wd, "a"), ["0001.md"])
+            # 提交后不再是孤儿
+            subprocess.run(["git", "add", "-A"], cwd=wd, check=True,
+                           capture_output=True)
+            subprocess.run(["git", "commit", "-qm", "x"], cwd=wd, check=True,
+                           capture_output=True)
+            self.assertEqual(_uncommitted_slots(wd, "a"), [])
+            # 目录不存在（agent 从未启动）→ 空，不抛
+            self.assertEqual(_uncommitted_slots(wd, "nope"), [])
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
 
     def test_write_protocol_signal_freezing(self):
         tmp, base, bare, works = make_env()

@@ -426,7 +426,10 @@ def _run_wake_proc(cmd, spawn_cwd, workdir, agent):
     三路径语义（2026-09-01 定，不得改变）：
       ① pi 正常结束 → 返回 CompletedProcess
       ② 讨论目录被清理（cleanup）→ _kill_proc + SystemExit(0)（干净退出）
-      ③ 总超时 → _kill_proc + 抛 TimeoutExpired（上层可恢复重试）
+      ③ 总超时 → _kill_proc + 抛 TimeoutExpired（上层 = 引擎异常边界：
+         **只 log + 回轮询、不自动重试**，见 meeting_engine.py 的 except Exception；
+         本次唤醒产出不提交——若已写出消息文件，下一唤醒写**同一槽位**覆盖它，
+         引擎会记一行「⚠ 未提交产出将被同槽覆盖」）
     """
     global _current_proc
     base = os.path.dirname(workdir)

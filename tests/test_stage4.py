@@ -230,6 +230,9 @@ class TestNextMsgId(unittest.TestCase):
 
         next_msg_id 基于 git_ls_files（已提交）——孤儿唯一来源是 commit
         异常路径，覆盖无害（同一 agent 自己文件），序号复用正确语义。
+        **2026-10-03 起这件事不再静默**：引擎异常边界会记一行
+        「⚠ 未提交产出将被同槽覆盖: …」（`meeting_engine._uncommitted_slots`，
+        自审批 (丙) 的日志级修法）；覆盖语义本身不变。
         """
         from meeting_fs import next_msg_id
         w = self.wd["a"]
