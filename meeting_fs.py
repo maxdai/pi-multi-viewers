@@ -1066,7 +1066,39 @@ def _fold_entry(entry, full_result):
     return n
 
 
+def _bridge_parents(entries, removed_ids):
+    """把指向 `removed_ids` 的 parentId 上溯桥接，并给链首置 `None`。
+
+    **为什么要有这个助手（2026-10-03，1.0.0 核对时抓到的静默 bug）**：
+    pi 构建模型上下文 = 从 leaf 沿 `parentId` 上溯（`core/session-manager.ts`
+    的 `buildContextEntries` → `buildSessionPath`），**遇到缺失的父节点就静默
+    停止**（上游文档只承诺"孤儿条目在 getTree 里变成根"，**不修复链**）。
+    所以只要我们**删掉**任何条目而不修链，链就在那里断开，其之前的全部条目
+    对模型不可见 —— 且**没有任何信号**。
+
+    实测代价（剔除 `thinking_level_change` 未桥接时，2026-10-03 主会话）：
+    从末条上溯只到 **65 / 13454** 条（≈0.5%）—— "fork 携带主会话历史"这个
+    产品前提被静默破坏；agents 仍看似能用，是因为它们能直接读项目文件。
+
+    **纪律**：新增/未知条目类型可以"原样透传"，但**删除类操作必须配桥接**
+    （本仓有两处删除：compaction 移除、`thinking_level_change` 剔除）。
+
+    `removed_ids`: {被删条目 id: 它的 parentId}（只用于上溯，值可为 None）。
+    返回新列表（不修改入参）；指向产物的 parentId 保持原样，指向产物外的
+    一律置 `None`（链首语义，与 preface 同型）。
+    """
+    out = []
+    for e in entries:
+        pid = e.get("parentId")
+        while pid in removed_ids:        # 上溯桥接（可能连续多个）
+            pid = removed_ids[pid]
+        out.append(dict(e, parentId=pid))
+    ids = {e.get("id") for e in out}
+    return [e if e.get("parentId") in ids else dict(e, parentId=None) for e in out]
+
+
 def _normalize_entries(entries):
+
     """移除窗口内的 compaction 条目，并把指向它们的 parentId 上溯桥接。
 
     为什么必须移除（pi replay 语义，2026-09-10 实测）：replay 以**路径上
@@ -1095,20 +1127,10 @@ def _normalize_entries(entries):
     comps = [e for e in entries if e.get("type") == "compaction"]
     if not comps:
         return entries, 0
-    removed = {e.get("id"): e for e in comps if e.get("id")}
-    out = []
-    for e in entries:
-        if e.get("type") == "compaction":
-            continue
-        pid = e.get("parentId")
-        while pid in removed:          # 上溯桥接（可能连续多个）
-            pid = removed[pid].get("parentId")
-        out.append(dict(e, parentId=pid))
-    # 上溯出产物（祖先被预算裁掉）→ 链首显式 None
-    ids = {e.get("id") for e in out}
-    out = [e if e.get("parentId") in ids else dict(e, parentId=None)
-           for e in out]
-    return out, len(comps)
+    # 桥接规则见 _bridge_parents（2026-10-03 起两处删除共用同一实现）
+    removed = {e.get("id"): e.get("parentId") for e in comps if e.get("id")}
+    kept = [e for e in entries if e.get("type") != "compaction"]
+    return _bridge_parents(kept, removed), len(comps)
 
 
 def _budget_entries(entries, keep_tokens, summary=""):
@@ -1201,6 +1223,16 @@ def build_fork_source(src_session, out_path, new_id, new_cwd,
       I2 链连续：从末条上溯可覆盖**全部**条目；除链首外 parentId 均指向
          产物内条目（链首显式；compaction 模式下链首的父在窗口外属边界
          语义——replay 走到此处即停）
+         **上游依据（2026-10-03 读源码核实）**：pi 构建模型上下文 = 从 leaf
+         沿 `parentId` 上溯（`core/session-manager.ts` 的
+         `buildContextEntries` → `buildSessionPath`），遇**缺失父节点就静默
+         停止**（文档只承诺"孤儿条目在 getTree 里变成根"，不修链）。
+         ⇒ **纪律：删除类操作必须桥接 parentId**（本函数有两处删除：窗口内
+         compaction、旧会话 `thinking_level_change`；两者共用
+         `_bridge_parents`）。违反的代价是**静默**的：2026-09-13 加 tlc
+         剔除时漏了桥接，直到 2026-10-03 才发现——真实主会话上从末条上溯
+         只到 65/13454 条（≈0.5%），"fork 携带主会话历史"的产品前提被破坏，
+         而 agents 仍看似能用（它们能直接读项目文件）。
       I3 replay 所用锚点（路径上最后一个 compaction 的 firstKeptEntryId）
          指向产物内条目
       I4 **声明集合 == pi replay 可见集合**（budget/compaction 两个**窗口
@@ -1297,7 +1329,15 @@ def build_fork_source(src_session, out_path, new_id, new_cwd,
     # pi 靠它回填主 pi 的模型——那是活配置，不是陈旧副本。
     # 记账：配置条目**不计入** dropped（那不是上下文内容；dropped 的口径
     # = 预算丢弃 + 规范化移除）。
-    body = [e for e in body if e.get("type") != "thinking_level_change"]
+    # **必须桥接**（2026-10-03 修）：只过滤不修链 ⇒ pi 的 leaf→parent 上溯在
+    # 这里静默停止，之前全部条目对模型不可见（实测可达 65/13454 条）。
+    # 剔除后 pi 会在边界之后补写本场档位条目。
+    tlc_removed = {e.get("id"): e.get("parentId") for e in body
+                   if e.get("type") == "thinking_level_change" and e.get("id")}
+    if tlc_removed:
+        body = _bridge_parents(
+            [e for e in body if e.get("type") != "thinking_level_change"],
+            tlc_removed)
     new_header = {
         "type": "session",
         "version": header.get("version", 3),

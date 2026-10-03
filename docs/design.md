@@ -37,6 +37,10 @@ compaction 的 `firstKeptEntryId` 起 + 其后的条目"——窗口内含 compa
 时，锚点之前的条目（含我们的 preface）会被静默丢弃。因此 budget 模式
 **移除窗口内全部 compaction 并桥接 parentId**（不变量 I4）；compaction
 模式的锚点由构造保证在产物内；full 模式是忠实拷贝，可见性同源会话。
+**同理**（2026-10-03 修）：剔除旧会话的 `thinking_level_change` 也必须
+**桥接其子条目的 parentId**——pi 的上下文构建从 leaf 沿 parentId 上溯、
+遇缺失父节点**静默停止**，只过滤不修链 ⇒ 断点之前的全部条目对模型不可见
+（实测可达 65/13454 条）。**删除类操作必配桥接**是本项目的一条硬纪律。
 
 无 compaction 的源（如引导 session）：`compaction` 全量兜底（标记 `full`），
 `budget` 仍跑折叠与统计（干净源下几乎无操作）。
@@ -820,7 +824,7 @@ fork 机制建立在 pi 的 **session jsonl 文件**上——这是**外部契�
 | CLI | `--session <path>`（须接受**任意路径文件**——我们的 fork 源在分析目录里）、`--session-id`、`--session-dir`、`--name`、`--model`/`--thinking`/`--append-system-prompt`/`--print`/`--approve` |
 | 文件布局 | `~/.pi/agent/sessions/--<cwd 编码>--/<ts>_<sid>.jsonl`；编码 = 去首尾 `/`、内部 `/`→`-`（`spec_gen.pi_sessions_dir`；`PI_SESSION_FILE` 是更稳的入口） |
 | 条目 schema | 每行一个 JSON：`type`/`id`/`parentId`/`timestamp`；消息体在 `message.{role,content}`；**未知类型一律原样透传**（`_fold_entry` 默认分支） |
-| 语义（**只复刻这两处**） | ① replay 起点 = 路径上最后一个 `compaction` 的 `firstKeptEntryId`；② 可见集合 = 该锚点之后的条目（`_normalize_entries` 据此移除窗口内 compaction 并桥接 `parentId`，不变量 I4） |
+| 语义（**只复刻这三处**） | ① replay 起点 = 路径上最后一个 `compaction` 的 `firstKeptEntryId`；② 可见集合 = 该锚点之后的条目（`_normalize_entries` 据此移除窗口内 compaction 并桥接 `parentId`，不变量 I4）；③ **上下文 = 从 leaf 沿 `parentId` 上溯**、遇缺失父节点**静默停止**（`buildContextEntries`/`buildSessionPath`）⇒ 删除条目必须桥接（`_bridge_parents`；2026-10-03 发现 tlc 剔除漏桥接时可达 65/13454 条） |
 | 条目类型 | `compaction`（读/移除）、`thinking_level_change`（剔除继承值，否则 pi 不写本场生效值）、`session_info.name`、`custom_message`（我们的边界条目） |
 
 **触碰面**（适配范围；口径 = 函数体行数，2026-09-22 摸底）：`meeting_fs` 456 行

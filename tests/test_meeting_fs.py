@@ -518,6 +518,149 @@ class TestForkSourceInvariants(unittest.TestCase):
                         self.assertEqual(dangling[0], head,
                                          f"{mode}: 悬空出现在非链首处")
 
+    # ---- I2 的**真实形状**：中途 thinking_level_change 有子条目（2026-10-03 修复的锁）----
+    def test_i2_chain_survives_stripping_thinking_level_change(self):
+        """剔除 `thinking_level_change` 时必须**桥接**其子条目的 parentId。
+
+        这是 2026-10-03 抓到的**静默 bug** 的锁：旧实现只 `filter` 掉档位条目、
+        不修链 ⇒ pi 构建上下文时（`buildContextEntries` → 从 leaf 沿 parentId
+        上溯，遇缺失父节点**静默停止**）链在此断开，其**之前全部条目对模型不可见**。
+        实测代价：真实主会话上从末条上溯只到 **65 / 13454** 条（≈0.5%）——
+        "fork 携带主会话历史"这个产品前提被静默破坏。
+
+        为什么原来的 I2 用例没抓到：fixture 里没有"**中途**的档位条目 + 有子条目"
+        这个形状（`test_config_entries_stripped` 造了形状，但只断言类型，不断言链）。
+
+        断言三件（budget / compaction / full 三模式）：
+          ① 档位条目确实被剔除；
+          ② 从末条上溯的**可达集合 == 全部条目**（这才是 pi 真正当上下文用的集合）；
+          ③ 悬空 parentId ≤1，且只允许出现在链首。
+        """
+        for mode in ("budget", "compaction", "full"):
+            with self.subTest(mode=mode):
+                with tempfile.TemporaryDirectory() as tmp:
+                    # 真实形状：m0..m5，档位条目插在中间（m2 之后），子条目接在它后面
+                    lines = [{"type": "session", "id": "src", "version": 3}]
+                    lines.append(self._msg("m0", None, "user", "内容0"))
+                    lines.append(self._msg("m1", "m0", "user", "内容1"))
+                    lines.append({"type": "thinking_level_change", "id": "t1",
+                                  "parentId": "m1",
+                                  "timestamp": "2026-09-10T00:00:30.000Z",
+                                  "thinkingLevel": "max"})
+                    lines.append(self._msg("m2", "t1", "user", "内容2"))
+                    lines.append({"type": "thinking_level_change", "id": "t2",
+                                  "parentId": "m2",
+                                  "timestamp": "2026-09-10T00:00:31.000Z",
+                                  "thinkingLevel": "high"})
+                    lines.append(self._msg("m3", "t2", "user", "内容3"))
+                    src = self._write(tmp, lines)
+                    out = os.path.join(tmp, "o.jsonl")
+                    _, err = build_fork_source(src, out, "u", "/p", mode=mode)
+                    self.assertIsNone(err)
+                    body = self._read(out)[1:]
+
+                    # ① 档位条目已剔除
+                    self.assertNotIn("thinking_level_change",
+                                     [e.get("type") for e in body])
+                    # ② 可达集合 == 全部条目（pi 的上下文 = 这条链）
+                    by_id = {e.get("id"): e for e in body}
+                    seen, cur = set(), body[-1]
+                    while cur is not None:
+                        seen.add(cur.get("id"))
+                        pid = cur.get("parentId")
+                        cur = by_id.get(pid) if pid else None
+                    ids = {e.get("id") for e in body}
+                    self.assertEqual(seen, ids,
+                                     f"{mode}: 链未覆盖全部条目（pi 会截断上下文）")
+                    # ③ 悬空只允许出现在链首
+                    dangling = [e.get("id") for e in body
+                                if e.get("parentId") is not None
+                                and e.get("parentId") not in ids]
+                    self.assertLessEqual(len(dangling), 1, f"{mode}: 多处悬空")
+                    # 桥接语义：m2 的父应指向 t1 的父（m1），而不是悬空
+                    if "m2" in by_id:
+                        self.assertEqual(by_id["m2"].get("parentId"), "m1",
+                                         f"{mode}: 未上溯桥接（m2 仍指向被删的 t1）")
+
+    # ---- 2026-10-03 修：删除类操作必须桥接 parentId（上游语义 + 静默 bug）----
+    def test_deletion_ops_must_bridge_parents(self):
+        """纪律锁：**任何删除条目的操作都必须桥接 parentId**（上游语义要求）。
+
+        上游语义（2026-10-03 读源码核实，`core/session-manager.ts`）：pi 构建
+        模型上下文 = 从 leaf 沿 `parentId` **上溯**（`buildContextEntries` →
+        `buildSessionPath`），遇**缺失的父节点就静默停止**（文档只承诺"孤儿条目
+        在 getTree 里变成根"，**不修复链**）。所以"删条目不修链"= 该条之前的
+        全部条目对模型不可见，且**零信号**。
+
+        本仓有两处删除：① 窗口内 compaction（`_normalize_entries`）② 旧会话的
+        `thinking_level_change`（剔除，2026-09-13 加；**2026-10-03 才发现漏了桥接**
+        ——实测真实主会话从末条上溯只到 65/13454 条）。
+
+        本用例用"两处删除同时存在"的源锁住二者都被桥接（只测一处的形状会漏）。
+        """
+        for mode in ("budget", "compaction", "full"):
+            with self.subTest(mode=mode):
+                with tempfile.TemporaryDirectory() as tmp:
+                    lines = [{"type": "session", "id": "src", "version": 3}]
+                    lines.append(self._msg("m0", None, "user", "内容0"))
+                    lines.append({"type": "thinking_level_change", "id": "t1",
+                                  "parentId": "m0",
+                                  "timestamp": "2026-09-10T00:00:10.000Z",
+                                  "thinkingLevel": "max"})
+                    lines.append(self._msg("m1", "t1", "user", "内容1"))
+                    # compaction 也插在链中间（另一处删除）
+                    lines.append({"type": "compaction", "id": "c1",
+                                  "parentId": "m1",
+                                  "timestamp": "2026-09-10T00:00:20.000Z",
+                                  "summary": "摘要", "firstKeptEntryId": "m1"})
+                    lines.append(self._msg("m2", "c1", "user", "内容2"))
+                    lines.append({"type": "thinking_level_change", "id": "t2",
+                                  "parentId": "m2",
+                                  "timestamp": "2026-09-10T00:00:30.000Z",
+                                  "thinkingLevel": "high"})
+                    lines.append(self._msg("m3", "t2", "user", "内容3"))
+                    src = self._write(tmp, lines)
+                    out = os.path.join(tmp, "o.jsonl")
+                    _, err = build_fork_source(src, out, "u", "/p", mode=mode)
+                    self.assertIsNone(err)
+                    body = self._read(out)[1:]
+                    types = [e.get("type") for e in body]
+                    # compaction 只在 budget 移除（compaction 模式保留锚点本身、
+                    # full 是源忠实拷贝——见 build_fork_source docstring 的 I4）
+                    if mode == "budget":
+                        self.assertNotIn("compaction", types, mode)
+                    self.assertNotIn("thinking_level_change", types, mode)
+                    by_id = {e.get("id"): e for e in body}
+                    seen, cur = set(), body[-1]
+                    while cur is not None:
+                        seen.add(cur.get("id"))
+                        pid = cur.get("parentId")
+                        cur = by_id.get(pid) if pid else None
+                    self.assertEqual(seen, {e.get("id") for e in body},
+                                     f"{mode}: 删除后链断裂（pi 会静默截断上下文）")
+
+    def test_bridge_parents_walks_consecutive_removals(self):
+        """`_bridge_parents` 的连续删除上溯 + 链首置 None（纯函数单测）。"""
+        import meeting_fs
+        entries = [
+            {"type": "message", "id": "a", "parentId": None},
+            {"type": "message", "id": "b", "parentId": "a"},
+            {"type": "message", "id": "c", "parentId": "b"},
+            # x 的父 b、y 的父 x：两个都被删 ⇒ c 应上溯到 a
+            {"type": "message", "id": "x", "parentId": "b"},
+            {"type": "message", "id": "y", "parentId": "x"},
+            {"type": "message", "id": "d", "parentId": "y"},
+        ]
+        removed = {"x": "b", "y": "x"}
+        kept = [e for e in entries if e["id"] not in removed]
+        out = meeting_fs._bridge_parents(kept, removed)
+        by_id = {e["id"]: e for e in out}
+        self.assertEqual(by_id["d"]["parentId"], "b")   # 连续上溯
+        # 上溯出产物 ⇒ 链首 None
+        out2 = meeting_fs._bridge_parents(
+            [{"type": "message", "id": "z", "parentId": "gone"}], {})
+        self.assertIsNone(out2[0]["parentId"])
+
     # ---- I3 replay 使用的锚点必须在产物内（compaction 模式）----
     def test_i3_replay_anchor_inside(self):
         with tempfile.TemporaryDirectory() as tmp:
