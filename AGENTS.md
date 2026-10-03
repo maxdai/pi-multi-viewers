@@ -39,6 +39,7 @@ extensions/multi-viewers/  【单一扩展单元】index.ts = 四命令 + shared
 prompts/multi-viewers-setup.md  /multi-viewers-setup 建视角入口（建议→你定→**mv.sh --set-viewer** 落盘→给审）
                            # 那四条本来写进 prompt 的纪律（命名/不覆盖/非空/校验）改由命令保证
 docs/design.md       设计文档（fork 源模式与规模口径 + 决策记录）
+docs/durable-subagent-rebuild.md  durable subagent 重构的**可行性提要**（非计划；触发条件固定后再议）
 package.json         npm 包 pi-multi-viewers（pi.prompts 注册；**版本号唯一事实源**）
 templates/           AGENTS.md.tpl / agent.md.tpl / gitignore.tpl / spec-readme.md.tpl
 viewers/             示例视角（效率/简单/铁律——仅是形态示例，视角内容由用户按需自定）

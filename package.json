@@ -22,6 +22,7 @@
     "README.md",
     "AGENTS.md",
     "docs/design.md",
+    "docs/durable-subagent-rebuild.md",
     "docs/test-methodology.md",
     "docs/examples",
     "docs/reviews"
