@@ -27,6 +27,12 @@
 #       --print "ok"
 #   ./scripts/pi-probe.sh --approved "..." --no-extensions --print "ok"
 #
+#   跑「自己会 spawn pi 的入口」（如 python 生产函数）时用 --exec：同一道闸门 +
+#   同一份账本，只是被执行的命令不是 pi 本身。2026-10-08 加：此前两次探针/验证
+#   都是「手动跑一个 python 脚本、事后手写账本」，等于绕过闸门——机制上补掉，
+#   不靠自觉。
+#   ./scripts/pi-probe.sh --approved "<凭据>" --exec "<说明>" python3 /tmp/x.py
+#
 # 退出码 = pi 的退出码（闸门拒绝时为 2）。
 set -u
 
@@ -51,6 +57,15 @@ if [ "$#" -gt 0 ] && [ "$1" = "--approved" ]; then
     APPROVED="${2:-}"
     shift 2 2>/dev/null || true
 fi
+
+# --exec "<说明>" <命令...>：执行「会自己 spawn pi 的入口」（闸门与账本不变）
+EXEC=1
+EXEC_LABEL=""
+if [ "$#" -gt 0 ] && [ "$1" = "--exec" ]; then
+    EXEC_LABEL="${2:-}"
+    shift 2 2>/dev/null || true
+    EXEC=0
+fi
 if [ -z "$APPROVED" ]; then
     echo "拒绝执行：没有 --approved（= 未取得用户当次同意）。" >&2
     usage
@@ -62,7 +77,11 @@ if [ "$#" -eq 0 ]; then
     exit 2
 fi
 
-cmd_brief="pi $*"
+if [ "$EXEC" -eq 0 ]; then
+    cmd_brief="exec[$EXEC_LABEL] $*"
+else
+    cmd_brief="pi $*"
+fi
 
 BEFORE="$(mktemp)"
 AFTER="$(mktemp)"
@@ -70,7 +89,11 @@ trap 'rm -f "$BEFORE" "$AFTER"' EXIT
 find "$SESS_DIR" -name '*.jsonl' -print 2>/dev/null | sort > "$BEFORE"
 
 T0=$(date +%s)
-pi "$@"
+if [ "$EXEC" -eq 0 ]; then
+    "$@"
+else
+    pi "$@"
+fi
 rc=$?
 T1=$(date +%s)
 
@@ -125,6 +148,8 @@ print(f"[pi-probe] session 已登记: {path}")
 print(f"[pi-probe]   session_id={sid} cwd={cwd}（用完删掉该文件）")
 PYEOF
     done
+elif [ "$EXEC" -eq 0 ]; then
+    echo "[pi-probe] --exec 模式：不做 session 登记（入口自己 spawn pi，可能用 --session 既有文件）"
 else
     echo "[pi-probe] 未新建 session（用了 --session/--session-id 续接既有会话？）"
 fi
