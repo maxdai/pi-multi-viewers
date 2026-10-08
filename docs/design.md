@@ -818,15 +818,39 @@ commit 是溯源记录、本节是长期引用点——不并存两份权威值�
     `--append-system-prompt`（视角文件、work-X/AGENTS.md）+ **未传** `--no-context-files`）
     ⇒ **剥掉快照不影响 AGENTS.md/协议/视角任务书**；去掉的是主 pi 的旧 sections 与 `toolsAdded`。
     **实现路径（复用现有 compaction 模式，不做新的链式改写）**：
-    ① setup（`--start`，每场**一次**、三视角共享，避免三进程竞争）：复制主 session →
-       `pi --mode rpc --session <副本>` + 本项目 flag → `{"type":"compact","customInstructions":"<定向指令>"}`
-       ⇒ 得"摘要 + pi 选的锚点"（RPC 通道已实测：能对指定副本工作、只读命令不写盘）；
-    ② `meeting_fs.retarget_compaction_anchor(base, keep_tokens)`：把锚点**重设为我们自己的**近端
-       窗口首条（从尾部按 `_est_tokens` 走，值取 L1 旋钮）⇒ 之后走**现有** `mode="compaction"`
-       切片（`entries[锚点索引:]`，天然含 compaction 条目于其自然位置）⇒ **无需删除条目、无需桥接**；
-    ③ 各 agent 首唤：在 **base** 上跑 `build_fork_source(mode="compaction")` → 注入 handoff + 边界；
-    ④ 摘要原文落盘（分析目录）+ header 标注"含 LLM 摘要" + 报告一行（摘要 est / 窗口 est / 摘要模型）；
+    ① **先造"有界输入"**（`meeting_fs.build_summary_input`，纯本地、零 LLM）：取主 session 的
+       **可见集合**（= 主 pi 自己看到的那些条目）→ 只留参与上下文的条目（`message` 非 system、
+       `custom_message`；`context_edit(replacement=null)` 的目标条目一并隐去）→ **从尾部按
+       `_est_tokens` 累计到 `前部 K + 尾部 T`** → 桥接（窗口丢掉的更早条目也算删除，链首置 None）
+       → 写成一份新 session（header 自描述：窗口大小 + 丢弃数）；
+    ② setup（`--start`，每场**一次**、三视角共享，避免三进程竞争）：`pi --mode rpc --session <该文件>`
+       + `--thinking off` + 本项目 flag → `{"type":"compact","customInstructions":"<定向指令>"}`
+       ⇒ pi **就地**把它压成"摘要 + 近端窗口"（该文件即 base —— 分成"输入文件 + 产物文件"两个路径
+       曾让产物根本不存在，测试当场抓到）；
+    ③ 各 agent 首唤：在 **base** 上跑 `build_fork_source(mode="summary")` → 注入 handoff + 边界；
+    ④ 摘要原文落盘（分析目录）+ header 标注 + 报告一行（摘要 est / 窗口 est / 摘要模型 / 限幅丢弃数）；
     ⑤ 任一步失败或超时 ⇒ **回退当前 budget 行为**（可见日志、不阻断分析）。
+    **实测三条（2026-10-08 LLM 验证，均已复现或已修）**：
+    ① **前部必须限幅**：主 session（37.8MB / 14,247 条）的可见集合是 356 条 / **1.34MB /
+       est≈250k tokens**，pi 的 compact 要**通读**其中 310 条 / 1.2MB / est≈208k tokens
+       —— 一次摘要调用 **>900s 没返回**（吃了 `COMPACT_TIMEOUT_SEC`）。项目文件读不完不是
+       问题，"压缩历史"这件事本身变成超长调用才是问题 ⇒ 前部 K 进启动默认值
+       （`summary-front`，默认 80000），窗口 = K + T = 100k est（实测取 107 条 / 0.43MB）。
+    ② **摘要调用的档位继承会话**（pi `_getSummarizationRequestAuth` 返回
+       `thinkingLevel: this.thinkingLevel`）——第一次验证传了 `high`，摘要器在做**高强度推理**，
+       慢上加慢 ⇒ 摘要进程固定 `--thinking off`（机械任务不需要推理）。
+    ③ **RPC 的 stdin 必须保持打开**：读端 stdin 收到 EOF 就开始退出并 **abort 正在进行的压缩**
+       —— 用 `communicate()`（写完即关 stdin）时 0.8s 就返回
+       `Turn prefix summarization failed: This operation was aborted`（看起来像模型/协议问题，
+       其实是**我们提前关了它的输入**）。现在：保持 stdin 打开 + 后台线程收 stdout +
+       拿到响应才关；输出结束（进程退出）与真超时用哨兵区分。
+    另两条本轮发现（影响设计）：**主 session 的 31 条 compaction 全是 MC 写的占位摘要**
+    （107–221 字符的标题列表，`fromHook=true`）⇒ **没有可复用的"前情摘要"**，前部必须真读一遍；
+    **尾部 T 的作用域**：pi 的 `keepRecentTokens` 是用户级设置（改它会波及主 pi）⇒ 我们用一个
+    **cwd 级项目设置**（`<分析目录>/summary-cwd/.pi/settings.json`，pi 会 `deepMergeSettings`
+    把项目设置盖在全局之上）+ 摘要进程 `cwd=` 那个目录 ⇒ **只影响这一个进程**。
+    对照组（小会话 718KB / `tokensBefore` 110k）：真 pi compact 成功，摘要 est 986 /
+    窗口 est 25702 / 锚点前 42 条被覆盖 ⇒ 机制本身成立，问题只在前部规模。
     **布局约束（由 ① 推得）**：`[被摘要覆盖的历史] → [锚点..近端窗口] → [compaction 条目] →
     [handoff]`（= pi 自身的自然布局）；模型侧渲染顺序仍是"**摘要在前**"。
     **`preface` 必须移到 compaction 之后**（否则它位于 compaction 之前会被隐藏），措辞从

@@ -47,6 +47,7 @@ USAGE = f"""用法:
   {PROG} --start <spec目录> [--fork-mode budget|summary|compaction|full]
   {PROG} --start <spec目录> [--extension-policy none|mc-tools|all]
   {PROG} --start <spec目录> [--max-meeting N] [--max-rr N] [--stall-timeout S]
+  {PROG} --start <spec目录> [--summary-front N]   # 定向摘要的前部规模（仅 forkMode=summary）
                              # 配额：建环境时固化进 protocol.json（默认 15 / 7 / 600）
   {PROG} --status  [dir]
   {PROG} --report  [dir]

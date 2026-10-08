@@ -34,6 +34,17 @@ RESULT_MD = "result.md"
 COMPACT_BASE_NAME = "context-base.jsonl"   # pi compact 过的副本（= fork 源的源）
 COMPACT_BASE_STATS = "context-base.json"   # 摘要/窗口规模的记账（报告读它）
 
+# 摘要器读多少（决策 24）。两个量（tokens est）：
+#   front —— 会被摘要掉的前部规模（**可配**，进 STARTUP_DEFAULTS）
+#   tail  —— 交给 pi 原样保留的尾部（= pi 的 `compaction.keepRecentTokens`；
+#            我们通过 cwd 级项目设置注入同名值，作用域仅限摘要进程）
+# 为什么必须给前部设上限（2026-10-08 实测）：pi 的 compact 会通读"上一次
+# compaction 之后"的全部消息 —— 本仓主 session 上是 310 条 / 1.2MB /
+# est≈208k tokens，一次摘要 >900s 不返回。**压缩历史这件事本身不该变成
+# 一次超长调用**，所以前部由我们限幅，超出的部分如实记账（不假装覆盖）。
+DEFAULT_SUMMARY_FRONT_TOKENS = 80000
+SUMMARY_KEEP_TAIL_TOKENS = 20000
+
 # result.md 的**有效性阈值**（字节）：存在但小于它 → 视为未生成（LLM 可能
 # 写空文件/仅 frontmatter——只查存在性会退化为空提交，审核 A2）。
 RESULT_MD_MIN_BYTES = 50
@@ -100,6 +111,9 @@ STARTUP_DEFAULTS = {            # 键名 → 内置默认（引用上方常量�
     "max-meeting": DEFAULT_MAX_MEETING,
     "max-rr": DEFAULT_MAX_RR,
     "stall-timeout": DEFAULT_STALL_TIMEOUT,
+    # 定向摘要（forkMode=summary）的前部规模：越大 = 更多历史被摘要覆盖、
+    # 也更贵（摘要器要通读这么多）；越小 = 更多更早条目被丢弃。
+    "summary-front": DEFAULT_SUMMARY_FRONT_TOKENS,
 }
 
 
@@ -921,6 +935,9 @@ BUILTIN_MCP_ENTRY = "builtin:mcp"
 BUILTIN_CODEMODE_ENTRY = "builtin:codemode"
 
 FORK_MODES = ("budget", "compaction", "summary", "full")
+# summary = 定向摘要（决策 24）：远端摘要（`DEFAULT_SUMMARY_FRONT_TOKENS` 限幅）
+# + 近端原始窗口（`SUMMARY_KEEP_TAIL_TOKENS`）——见 build_summary_input /
+# finalize_compaction_base / generate_compact_base。
 DEFAULT_FORK_MODE = "budget"
 #
 # 版本守卫：值域校验在 build_fork_source 入口（open 之前）做——非法值
@@ -1376,6 +1393,115 @@ def build_fork_source(src_session, out_path, new_id, new_cwd,
         for e in body:
             f.write(json.dumps(e, ensure_ascii=False) + "\n")
     return len(body) + 1, None
+
+def build_summary_input(src_session, out_path, window_tokens):
+    """把主 session 裁成"摘要器输入"：**只保留最近的可见条目**（决策 24）。
+
+    为什么需要：pi 的 compact 自己会通读"上一次 compaction 之后的全部消息"
+    （`prepareCompaction`：`boundaryStart` 起，到 `findProjectedCutPoint` 的
+    切点），这个量在主 session 上可以非常大（2026-10-08 实测 208k est tokens，
+    一次调用 >900s）。我们对**前部**设上限，超出的更早条目如实记账（stats 的
+    `dropped`），不假装覆盖。
+
+    取数规则（**主 pi 自己看到的上下文**的子集——语义保守，不新增可见性）：
+      ① 可见集合：从**最后一条 compaction** 的锚点起（pi `buildContextEntries`
+         语义：compaction 之前的条目默认不可见）到文件末尾；锚点缺失时取
+         compaction 之后；
+      ② 只留**参与上下文**的条目：`message`（role != system）与 `custom_message`
+         （pi：`Plain custom entries are display/state entries and do not
+         participate in context`）；`compaction` / `session_info` /
+         `model_change` / `thinking_level_change` / `system` 等都不进摘要输入；
+      ③ `context_edit`（`replacement is None`，即"从上下文里隐去"）的**目标条目
+         一并去掉**（对齐主 pi 的视图）；其余编辑形态不处理（本轮实测 6 条全是
+         null 形态）——**已知边界**；
+      ④ 从尾部按 `_est_tokens` 累计到 `window_tokens`，取这一段（与 budget 的
+         trim 同一套走法）；
+      ⑤ 重建 parentId 链：删除处桥接、指到产物外的一律置 None
+         （`_bridge_parents`；**删除必桥接**是 I2 纪律）。
+
+    假设（与 build_fork_source 同）：文件顺序即路径顺序——fork 源是我们自己写的
+    线性文件，主 session 实测 14246/14247 条在叶子路径上。
+
+    返回 (stats, error)；stats：entries / est / dropped / window_tokens /
+    source_est（源可见集合规模，用于报告"限幅掉了多少"）。
+    """
+    try:
+        with open(src_session, encoding="utf-8") as f:
+            entries = [json.loads(l) for l in f if l.strip()]
+    except (OSError, ValueError) as e:
+        return None, f"源 session 读取失败: {e}"
+    header = next((e for e in entries if e.get("type") == "session"), None)
+    if header is None:
+        return None, "源 session 无 header"
+
+    # ① 可见集合
+    ci = None
+    for i, e in enumerate(entries):
+        if e.get("type") == "compaction":
+            ci = i
+    if ci is None:
+        visible = entries[1:]
+    else:
+        ids = {e.get("id"): i for i, e in enumerate(entries) if e.get("id")}
+        ai = ids.get(entries[ci].get("firstKeptEntryId"))
+        visible = entries[(ai if ai is not None else ci + 1):ci] + entries[ci + 1:]
+
+    # ②③ 过滤（删除类一律登记进 removed，供桥接）
+    hidden = {e.get("targetId") for e in visible
+              if e.get("type") == "context_edit" and e.get("replacement") is None}
+    removed, kept_all = {}, []
+    for e in visible:
+        eid, etype = e.get("id"), e.get("type")
+        is_system = (e.get("message") or {}).get("role") == "system"
+        if etype in ("message", "custom_message") and not is_system \
+                and eid not in hidden:
+            kept_all.append(e)
+        else:
+            removed[eid] = e.get("parentId")
+
+    # ④ 尾部窗口（与 budget trim 同一走法）
+    acc, cut = 0, len(kept_all)
+    for i in range(len(kept_all) - 1, -1, -1):
+        t = _est_tokens(_entry_text(kept_all[i]))
+        if i < len(kept_all) - 1 and acc + t > window_tokens:
+            cut = i + 1
+            break
+        acc += t
+        cut = i
+    kept = kept_all[cut:]
+    # 被窗口丢掉的更早条目**等同于删除**（它们不在产物里）⇒ 必须登记进 removed，
+    # 否则保留下来的首条会指向产物外的父节点（链首悬空；语义上是"边界"，但这里
+    # 我们既然是自己裁的，就按纪律桥接成链首 None——I2「删除必桥接」）。
+    for e in kept_all[:cut]:
+        removed[e.get("id")] = e.get("parentId")
+
+    # ⑤ 桥接 + 写盘（header 自描述，便于事后核验这份输入到底是什么）
+    body = _bridge_parents(kept, removed) if removed else kept
+    new_header = {
+        "type": "session",
+        "version": header.get("version", 3),
+        "id": str(uuid.uuid4()),
+        "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "cwd": header.get("cwd"),
+        "parentSession": src_session,
+        "summaryInput": True,
+        "summaryInputWindowTokens": window_tokens,
+        "summaryInputDropped": len(kept_all) - len(kept),
+    }
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    with open(out_path, "w", encoding="utf-8") as f:
+        f.write(json.dumps(new_header, ensure_ascii=False) + "\n")
+        for e in body:
+            f.write(json.dumps(e, ensure_ascii=False) + "\n")
+    stats = {
+        "entries": len(body),
+        "est": sum(_est_tokens(_entry_text(e)) for e in body),
+        "dropped": len(kept_all) - len(kept),
+        "window_tokens": window_tokens,
+        "source_est": sum(_est_tokens(_entry_text(e)) for e in kept_all),
+    }
+    return stats, ""
+
 
 def finalize_compaction_base(session_file):
     """把"pi 自己 compact 过的会话副本"整理成 base session（决策 24）。

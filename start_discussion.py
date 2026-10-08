@@ -354,7 +354,8 @@ def setup_environment(args, participants, base, spec_dir=None,
     # 误当成"显式给了默认值"（2026-09-27 用户要求：不能有强制设置配额的操作）。
     startup, startup_src, startup_notes = spec_gen.resolve_startup(
         {"max-meeting": args.max_meeting, "max-rr": args.max_rr,
-         "stall-timeout": args.stall_timeout},
+         "stall-timeout": args.stall_timeout,
+         "summary-front": getattr(args, "summary_front", None)},
         spec_dir=spec_dir)
     for _n in startup_notes:
         print(f"[startup] {_n}")
@@ -383,8 +384,9 @@ def setup_environment(args, participants, base, spec_dir=None,
         _stats, _err = meeting_loop.generate_compact_base(
             args.fork_source,
             os.path.join(base, meeting_fs.COMPACT_BASE_NAME),
-            _m0 or dm, _v0 or meeting_fs.DEFAULT_THINKING,
-            spec_topic or args.topic or "")
+            _m0 or dm,
+            spec_topic or args.topic or "",
+            front_tokens=startup["summary-front"])
         if _err:
             print(f"[summary] 定向摘要生成失败 → 本次回落 budget：{_err}")
             _proto_path = os.path.join(wa, "protocol.json")
@@ -395,8 +397,10 @@ def setup_environment(args, participants, base, spec_dir=None,
                 json.dump(_proto, _f, indent=2, ensure_ascii=False)
         else:
             print(f"[summary] 定向摘要就绪：摘要 est≈{_stats['summary_est']} ｜ "
-                  f"窗口 est≈{_stats['window_est']} ｜ 已摘要条目 "
-                  f"{_stats['dropped_entries']} ｜ 模型 {_stats.get('model') or '(默认)'}")
+                  f"窗口 est≈{_stats['window_est']}（尾部声明 {_stats['keep_tail']}）"
+                  f" ｜ 摘要器读了 {_stats['input_entries']} 条/est≈{_stats['input_est']}"
+                  f" ｜ 前部限幅丢弃 {_stats['input_dropped']} 条（源可见 est≈{_stats['source_est']}）"
+                  f" ｜ 模型 {_stats.get('model') or '(默认)'}")
 
     with open(os.path.join(wa, "question.md"), "w") as f:
         if spec_question is not None:
@@ -637,6 +641,11 @@ def main():
                         help="RR 阶段轮次配额（starter；不给则用默认值配置/spec）")
     parser.add_argument("--stall-timeout", type=int, default=None,
                         help="无进展超时兜底（秒；不给则用默认值配置/spec）")
+    parser.add_argument("--summary-front", type=int, default=None,
+                        help="定向摘要（--fork-mode summary）的**前部**规模"
+                             "（tokens est，默认 %d）：越大 = 更多历史被摘要覆盖、"
+                             "也更贵；越小 = 更多更早条目被丢弃"
+                             % meeting_fs.DEFAULT_SUMMARY_FRONT_TOKENS)
     parser.add_argument("--spec-gen", metavar="DIR", default=None,
                         help="生成 spec 骨架到 DIR（如 --spec-gen myspec/；不需 --dir）")
     parser.add_argument("--spec", default=None,

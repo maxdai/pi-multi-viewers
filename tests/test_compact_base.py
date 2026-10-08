@@ -135,6 +135,22 @@ class TestSummaryForkMode(unittest.TestCase):
         self.assertIn("summary", meeting_fs.FORK_MODES)
 
 
+def _append_compaction(session_file):
+    """模拟 pi 的产出一半：把最后一条消息之前的窗口压成一条 compaction 条目。"""
+    with open(session_file, encoding="utf-8") as f:
+        entries = [json.loads(l) for l in f if l.strip()]
+    body = [e for e in entries if e.get("type") == "session"]
+    msgs = [e for e in entries if e.get("type") != "session"]
+    if not msgs:
+        return
+    body.append({"type": "compaction", "id": "fake-c", "parentId": msgs[-1]["id"],
+                 "timestamp": "2026-01-03T00:00:00Z", "summary": "## Goal\n" + "s" * 300,
+                 "firstKeptEntryId": msgs[-1]["id"], "tokensBefore": 123})
+    with open(session_file, "w", encoding="utf-8") as f:
+        for e in body:
+            f.write(json.dumps(e, ensure_ascii=False) + "\n")
+
+
 class _Hang:
     """永不产出、永不 EOF 的 stdout（造"真超时"用）。"""
 
@@ -180,16 +196,25 @@ class TestGenerateCompactBase(unittest.TestCase):
             self.killed = True
             self.returncode = -9
 
-    def _patch_proc(self, proc):
+    def _patch_proc(self, proc, session=None):
+        """假 Popen：真的 pi 会**就地**把 compaction 条目写进 --session 文件，
+        这里照做（否则 finalize_compaction_base 读不到产物——测试装置要对齐生产）。
+        写入必须发生在 **Popen 被调用的那一刻**（此前输入文件还没造出来）。"""
+
+        def _spawn(*_a, **_kw):
+            if session is not None:
+                _append_compaction(session)
+            return proc
+
         return mock.patch.object(meeting_loop.subprocess, "Popen",
-                                 return_value=proc)
+                                 side_effect=_spawn)
 
     def test_success_writes_stats_and_strips(self):
         ok = json.dumps({"id": "compact", "type": "response",
                          "command": "compact", "success": True})
-        with self._patch_proc(self._Proc(ok + "\n")):
+        with self._patch_proc(self._Proc(ok + "\n"), session=self.out):
             stats, err = meeting_loop.generate_compact_base(
-                self.main, self.out, "m1", "high", "测试主题")
+                self.main, self.out, "m1", "测试主题")
         self.assertEqual(err, "")
         self.assertEqual(stats["model"], "m1")
         # base 落盘 + 快照已剥（finalize 真跑了）
@@ -203,6 +228,11 @@ class TestGenerateCompactBase(unittest.TestCase):
             st = json.load(f)
         self.assertEqual(st["model"], "m1")
         self.assertIn("instructions", st)
+        self.assertEqual(st["thinking"], "off")          # 摘要不推理（实测教训）
+        self.assertIn("input_est", st)                   # 限幅记账
+        self.assertIn("input_dropped", st)
+        self.assertEqual(st["front_tokens"],
+                         meeting_fs.DEFAULT_SUMMARY_FRONT_TOKENS)
 
     def test_compact_failure_is_reported(self):
         bad = json.dumps({"id": "compact", "type": "response",
@@ -210,25 +240,26 @@ class TestGenerateCompactBase(unittest.TestCase):
                           "error": "Nothing to compact (session too small)"})
         with self._patch_proc(self._Proc(bad + "\n", rc=1)):
             stats, err = meeting_loop.generate_compact_base(
-                self.main, self.out, "m1", "high", "t")
+                self.main, self.out, "m1", "t")
         self.assertIsNone(stats)
         self.assertIn("compact 未成功", err)
         self.assertIn("Nothing to compact", err)
 
     def test_timeout_is_reported(self):
         # 生产超时压到 0.2s（否则本用例要等 COMPACT_TIMEOUT_SEC）
+        proc = self._Proc(hang=True)
         with mock.patch.object(meeting_loop, "COMPACT_TIMEOUT_SEC", 0.2), \
-                self._patch_proc(self._Proc(hang=True)) as mk:
+                self._patch_proc(proc, session=self.out):
             stats, err = meeting_loop.generate_compact_base(
-                self.main, self.out, "m1", "high", "t")
-        self.assertTrue(mk.return_value.killed)
+                self.main, self.out, "m1", "t")
+        self.assertTrue(proc.killed)
         self.assertIsNone(stats)
         self.assertIn("超时", err)
 
     def test_no_response_is_failure(self):
         with self._patch_proc(self._Proc("not json\n")):
             stats, err = meeting_loop.generate_compact_base(
-                self.main, self.out, "m1", "high", "t")
+                self.main, self.out, "m1", "t")
         self.assertIsNone(stats)
         self.assertIn("compact 未成功", err)
 
@@ -276,6 +307,160 @@ class TestFirstWakeSourceSelection(unittest.TestCase):
         self.assertEqual(header["forkSourceMode"], "budget")
         joined = " ".join(str(c) for c in lg.call_args_list)
         self.assertIn("base 不存在", joined)
+
+
+class TestBuildSummaryInput(unittest.TestCase):
+    """`meeting_fs.build_summary_input`：交给摘要器的**有界**输入。
+
+    这是本轮的核心防线——pi 的 compact 会通读"上一次 compaction 之后的全部
+    消息"，主 session 上实测 est≈208k tokens（一次调用 >900s 不返回）。这里
+    只保留最近 `window_tokens` 的**可见**条目，其余如实记账。
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="mvsin-")
+        self.src = os.path.join(self.tmp, "main.jsonl")
+        self.out = os.path.join(self.tmp, "base.jsonl")
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _write(self, n=6, with_compaction=True, extra=()):
+        entries = [{"type": "session", "version": 3, "id": "s1",
+                    "timestamp": "2026-01-01T00:00:00Z", "cwd": "/proj"}]
+        parent = None
+        for i in range(n):
+            e = _entry(f"m{i}", parent)
+            entries.append(e)
+            parent = f"m{i}"
+        for e in extra:                      # 插在 compaction 之后
+            entries.append(e)
+        if with_compaction:
+            entries.append({"type": "compaction", "id": "c1", "parentId": parent,
+                            "timestamp": "2026-01-02T00:00:00Z", "summary": "S",
+                            "firstKeptEntryId": "m3", "tokensBefore": 9})
+        with open(self.src, "w", encoding="utf-8") as f:
+            for e in entries:
+                f.write(json.dumps(e, ensure_ascii=False) + "\n")
+        return entries
+
+    def _load(self):
+        with open(self.out, encoding="utf-8") as f:
+            return [json.loads(l) for l in f if l.strip()]
+
+    def test_window_bounds_and_accounts(self):
+        self._write(n=6)
+        stats, err = meeting_fs.build_summary_input(self.src, self.out, 350)
+        self.assertEqual(err, "")
+        out = self._load()
+        header, body = out[0], out[1:]
+        # 每条 300 字符 ≈ 100 est；350 预算 ⇒ 只留最后 3 条（m3,m4,m5）
+        self.assertEqual([e["id"] for e in body], ["m3", "m4", "m5"])
+        self.assertEqual(stats["dropped"], 0)          # 可见集合只有 m3..m5（锚点 m3）
+        self.assertTrue(header["summaryInput"])
+        self.assertEqual(header["summaryInputWindowTokens"], 350)
+
+    def test_chain_is_valid_and_head_is_none(self):
+        self._write(n=6)
+        meeting_fs.build_summary_input(self.src, self.out, 200)
+        body = self._load()[1:]
+        self.assertIsNone(body[0]["parentId"])
+        ids = {e["id"] for e in body}
+        for e in body:
+            self.assertIn(e["parentId"], ids | {None})   # 链不断（I2）
+
+    def test_keeps_only_context_participating_entries(self):
+        extra = [
+            _entry("sys1", "m5", role="system", text="主 pi 的 system prompt"),
+            {"type": "custom", "id": "cu1", "parentId": "m5",
+             "timestamp": "2026-01-02T00:00:00Z", "customType": "x", "data": {}},
+            {"type": "thinking_level_change", "id": "tlc1", "parentId": "m5",
+             "timestamp": "2026-01-02T00:00:00Z", "level": "high"},
+            {"type": "custom_message", "id": "cm1", "parentId": "m5",
+             "timestamp": "2026-01-02T00:00:00Z", "customType": "note",
+             "content": "note", "display": True},
+        ]
+        self._write(n=6, extra=extra)
+        meeting_fs.build_summary_input(self.src, self.out, 10 ** 6)
+        body = self._load()[1:]
+        kinds = [e["id"] for e in body]
+        self.assertNotIn("sys1", kinds)        # system 不进摘要输入
+        self.assertNotIn("cu1", kinds)         # 非上下文条目
+        self.assertNotIn("tlc1", kinds)
+        self.assertIn("cm1", kinds)            # custom_message 是上下文
+
+    def test_context_edit_hides_target(self):
+        """`context_edit(replacement=null)` = 从上下文隐去 ⇒ 目标条目也要去掉。"""
+        extra = [{"type": "context_edit", "id": "ce1", "parentId": "m5",
+                  "timestamp": "2026-01-02T00:00:00Z", "targetId": "m5",
+                  "replacement": None}]
+        self._write(n=6, extra=extra)
+        meeting_fs.build_summary_input(self.src, self.out, 10 ** 6)
+        body = self._load()[1:]
+        self.assertNotIn("m5", [e["id"] for e in body])
+        ids = {e["id"] for e in body}
+        for e in body:                          # 隐去后链仍完整
+            self.assertIn(e["parentId"], ids | {None})
+
+    def test_no_compaction_means_whole_file(self):
+        self._write(n=4, with_compaction=False)
+        stats, err = meeting_fs.build_summary_input(self.src, self.out, 10 ** 6)
+        self.assertEqual(err, "")
+        self.assertEqual([e["id"] for e in self._load()[1:]],
+                         ["m0", "m1", "m2", "m3"])
+        self.assertEqual(stats["dropped"], 0)
+
+    def test_reports_source_size_for_visible_accounting(self):
+        self._write(n=6)
+        stats, err = meeting_fs.build_summary_input(self.src, self.out, 100)
+        self.assertEqual(err, "")
+        self.assertEqual(stats["window_tokens"], 100)
+        self.assertGreaterEqual(stats["source_est"], stats["est"])
+
+
+class TestSummaryProcessShape(unittest.TestCase):
+    """摘要进程的命令形状与作用域配置（`--thinking off` / cwd 级项目设置）。"""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="mvshape-")
+        self.main = os.path.join(self.tmp, "main.jsonl")
+        self.out = os.path.join(self.tmp, "base.jsonl")
+        _write_session(self.main, n_msgs=4)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_cmd_and_scoped_settings(self):
+        seen = {}
+        proc = TestGenerateCompactBase._Proc(
+            json.dumps({"command": "compact", "success": True}) + "\n")
+
+        def _spawn(cmd, **kw):
+            seen["cmd"] = cmd
+            seen["kw"] = kw
+            _append_compaction(self.out)
+            return proc
+
+        with mock.patch.object(meeting_loop.subprocess, "Popen",
+                               side_effect=_spawn):
+            stats, err = meeting_loop.generate_compact_base(
+                self.main, self.out, "m1", "t", front_tokens=500, keep_tail=200)
+        self.assertEqual(err, "")
+        cmd = seen["cmd"]
+        self.assertIn("--thinking", cmd)
+        self.assertEqual(cmd[cmd.index("--thinking") + 1], "off")   # 摘要不推理
+        self.assertIn("--session", cmd)
+        self.assertEqual(cmd[cmd.index("--session") + 1], self.out)
+        # cwd 级项目设置：只影响本进程
+        cfg = os.path.join(self.tmp, meeting_loop.COMPACT_CWD_NAME)
+        self.assertEqual(seen["kw"]["cwd"], cfg)
+        with open(os.path.join(cfg, ".pi", "settings.json"), encoding="utf-8") as f:
+            st = json.load(f)
+        self.assertEqual(st["compaction"]["keepRecentTokens"], 200)
+        self.assertEqual(stats["keep_tail"], 200)
+        self.assertEqual(stats["front_tokens"], 500)
+
+
 
 
 if __name__ == "__main__":

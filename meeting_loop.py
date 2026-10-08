@@ -13,7 +13,6 @@ import os
 import queue
 import re
 import shlex
-import shutil
 import signal
 import subprocess
 import sys
@@ -430,6 +429,10 @@ def _build_wake_cmd(workdir, agent, sid, cfg, fork_source, fork_cwd,
 # 摘要生成的硬超时：一次模型调用（输入是会话前缀，可能很大）。超时 ⇒ 回落
 # budget（不阻断分析）——宁可退到旧行为，不可让 setup 挂住。
 COMPACT_TIMEOUT_SEC = 900
+# 摘要进程的工作目录（放 cwd 级项目设置：`<它>/.pi/settings.json`）——pi 把
+# 项目设置 deepMerge 到全局之上（`settings-manager.ts`），所以
+# `compaction.keepRecentTokens` 只对**这一个进程**生效，主 pi 不受影响。
+COMPACT_CWD_NAME = "summary-cwd"
 
 
 def build_summary_instructions(topic):
@@ -453,13 +456,29 @@ def build_summary_instructions(topic):
     )
 
 
-def generate_compact_base(main_session, out_path, model, thinking, topic):
-    """在**副本**上跑一次 pi 自己的 compact（带定向指令）→ base session（决策 24）。
+def generate_compact_base(main_session, out_path, model, topic,
+                          front_tokens=meeting_fs.DEFAULT_SUMMARY_FRONT_TOKENS,
+                          keep_tail=meeting_fs.SUMMARY_KEEP_TAIL_TOKENS):
+    """造一份**有界**输入 → 跑 pi 自己的 compact（带定向指令）→ base session（决策 24）。
 
     为什么走 `pi --mode rpc` 而不是自己写摘要 prompt：摘要器 = pi 自己那份
     （同一套结构化检查点 prompt + `customInstructions`），**不漂移**；RPC 通道
-    能对**指定副本**工作（2026-10-08 实测：`--session <副本>` 打开的确实是副本、
-    只读命令不写盘）。副本 ⇒ **主 session 永不被改动**。
+    能对**指定文件**工作（2026-10-08 实测）。输入由我们自己裁出来
+    （`meeting_fs.build_summary_input`）⇒ 主 session **只读、永不被改动**。
+
+    为什么输入必须**自己限幅**（2026-10-08 实测教训）：pi 的 compact 会通读
+    "上一次 compaction 之后的全部消息"——主 session 上是 310 条 / 1.2MB /
+    est≈208k tokens，直接压 >900s 不返回。前部由我们设上限（`front_tokens`，
+    进启动默认值可调），超出的更早条目**如实记账**（stats 的 `input_dropped`），
+    不假装覆盖。
+
+    尾部（`keep_tail`）交给 pi 原样保留：通过 cwd 级项目设置注入
+    `compaction.keepRecentTokens`（`<COMPACT_CWD_NAME>/.pi/settings.json`），
+    **作用域仅限本进程**。
+
+    为什么 `--thinking off`：摘要调用的档位**继承会话**（pi：
+    `_getSummarizationRequestAuth` 返回 `thinkingLevel: this.thinkingLevel`）——
+    第一次验证时传了 `high`，摘要器在高强度推理，慢上加慢。摘要是机械任务。
 
     为什么**零扩展**（不带任何 `-e`）：摘要是一次纯模型调用、不需要工具；不加载
     扩展也就不可能把 MC 的 historian 之类带进来（它只在我们显式 `-e` 时才有）。
@@ -469,23 +488,34 @@ def generate_compact_base(main_session, out_path, model, thinking, topic):
     返回 `(stats, error)`；成功时另写同目录 `context-base.json`（报告读它）。
     """
     instr = build_summary_instructions(topic)
+    # 有界输入**就写在 base 路径上**：pi 会就地 compact 这个文件 ⇒ 产物即 base
+    # （分成"输入文件 + 产物文件"两个路径曾导致 base 根本不存在——测试当场抓到）。
+    # 输入自身的信息（窗口/丢弃数）写在它的 header 里，compact 后仍在，可核验。
+    istats, ierr = meeting_fs.build_summary_input(
+        main_session, out_path, front_tokens + keep_tail)
+    if ierr:
+        return None, ierr
+    cfg_dir = os.path.join(os.path.dirname(out_path), COMPACT_CWD_NAME)
+    os.makedirs(os.path.join(cfg_dir, ".pi"), exist_ok=True)
     try:
-        shutil.copyfile(main_session, out_path)
+        with open(os.path.join(cfg_dir, ".pi", "settings.json"), "w",
+                  encoding="utf-8") as f:
+            json.dump({"compaction": {"keepRecentTokens": keep_tail}}, f, indent=2)
     except OSError as e:
-        return None, f"复制主 session 失败: {e}"
+        return None, f"摘要进程配置写入失败: {e}"
     cmd = ["pi", "--mode", "rpc", "--session", out_path,
+           "--thinking", "off",
            "--no-extensions", "--no-skills", "--no-prompt-templates",
            "--no-themes"]
     if model:
         cmd += ["--model", model]
-    if thinking:
-        cmd += ["--thinking", thinking]
     payload = json.dumps({"id": "compact", "type": "compact",
                           "customInstructions": instr}) + "\n"
     try:
         proc = subprocess.Popen(cmd, stdin=subprocess.PIPE,
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                text=True, env=_spawn_env(out_path))
+                                text=True,
+                                env=_spawn_env(cfg_dir), cwd=cfg_dir)
     except OSError as e:
         return None, f"摘要进程启动失败: {e}"
     # **stdin 必须保持打开**，直到拿到响应再关：RPC 模式读到 EOF 就开始退出，
@@ -559,8 +589,13 @@ def generate_compact_base(main_session, out_path, model, thinking, topic):
     stats, ferr = meeting_fs.finalize_compaction_base(out_path)
     if ferr:
         return None, ferr
-    stats.update({"model": model, "thinking": thinking, "topic": topic,
-                  "instructions": instr, "rc": proc.returncode})
+    stats.update({"model": model, "thinking": "off", "topic": topic,
+                  "instructions": instr, "rc": proc.returncode,
+                  "front_tokens": front_tokens, "keep_tail": keep_tail,
+                  "input_entries": istats["entries"],
+                  "input_est": istats["est"],
+                  "input_dropped": istats["dropped"],
+                  "source_est": istats["source_est"]})
     try:
         with open(os.path.join(os.path.dirname(out_path),
                               meeting_fs.COMPACT_BASE_STATS), "w",
