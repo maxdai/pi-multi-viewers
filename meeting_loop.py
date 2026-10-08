@@ -10,12 +10,14 @@
 
 import json
 import os
+import queue
 import re
 import shlex
 import shutil
 import signal
 import subprocess
 import sys
+import threading
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -484,16 +486,42 @@ def generate_compact_base(main_session, out_path, model, thinking, topic):
         proc = subprocess.Popen(cmd, stdin=subprocess.PIPE,
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                 text=True, env=_spawn_env(out_path))
-        out, errout = proc.communicate(payload, timeout=COMPACT_TIMEOUT_SEC)
-    except subprocess.TimeoutExpired:
-        proc.kill()
-        proc.communicate()
-        return None, f"摘要生成超时（>{COMPACT_TIMEOUT_SEC}s）"
     except OSError as e:
         return None, f"摘要进程启动失败: {e}"
-    ok, detail = False, ""
-    for line in (out or "").splitlines():
-        line = line.strip()
+    # **stdin 必须保持打开**，直到拿到响应再关：RPC 模式读到 EOF 就开始退出，
+    # 从而 abort 掉正在进行的压缩。2026-10-08 的 LLM 验证实测到这一点——
+    # 用 `communicate()`（写完即关 stdin）时 0.8s 就返回
+    # `Turn prefix summarization failed: This operation was aborted`，
+    # 看起来像"模型/协议问题"，其实是**我们提前关了它的输入**。
+    # stdout 用后台线程收集（读行带超时，不能阻塞在 readline 上）。
+    q = queue.Queue()
+
+    def _pump():
+        try:
+            for line in proc.stdout:
+                q.put(line)
+        except Exception:            # 进程被杀时读管道会炸——收尾不需要它
+            pass
+        q.put(None)                  # 哨兵：输出结束（进程退出）≠ 超时
+
+    threading.Thread(target=_pump, daemon=True).start()
+    ok, detail, timed_out = False, "", False
+    deadline = time.monotonic() + COMPACT_TIMEOUT_SEC
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            timed_out = True
+            break
+        try:
+            line = q.get(timeout=remaining)
+        except queue.Empty:
+            timed_out = True
+            break
+        if line is None:
+            # 进程结束了却没给 compact 响应（崩溃/换协议）——不是超时，
+            # 立刻按失败收尾（否则要干等到 COMPACT_TIMEOUT_SEC 才报）
+            break
+        line = (line or "").strip()
         if not line.startswith("{"):
             continue
         try:
@@ -504,6 +532,25 @@ def generate_compact_base(main_session, out_path, model, thinking, topic):
             ok = bool(ev.get("success"))
             if not ok:
                 detail = json.dumps(ev.get("error"), ensure_ascii=False)[:200]
+            break
+    if timed_out:
+        proc.kill()
+    else:
+        try:
+            proc.stdin.close()       # 拿到响应了，可以放它走
+        except OSError:
+            pass
+    try:
+        proc.wait(timeout=30)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait(timeout=10)
+    try:
+        errout = proc.stderr.read() or ""
+    except (OSError, ValueError):
+        errout = ""
+    if timed_out:
+        return None, f"摘要生成超时（>{COMPACT_TIMEOUT_SEC}s）"
     if not ok:
         tail = (errout or "").strip().replace("\n", " ")[:160]
         return None, (f"compact 未成功（rc={proc.returncode}"

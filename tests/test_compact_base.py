@@ -6,11 +6,13 @@
   ③ 指令措辞：`build_summary_instructions` 必须带主题、且带"只陈述事实"的反框架句
 """
 
+import io
 import json
 import os
 import shutil
 import sys
 import tempfile
+import time
 import unittest
 from unittest import mock
 
@@ -133,6 +135,17 @@ class TestSummaryForkMode(unittest.TestCase):
         self.assertIn("summary", meeting_fs.FORK_MODES)
 
 
+class _Hang:
+    """永不产出、永不 EOF 的 stdout（造"真超时"用）。"""
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        while True:
+            time.sleep(0.05)
+
+
 class TestGenerateCompactBase(unittest.TestCase):
     """`generate_compact_base`：RPC 三态（成功 / compact 失败 / 超时）。"""
 
@@ -146,18 +159,25 @@ class TestGenerateCompactBase(unittest.TestCase):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     class _Proc:
-        def __init__(self, out, rc=0, timeout=False):
-            self._out, self._rc, self._timeout = out, rc, timeout
-            self.returncode = rc
+        """假 pi --mode rpc 进程：只实现生产真正用到的那几个面。
 
-        def communicate(self, payload=None, timeout=None):
-            # 只在**第一次**抛（生产在超时后 kill + 再 communicate 收尸）
-            if self._timeout:
-                self._timeout = False
-                raise __import__("subprocess").TimeoutExpired("pi", timeout)
-            return self._out, ""
+        生产**不再**用 `communicate()`（它写完就关 stdin，会让 RPC 模式退出并
+        abort 压缩——2026-10-08 LLM 验证实测）⇒ 假进程要提供 stdin/stdout，
+        以及 wait/kill/returncode。
+        """
+
+        def __init__(self, out="", rc=0, hang=False):
+            self.stdout = _Hang() if hang else io.StringIO(out)
+            self.stderr = io.StringIO("")
+            self.stdin = io.StringIO()          # 只被 write/flush/close
+            self.returncode = rc
+            self.killed = False
+
+        def wait(self, timeout=None):
+            return self.returncode
 
         def kill(self):
+            self.killed = True
             self.returncode = -9
 
     def _patch_proc(self, proc):
@@ -196,9 +216,12 @@ class TestGenerateCompactBase(unittest.TestCase):
         self.assertIn("Nothing to compact", err)
 
     def test_timeout_is_reported(self):
-        with self._patch_proc(self._Proc("", timeout=True)):
+        # 生产超时压到 0.2s（否则本用例要等 COMPACT_TIMEOUT_SEC）
+        with mock.patch.object(meeting_loop, "COMPACT_TIMEOUT_SEC", 0.2), \
+                self._patch_proc(self._Proc(hang=True)) as mk:
             stats, err = meeting_loop.generate_compact_base(
                 self.main, self.out, "m1", "high", "t")
+        self.assertTrue(mk.return_value.killed)
         self.assertIsNone(stats)
         self.assertIn("超时", err)
 
