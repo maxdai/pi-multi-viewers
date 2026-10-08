@@ -593,8 +593,8 @@ commit 是溯源记录、本节是长期引用点——不并存两份权威值�
     ⑤ **exposure 回到 pi 默认（`codemode`）**，agents 也走**原生调用方式**（2026-09-30 用户裁决；
     此前一天曾短暂改成 `direct`，理由 = "更贴合 pi 的原生设计"）：
        - `codemode` = 工具**不声明**给模型，列在 **codemode 工具的描述**里，模型**写脚本**调用
-         （`tools` / `ALL_TOOLS` / `text()` / `return` …）；pi 在 server 连上时**自动激活**
-         codemode 工具。好处：大工具面不进模型声明、脚本内可**并行调多个工具**、大结果先筛后回
+         （`tools` / `ALL_TOOLS` / `text()` / `return` …）；`codemode` 工具在 pi 里是
+         **注册为 inactive** 的，由 **MCP 扩展自动激活**（不是 pi 自己激活——见下一条）。好处：大工具面不进模型声明、脚本内可**并行调多个工具**、大结果先筛后回
          （直调 >20KB 会被掐中间）。
        - **代价**：脚本比直调多一步；且**必须显式加载 codemode 扩展**（见 ④）——`codemode` 是
          独立的内置扩展，`--no-extensions` 会关掉它；少了它，MCP 扩展只发一条
@@ -602,6 +602,15 @@ commit 是溯源记录、本节是长期引用点——不并存两份权威值�
          ⇒ 工具注册了却调不到、且**静默**（2026-09-30 读 `extensions/mcp/index.ts:336-359`
          + `core/extensions/runner.ts` 的 `noOpUIContext`）。**这是本档必须同时 `-e builtin:codemode`
          的全部理由。**
+       - **隐含依赖（2026-10-08 核，pi 1.1.0）**：`codemode` 是**注册为 inactive** 的工具
+         （codemode 扩展 docstring 原文：“registered inactive. Activate it with `--tools`,
+         the `defaultTools` setting, or `setActiveTools()`; **the MCP extension activates it
+         when MCP tools are only reachable from scripts**”），激活点在
+         `extensions/mcp/index.ts:516-522`（`needsCodemode && hasCodemode && autoEnableCodemode`
+         ⇒ `pi.setActiveTools([...active, CODEMODE_TOOL_NAME])`）。⇒ **codemode 的可用性依赖
+         `-e builtin:mcp` 在场**：若将来移除 MCP 入口，codemode 会**静默失效**（工具在但
+         inactive，notify 是 no-op）——那时须改用 **`--tools +codemode`**（pi ≥ 1.1.0 的
+         “调整默认选择”形式）或 `defaultTools` 设置显式激活。
        - 该设置住在 `~/.pi/agent/mcp.json`（**用户级、也影响主 pi**）；项目级 `.pi/mcp.json`
          只按 **server 同名覆盖**且需 cwd 被 trust。**没有 env 覆盖**（2026-09-30 读 `config.ts`）。
        - **已实测（2026-09-30 探针，n=2，生产形态源与命令）**：agents 走 codemode 路径**真调通**
