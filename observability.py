@@ -669,13 +669,24 @@ def _report_context_line(base, out):
         out.append("上下文：定向摘要 ｜ 记账不可读"
                    f"（{meeting_fs.COMPACT_BASE_STATS} 缺失/损坏）→ n/a")
         return
-    out.append(
-        f"上下文：定向摘要 ｜ 摘要 est≈{st.get('summary_est', 'n/a')} ｜ "
-        f"窗口 est≈{st.get('window_est', 'n/a')} ｜ "
-        f"已摘要条目 {st.get('dropped_entries', 'n/a')} ｜ "
-        f"摘要模型 {st.get('model') or '(默认)'}"
-        + (f" ｜ pi tokensBefore={st['tokens_before']}"
-           if st.get("tokens_before") is not None else ""))
+    # 结构事实（决策 24 的验收面）：远端摘要多大 / 近端窗口多大 / **摘要器实际读了
+    # 多少**（前部限幅后）/ 有多少更早条目被限幅丢弃。后者是"我们没有假装覆盖"的
+    # 凭证——数字必须出现，否则报告会给人"整段历史都被摘要过了"的错觉。
+    parts = [
+        "上下文：定向摘要",
+        f"摘要 est≈{st.get('summary_est', 'n/a')}",
+        f"窗口 est≈{st.get('window_est', 'n/a')}"
+        + (f"（声明 {st['keep_tail']}）" if st.get("keep_tail") is not None else ""),
+        f"被摘要覆盖 {st.get('dropped_entries', 'n/a')} 条",
+    ]
+    if st.get("input_est") is not None:
+        front = f"（前部限幅 {st['front_tokens']}）" if st.get("front_tokens") is not None else ""
+        parts.append(f"摘要器读入 est≈{st['input_est']}{front}")
+    if st.get("input_dropped"):
+        src = f"（源可见 est≈{st['source_est']}）" if st.get("source_est") is not None else ""
+        parts.append(f"限幅丢弃 {st['input_dropped']} 条{src}")
+    parts.append(f"摘要模型 {st.get('model') or '(默认)'}")
+    out.append(" ｜ ".join(parts))
 
 
 def _report_extension_line(base, out):
