@@ -37,6 +37,7 @@ import time
 import human_viewer
 import meeting_fs
 import observability
+import meeting_loop
 import spec_gen
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -368,6 +369,35 @@ def setup_environment(args, participants, base, spec_dir=None,
                                fork_cwd=os.getcwd(),
                                fork_mode=getattr(args, "fork_mode", meeting_fs.DEFAULT_FORK_MODE)),
                   f, indent=2, ensure_ascii=False)
+    # ---- 定向摘要 base（决策 24）：forkMode=summary 时**在 setup 生成一次** ----
+    # 为什么在 setup 而不是各 loop 的首唤里：三 loop 是独立进程，各自生成会
+    # ① 重复付费；② 得到**不一致**的摘要（同一输入两次结果不同）——setup 是
+    # 唯一的单写入者，且 loops 在 setup 之后才 spawn。
+    # 失败 ⇒ 把 protocol.json 的 forkMode **改回 budget**（单一事实源要诚实：
+    # 运行期真用哪个模式，protocol 里就写哪个），并打印可见警告；base 不存在时
+    # loop 也会可见地回落（双保险，都不静默）。
+    # 位置：必须在 setup commit **之前**（loop 读的是 bare HEAD:protocol.json）。
+    if getattr(args, "fork_mode", None) == "summary" \
+            and getattr(args, "fork_source", None):
+        _m0, _v0 = models.get(participants[0], (None, None))
+        _stats, _err = meeting_loop.generate_compact_base(
+            args.fork_source,
+            os.path.join(base, meeting_fs.COMPACT_BASE_NAME),
+            _m0 or dm, _v0 or meeting_fs.DEFAULT_THINKING,
+            spec_topic or args.topic or "")
+        if _err:
+            print(f"[summary] 定向摘要生成失败 → 本次回落 budget：{_err}")
+            _proto_path = os.path.join(wa, "protocol.json")
+            with open(_proto_path, encoding="utf-8") as _f:
+                _proto = json.load(_f)
+            _proto["forkMode"] = "budget"
+            with open(_proto_path, "w", encoding="utf-8") as _f:
+                json.dump(_proto, _f, indent=2, ensure_ascii=False)
+        else:
+            print(f"[summary] 定向摘要就绪：摘要 est≈{_stats['summary_est']} ｜ "
+                  f"窗口 est≈{_stats['window_est']} ｜ 已摘要条目 "
+                  f"{_stats['dropped_entries']} ｜ 模型 {_stats.get('model') or '(默认)'}")
+
     with open(os.path.join(wa, "question.md"), "w") as f:
         if spec_question is not None:
             # spec 提供 → 整文件（跳过首行）作为 question.md（设计 16.6）
@@ -614,6 +644,7 @@ def main():
     parser.add_argument("--fork-mode", default=meeting_fs.DEFAULT_FORK_MODE,
                         choices=list(meeting_fs.FORK_MODES),
                         help="fork 裁剪策略：budget=预算+折叠（默认，长会话可行）；"
+                             "summary=定向摘要（远端摘要+近端原始窗口；决策 24）；"
                              "compaction=按 compaction 边界（中小会话零损失）；"
                              "full=全量（小会话/验证）")
     parser.add_argument("--fork-source", default=None,

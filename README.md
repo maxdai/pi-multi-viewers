@@ -31,7 +31,7 @@ provider 连续失败或扩展异常时可能显著更久（历史场次里出�
 | 机制 | 说明 |
 |---|---|
 | session fork | 首唤由本地循环**生成 fork 源文件**（从主 session 裁剪/折叠，见下表），再用 `pi --session <fork 源> --name <分析名>-<视角名>` 打开——agent 携带发起分析的对话上下文（不是 `pi --fork`：那是全量拷贝且无法在尾部注入切换叙事） |
-| fork 源模式 | `--fork-mode budget`（默认）/ `compaction` / `full`，见下表 |
+| fork 源模式 | `--fork-mode budget`（默认）/ `summary` / `compaction` / `full`，见下表 |
 | cwd = 主项目 | agent 进程直接读项目文件；work_dir 仅作消息交换区（绝对路径显式指定） |
 | 视角注入 | `--append-system-prompt` ×2（协议 + 视角任务书） |
 | 切换叙事 | fork 源尾部注入 2 对"停止旧任务 → 新任务说明"对话——显式切断历史叙事惯性 |
@@ -43,6 +43,7 @@ provider 连续失败或扩展异常时可能显著更久（历史场次里出�
 |---|---|---|
 | **budget**（默认） | 按预算（约 80k est，示意值——权威口径见 docs/design.md §二）+ 折叠：丢 thinking、长参数截断、旧工具输出换省略标记 → 从尾部保留 | 长会话**唯一可行**形态 |
 | compaction | 从主 session 最后一个 compaction 边界起：内容原样（不折叠） | 中小会话，零信息损失 |
+| **summary** | 先在主 session 的**副本**上用 pi 自己的摘要器生成**定向摘要**（带与主题相关的取舍指令），再走 compaction 那条切片：远端=摘要、近端=原始窗口（决策 24） | 想让 agent 少被无关历史分散注意力时；比 budget 更聚焦、且**不丢信息**（远端条目留在文件里、只是模型看不见） |
 | full | 全部条目 | 小会话 / 验证 |
 
 **为什么需要 budget（容量事实，2026-09-10 实测）**：fork 携带的是 session
@@ -118,7 +119,7 @@ ls viewers/
 # 每次：生成主题骨架（视角自动来自 viewers/*.md）
 scripts/mv.sh --prepare "<主题>"              # spec = question.md(+background.md)
 scripts/mv.sh --start <spec目录>              # 启动（自动挂载主 session；默认 budget 模式）
-#  可选：--fork-mode compaction|budget|full（见上表；一般不调）
+#  可选：--fork-mode budget|summary|compaction|full（见上表；一般不调）
 #  可选：--max-meeting 15 --max-rr 7 --stall-timeout 600
 #        （配额：建环境时固化进 protocol.json，之后不可改；meeting 配额是"每 agent"）
 #  可选：--extension-policy mc-tools|none|all（默认 mc-tools = 零扩展 + 两份只读工具入口：

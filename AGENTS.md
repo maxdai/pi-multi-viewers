@@ -50,7 +50,7 @@ tests/               测试（unittest discover tests）
 
 **fork 三件套**（初始化层与 pi-agents-helper 的全部差异所在）：
 
-1. **session fork**：首唤由本地循环生成 **fork 源文件**（`meeting_fs.build_fork_source`：从主 session 按模式裁剪——默认 `budget` 预算+折叠；`compaction` 按 compaction 边界；`full` 全量），再用 `pi --session <fork 源> --name <分析名>-<视角名>` 打开；后续唤醒 `--session-id <sid>` 续接（sid 存 `status-<agent>.json`，预生成 UUID）。
+1. **session fork**：首唤由本地循环生成 **fork 源文件**（`meeting_fs.build_fork_source`：从主 session 按模式裁剪——默认 `budget` 预算+折叠；`summary` 定向摘要（决策 24：远端摘要+近端原始窗口）；`compaction` 按 compaction 边界；`full` 全量），再用 `pi --session <fork 源> --name <分析名>-<视角名>` 打开；后续唤醒 `--session-id <sid>` 续接（sid 存 `status-<agent>.json`，预生成 UUID）。
    - **不用 `pi --fork`**：那是全量拷贝（长会话必超窗，实测 731k/930k tokens + 384k completion 预留 > 1M），且无法在尾部注入切换叙事
    - 切换叙事（2 对"停止旧任务 → 新任务说明"对话）注入在 fork 源尾部——切断历史叙事惯性；主题取自 `protocol.json.topic`（**不**二次解析 question.md）
    - `--name` 是显示名 label（session_info entry），不劫持 id（id 归机制=UUID，名字归人）；规模/口径见 `docs/design.md`
@@ -112,7 +112,7 @@ MCP 那份是**常量** `meeting_fs.BUILTIN_MCP_ENTRY = "builtin:mcp"`（pi 0.99
 （主 pi 实际发送的上下文由压缩层在渲染时生成，不在条目里）——长会话的
 原始条目远超模型窗口（实测 930k tokens + 384k completion 预留 > 1M，provider
 直接 400；`pi --fork` 原生命令同样超窗）。因此 **budget 是长会话唯一可行
-模式**；compaction/full 只适合中小会话（数字口径见 `docs/design.md`）。
+模式**；compaction/full 只适合中小会话；`summary` = 定向摘要 + 近端窗口（决策 24：比 budget 聚焦、比 compaction 不丢信息）（数字口径见 `docs/design.md`）。
 
 **viewers/ 分支约定**：spec 的 `agents/` 目录存在 = 显式模式（优先）；
 不存在 → 项目 cwd 的 `viewers/*.md` 发现（文件名即 agent 名：中文合法，

@@ -28,6 +28,12 @@ from datetime import datetime, timezone
 # ——曾是 8 处字面量，产品级核心约定却没有家（e2e15 自审 S1）。
 RESULT_MD = "result.md"
 
+# 定向摘要模式（决策 24）的两个文件名。**单一来源**：meeting_loop（生成/使用）、
+# start_discussion（setup 生成 → 失败时改回 forkMode）、observability（报告取数）
+# 三处引用它——文件名属于"产品级核心约定"，与 RESULT_MD 同理。
+COMPACT_BASE_NAME = "context-base.jsonl"   # pi compact 过的副本（= fork 源的源）
+COMPACT_BASE_STATS = "context-base.json"   # 摘要/窗口规模的记账（报告读它）
+
 # result.md 的**有效性阈值**（字节）：存在但小于它 → 视为未生成（LLM 可能
 # 写空文件/仅 frontmatter——只查存在性会退化为空提交，审核 A2）。
 RESULT_MD_MIN_BYTES = 50
@@ -914,7 +920,7 @@ BUILTIN_MCP_ENTRY = "builtin:mcp"
 # 同样是常量：名字由 pi 注册，无需解析（零第三方依赖）。
 BUILTIN_CODEMODE_ENTRY = "builtin:codemode"
 
-FORK_MODES = ("budget", "compaction", "full")
+FORK_MODES = ("budget", "compaction", "summary", "full")
 DEFAULT_FORK_MODE = "budget"
 #
 # 版本守卫：值域校验在 build_fork_source 入口（open 之前）做——非法值
@@ -1213,9 +1219,14 @@ def build_fork_source(src_session, out_path, new_id, new_cwd,
         （**含该 compaction 条目本身，位于其自然位置**）——主 session 的
         **条目级**压缩态，内容原样保留（thinking/工具输出不折叠）；
         锚点 ID 不在源中 → 明确报错
+      summary：**定向摘要模式（决策 24）**——源是"pi 自己 compact 过的
+        副本"（`finalize_compaction_base` 整理过：剥 systemMessage）。切片与
+        compaction **完全相同**（锚点 → 末条，含 compaction 条目本身），
+        区别只在**源**与 header 标记：远端是被摘要覆盖的历史（模型只看到
+        摘要）、近端是原始窗口。锚点不在源中 → 明确报错。
       full：全部条目（含无 compaction 的引导 session）
-    budget 与 compaction 在**无 compaction 时**均全量（引导 session 本就
-    干净无先例）；budget 仍会跑折叠与统计。
+    budget / compaction / summary 在**无 compaction 的源**上均全量（引导
+    session 本就干净无先例，标记 full）；budget 仍会跑折叠与统计。
 
     产物不变量（I1–I5；由构造保证 + 测试断言，**不做生产守卫**——判定
     依据是复杂度匹配：失败路径设计与归因的成本高于"用检查代替构造纪律"）：
@@ -1265,14 +1276,16 @@ def build_fork_source(src_session, out_path, new_id, new_cwd,
     summary = ""
     new_ts = header.get("timestamp")
     idx_by_id = {e.get("id"): i for i, e in enumerate(entries) if e.get("id")}
-    if mode == "full" or (mode == "compaction" and not comps):
+    if mode == "full" or (mode in ("compaction", "summary") and not comps):
         # full：全部条目。compaction 遇无 compaction 的源（引导 session）
         # 也全量——本就无边界可依（既有语义，标记 full）
         body = entries[1:]
-        if mode == "compaction":
+        if mode in ("compaction", "summary"):
             mode = "full"
-    elif mode == "compaction":
+    elif mode in ("compaction", "summary"):
         # compaction：条目级压缩态，内容原样保留（thinking/工具输出不折叠）。
+        # summary（决策 24）：**同一条切片**，只是源是"pi 已 compact 过的副本"
+        # （远端定向摘要 + 近端原始窗口）——见 finalize_compaction_base。
         # 产物 = entries[kept_idx:]——它**已含**最后一条 compaction 条目
         # （pi 的 appendCompaction 使锚点位置小于 comp 位置），“补一条
         # comp” 恒为重复且引入 last-wins 顺序依赖（e2e11 实测）
@@ -1347,18 +1360,88 @@ def build_fork_source(src_session, out_path, new_id, new_cwd,
         "parentSession": src_session,
         "forkSourceMode": mode,
     }
-    if mode == "budget":
+    if mode in ("budget", "summary"):
         # 产物侧指纹（口径见设计文档「规模口径」）：对**最终产物**统一
-        # 计算（单一测点）；不预测请求规模
+        # 计算（单一测点）；不预测请求规模。
+        # summary **不写** forkSourceDropped：本模式的"丢弃"发生在 base 生成
+        # 那一步（条目已被摘要覆盖，记账在 context-base.json），本函数这一层
+        # 没有丢任何东西。
         new_header["forkSourceTokensEst"] = sum(
             _est_tokens(_entry_text(e)) for e in body)
-        new_header["forkSourceDropped"] = dropped_total
+        if mode == "budget":
+            new_header["forkSourceDropped"] = dropped_total
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     with open(out_path, "w", encoding="utf-8") as f:
         f.write(json.dumps(new_header, ensure_ascii=False) + "\n")
         for e in body:
             f.write(json.dumps(e, ensure_ascii=False) + "\n")
     return len(body) + 1, None
+
+def finalize_compaction_base(session_file):
+    """把"pi 自己 compact 过的会话副本"整理成 base session（决策 24）。
+
+    只做两件事，都是**我们要负责的**（不是在补 pi 的洞）：
+
+    ① **剥掉最后一条 compaction 条目的 `systemMessage`**——它是"压缩那一刻的
+       prompt/工具状态快照"（pi 在 `appendCompaction` 里自动抓
+       `getCurrentSystemMessage(...)`，`core/session-manager.ts:1270`），
+       对 agents 而言装的是**主 pi 的** sections 与 `toolsAdded`（噪音）；
+       而 agents 自己的任务书/协议/AGENTS.md 来自**运行期重建**的系统提示
+       （`agent-session.ts:1470/1700` + 两条 `--append-system-prompt`，未传
+       `--no-context-files`）⇒ **剥掉它不影响** AGENTS.md / 协议 / 视角任务书。
+    ② **算统计**（记账 + 报告），口径对齐 pi 的可见集合
+       （`buildContextEntries`，`core/session-manager.ts:469-511`）：
+       模型可见 = {compaction 条目} ∪ {锚点之后、compaction 之前的条目}
+                ∪ {compaction 之后的条目}；压缩边界之前的 system 消息被跳过。
+
+    **不改锚点、不删条目**：远端条目留在文件里（模型看不见、但可审计、
+    也仍可被 agent 用工具读），近端窗口由 pi 自己选（`keepRecentTokens`）——
+    ⇒ 这个模式下**没有任何内容"丢失"**（要么是原始条目、要么被摘要覆盖）。
+    「把窗口调得更小」需要改 pi 的**用户级** settings（会影响主 pi）或自建
+    摘要器，都超出本轮范围（决策 24「重估触发」里记着）。
+
+    参数 `session_file` 原地改写（唯一改动 = 剥快照）。
+    返回 (stats, error)；stats 键：summary_est / window_est / tokens_before /
+    dropped_entries / anchor / compaction_id（`model` 由调用方回填）。
+    """
+    try:
+        with open(session_file, encoding="utf-8") as f:
+            entries = [json.loads(l) for l in f if l.strip()]
+    except (OSError, ValueError) as e:
+        return None, f"base 读取失败: {e}"
+    ci = None
+    for i, e in enumerate(entries):
+        if e.get("type") == "compaction":
+            ci = i
+    if ci is None:
+        return None, "base 里没有 compaction 条目（pi compact 未生效？）"
+    comp = entries[ci]
+    comp.pop("systemMessage", None)
+    anchor = comp.get("firstKeptEntryId")
+    ids = {e.get("id"): i for i, e in enumerate(entries) if e.get("id")}
+    ai = ids.get(anchor)
+    visible = []
+    if ai is not None:
+        for e in entries[ai:ci]:
+            if (e.get("message") or {}).get("role") == "system":
+                continue
+            visible.append(e)
+    visible += entries[ci + 1:]
+    stats = {
+        "summary_est": _est_tokens(comp.get("summary") or ""),
+        "window_est": sum(_est_tokens(_entry_text(e)) for e in visible),
+        "tokens_before": comp.get("tokensBefore"),
+        # 口径：**被摘要覆盖的条目数** = 切点之前的条目数。锚点缺失时
+        # pi 的可见集合不含任何"切点之前"的原始条目 ⇒ 取 compaction 的位置。
+        "dropped_entries": ci if ai is None else ai,
+        "anchor": anchor,
+        "compaction_id": comp.get("id"),
+    }
+    with open(session_file, "w", encoding="utf-8") as f:
+        for e in entries:
+            f.write(json.dumps(e, ensure_ascii=False) + "\n")
+    return stats, ""
+
 
 # 测试引导 session 登记日志（防误删，用户 2026-09-09）：每个测试/脚本
 # 引导 session 创建时登记一行——清理时回查日志确认"是我建的测试产物"

@@ -17,6 +17,9 @@ import tempfile
 import unittest
 from unittest import mock
 
+import meeting_fs
+import observability
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
@@ -1070,6 +1073,47 @@ class TestFindCurrentDir(unittest.TestCase):
             with mock.patch("builtins.print"), mock.patch("sys.stderr"):
                 rc4 = ob._main(["--find-dir", "--cwd", tmp, "--sid", ""])
             self.assertEqual(rc4, 1)
+
+
+class TestReportContextLine(unittest.TestCase):
+    """报告「上下文」行（决策 24 的 summary 模式）——非该模式不打印。"""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="mvctx-")
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+
+    def _line(self, mode, stats=None):
+        out = []
+        with mock.patch.object(meeting_fs, "read_protocol",
+                               return_value={"forkMode": mode}):
+            if stats is not None:
+                with open(os.path.join(self.tmp, meeting_fs.COMPACT_BASE_STATS),
+                          "w", encoding="utf-8") as f:
+                    json.dump(stats, f)
+            observability._report_context_line(self.tmp, out)
+        return out
+
+    def test_silent_for_other_modes(self):
+        self.assertEqual(self._line("budget"), [])
+        self.assertEqual(self._line(None), [])
+
+    def test_prints_structure_for_summary(self):
+        out = self._line("summary", {"summary_est": 1234, "window_est": 567,
+                                     "dropped_entries": 42, "model": "m-x",
+                                     "tokens_before": 9999})
+        self.assertEqual(len(out), 1)
+        line = out[0]
+        self.assertIn("定向摘要", line)
+        self.assertIn("摘要 est≈1234", line)
+        self.assertIn("窗口 est≈567", line)
+        self.assertIn("已摘要条目 42", line)
+        self.assertIn("摘要模型 m-x", line)
+        self.assertIn("tokensBefore=9999", line)
+
+    def test_missing_stats_is_n_a(self):
+        out = self._line("summary", None)
+        self.assertEqual(len(out), 1)
+        self.assertIn("n/a", out[0])
 
 
 if __name__ == "__main__":

@@ -355,6 +355,9 @@ def build_report(base):
     # ---- 扩展策略（声明 vs 生效）----
     _report_extension_line(base, out)
 
+    # ---- fork 上下文构成（决策 24 的 summary 模式；非该模式不打印）----
+    _report_context_line(base, out)
+
     # ---- 终止原因（只报事实与计数）----
     _report_termination(base, agents, out)
 
@@ -644,6 +647,35 @@ def _report_termination(base, agents, out):
                f" / all-freezing {types.get('all-freezing', 0)}"
                f" / pass {types.get('pass', 0)} / stall 接管行 {stalls}"
                + (" | result.md 已提交" if has_result else ""))
+
+
+def _report_context_line(base, out):
+    """fork 上下文构成（决策 24 的 summary 模式）。
+
+    取数：`protocol.json.forkMode`（声明）+ `<base>/<COMPACT_BASE_STATS>`（setup
+    生成时写的记账，fail-open）。为什么需要：summary 模式的全部价值在"**远端被
+    摘要、近端是原始窗口**"这个结构上——而本项目**没有质量判据**（决策 24
+    「判据说明」），事后唯一能核的就是**结构事实**：摘要多大、窗口多大、多少条
+    被摘要覆盖、用的哪个模型。非 summary 模式不打印本行（不制造噪音）。
+    """
+    proto = meeting_fs.read_protocol(meeting_fs.bare_of_base(base))
+    if proto.get("forkMode") != "summary":
+        return
+    try:
+        with open(os.path.join(base, meeting_fs.COMPACT_BASE_STATS),
+                  encoding="utf-8") as f:
+            st = json.load(f)
+    except (OSError, ValueError):
+        out.append("上下文：定向摘要 ｜ 记账不可读"
+                   f"（{meeting_fs.COMPACT_BASE_STATS} 缺失/损坏）→ n/a")
+        return
+    out.append(
+        f"上下文：定向摘要 ｜ 摘要 est≈{st.get('summary_est', 'n/a')} ｜ "
+        f"窗口 est≈{st.get('window_est', 'n/a')} ｜ "
+        f"已摘要条目 {st.get('dropped_entries', 'n/a')} ｜ "
+        f"摘要模型 {st.get('model') or '(默认)'}"
+        + (f" ｜ pi tokensBefore={st['tokens_before']}"
+           if st.get("tokens_before") is not None else ""))
 
 
 def _report_extension_line(base, out):

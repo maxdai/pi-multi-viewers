@@ -15,10 +15,12 @@ import shutil
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import meeting_fs
+import meeting_loop
 import start_discussion as sd
 from meeting_fs import (git_head, git_ls_files, git_show, list_my_messages,
                         new_messages_with_meta, next_msg_id, read_point,
@@ -313,6 +315,66 @@ class TestFlowComposition(unittest.TestCase):
         parent = os.path.dirname(self.base)
         self.assertFalse(os.path.exists(
             os.path.join(parent, f"{base_name}-result.md")))
+
+
+class TestSummaryModeSetup(unittest.TestCase):
+    """forkMode=summary（决策 24）：setup 生成一次 base；失败改回 budget（诚实）。"""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="flow-summary-")
+        self.base = os.path.join(self.tmp, "disc")
+        self.participants = ["a", "b"]
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _args(self, mode, src):
+        a = Args()
+        a.fork_mode = mode
+        a.fork_source = src
+        return a
+
+    def _protocol(self):
+        with open(os.path.join(self.base, "work-a", "protocol.json"),
+                  encoding="utf-8") as f:
+            return json.load(f)
+
+    def test_generates_base_once_and_keeps_mode(self):
+        stats = {"summary_est": 200, "window_est": 100, "dropped_entries": 4,
+                 "model": "m1"}
+        with mock.patch.object(meeting_loop, "generate_compact_base",
+                               return_value=(stats, "")) as gen:
+            sd.setup_environment(self._args("summary", "/main.jsonl"),
+                                 self.participants, self.base)
+        self.assertEqual(gen.call_count, 1)                  # 每场一次（三视角共享）
+        call = gen.call_args
+        self.assertEqual(call[0][0], "/main.jsonl")          # 源 = 主 session
+        self.assertEqual(call[0][1],
+                         os.path.join(self.base, meeting_fs.COMPACT_BASE_NAME))
+        self.assertEqual(self._protocol()["forkMode"], "summary")
+
+    def test_failure_falls_back_to_budget_in_protocol(self):
+        with mock.patch.object(meeting_loop, "generate_compact_base",
+                               return_value=(None, "compact 未成功（rc=1）")), \
+                mock.patch("builtins.print") as pr:
+            sd.setup_environment(self._args("summary", "/main.jsonl"),
+                                 self.participants, self.base)
+        # 单一事实源诚实：运行期真的会走 budget，protocol 里就写 budget
+        self.assertEqual(self._protocol()["forkMode"], "budget")
+        out = " ".join(str(c) for c in pr.call_args_list)
+        self.assertIn("回落 budget", out)
+
+    def test_not_called_for_other_modes(self):
+        with mock.patch.object(meeting_loop, "generate_compact_base") as gen:
+            sd.setup_environment(self._args("budget", "/main.jsonl"),
+                                 self.participants, self.base)
+        gen.assert_not_called()
+
+    def test_not_called_without_fork_source(self):
+        with mock.patch.object(meeting_loop, "generate_compact_base") as gen:
+            sd.setup_environment(self._args("summary", None),
+                                 self.participants, self.base)
+        gen.assert_not_called()
 
 
 if __name__ == "__main__":

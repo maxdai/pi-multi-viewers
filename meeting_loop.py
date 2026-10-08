@@ -12,6 +12,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import signal
 import subprocess
 import sys
@@ -242,11 +243,24 @@ def _prepare_fork_session(workdir, agent, sid, fork_source, fork_cwd,
     最低手段——不建指标体系、不进 status）。
     """
     fork_src = os.path.join(session_dir, f"fork-src-{sid}.jsonl")
+    # summary 模式（决策 24）：源换成 setup 时生成的 base（pi 已 compact 的副本，
+    # 远端=定向摘要、近端=原始窗口）。base 缺失 ⇒ **可见地**回落 budget：
+    # 正常情况下 setup 生成失败时已把 protocol 改回 budget（单一事实源诚实），
+    # 这里只兜"直调/竞态"——绝不静默换成"无摘要的 compaction"。
+    src_session, mode = fork_source, fork_mode
+    if fork_mode == "summary":
+        base = os.path.join(os.path.dirname(workdir),
+                            meeting_fs.COMPACT_BASE_NAME)
+        if os.path.exists(base):
+            src_session = base
+        else:
+            log(agent, "[warn] summary 模式的 base 不存在 → 本次按 budget 运行")
+            mode = "budget"
     t0 = time.perf_counter()
     n, err = meeting_fs.build_fork_source(
-        fork_source, fork_src, sid, fork_cwd or workdir, mode=fork_mode)
+        src_session, fork_src, sid, fork_cwd or workdir, mode=mode)
     if err:
-        log(agent, f"[fatal] fork 源生成失败（mode={fork_mode}）: {err}")
+        log(agent, f"[fatal] fork 源生成失败（mode={mode}）: {err}")
         raise RuntimeError(err)
     build_ms = (time.perf_counter() - t0) * 1000
     # 统计取自产物自描述 header（单一来源；读失败降级为只打条数）
@@ -255,8 +269,12 @@ def _prepare_fork_session(workdir, agent, sid, fork_source, fork_cwd,
     if stats.get("est") is not None:
         est = stats["est"]
         est_txt = f"est≈{est // 1000}k" if est >= 1000 else f"est≈{est}"
+        # dropped 只有 budget 模式有（summary 的丢弃记账在 base 生成那一步，
+        # 见 context-base.json）——没有就不印那半句，绝不打印 "丢弃 None 条"
+        _d = stats.get("dropped")
+        drop_txt = f"丢弃 {_d} 条，" if _d is not None else ""
         log(agent, f"fork 源（{stats.get('mode') or fork_mode}，{n} 条，"
-                   f"丢弃 {stats.get('dropped')} 条，{est_txt}"
+                   f"{drop_txt}{est_txt}"
                    f"（字符/3 估算），构建 {perf}）: {os.path.basename(fork_src)}")
     else:
         log(agent, f"fork 源（{fork_mode}，{n} 条，构建 {perf}）: "
@@ -402,6 +420,109 @@ def _build_wake_cmd(workdir, agent, sid, cfg, fork_source, fork_cwd,
     # 非交互模式 + JSON 事件流；自动信任项目本地文件（AGENTS.md 等）
     cmd += ["--approve", "--print", prompt]
     return cmd, (fork_cwd or workdir)
+
+
+# ---- 定向摘要（决策 24）的常量 ----
+# base session：pi 在自己 compact 过的副本上产出的"摘要 + 近端窗口"——
+# 各 agent 的首唤都从它切出 fork 源（一次生成、三视角共享）。
+# 摘要生成的硬超时：一次模型调用（输入是会话前缀，可能很大）。超时 ⇒ 回落
+# budget（不阻断分析）——宁可退到旧行为，不可让 setup 挂住。
+COMPACT_TIMEOUT_SEC = 900
+
+
+def build_summary_instructions(topic):
+    """定向摘要的 `customInstructions`（单一措辞来源）。
+
+    为什么这么写（决策 24）：pi 把 `customInstructions` 追加成
+    "Additional focus: …"（`core/compaction/compaction.ts:719-720`）——它
+    **只影响摘要内容**，不影响"哪些消息进摘要"（那是按位置的前缀切）。所以这段
+    文字的全部任务是：① 说清"该保留什么"（与主题相关的事实）；② **抑制框架
+    偏差**——摘要会被模型**先于**近端原始窗口读到，它若替读者做取舍排序，等于
+    给每个视角预设了一个框架（本项目最在意的那类偏差）。
+    """
+    return (
+        f"这次摘要将作为一次关于「{topic}」的多视角分析任务的背景。"
+        "只保留与该主题相关的：决策及其理由、被否决的方案与重估条件、"
+        "实测数字与其口径（测点/样本/可比性）、涉及的文件与函数与命令、"
+        "以及仍未解决的问题。与该主题无关的过程（其它任务、无关讨论、"
+        "例行工具流水）一律一句带过或不写。"
+        "**只陈述事实与结论，不要替读者做取舍排序、不要给建议、不要预测"
+        "读者需要什么。**保留精确的路径、函数名、数字与错误信息。"
+    )
+
+
+def generate_compact_base(main_session, out_path, model, thinking, topic):
+    """在**副本**上跑一次 pi 自己的 compact（带定向指令）→ base session（决策 24）。
+
+    为什么走 `pi --mode rpc` 而不是自己写摘要 prompt：摘要器 = pi 自己那份
+    （同一套结构化检查点 prompt + `customInstructions`），**不漂移**；RPC 通道
+    能对**指定副本**工作（2026-10-08 实测：`--session <副本>` 打开的确实是副本、
+    只读命令不写盘）。副本 ⇒ **主 session 永不被改动**。
+
+    为什么**零扩展**（不带任何 `-e`）：摘要是一次纯模型调用、不需要工具；不加载
+    扩展也就不可能把 MC 的 historian 之类带进来（它只在我们显式 `-e` 时才有）。
+
+    失败/超时 ⇒ `(None, error)`，调用方**回落 budget**（不阻断分析）。
+
+    返回 `(stats, error)`；成功时另写同目录 `context-base.json`（报告读它）。
+    """
+    instr = build_summary_instructions(topic)
+    try:
+        shutil.copyfile(main_session, out_path)
+    except OSError as e:
+        return None, f"复制主 session 失败: {e}"
+    cmd = ["pi", "--mode", "rpc", "--session", out_path,
+           "--no-extensions", "--no-skills", "--no-prompt-templates",
+           "--no-themes"]
+    if model:
+        cmd += ["--model", model]
+    if thinking:
+        cmd += ["--thinking", thinking]
+    payload = json.dumps({"id": "compact", "type": "compact",
+                          "customInstructions": instr}) + "\n"
+    try:
+        proc = subprocess.Popen(cmd, stdin=subprocess.PIPE,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                text=True, env=_spawn_env(out_path))
+        out, errout = proc.communicate(payload, timeout=COMPACT_TIMEOUT_SEC)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.communicate()
+        return None, f"摘要生成超时（>{COMPACT_TIMEOUT_SEC}s）"
+    except OSError as e:
+        return None, f"摘要进程启动失败: {e}"
+    ok, detail = False, ""
+    for line in (out or "").splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            ev = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(ev, dict) and ev.get("command") == "compact":
+            ok = bool(ev.get("success"))
+            if not ok:
+                detail = json.dumps(ev.get("error"), ensure_ascii=False)[:200]
+    if not ok:
+        tail = (errout or "").strip().replace("\n", " ")[:160]
+        return None, (f"compact 未成功（rc={proc.returncode}"
+                      f"{'，' + detail if detail else ''}"
+                      f"{'，stderr: ' + tail if tail else ''}）")
+    stats, ferr = meeting_fs.finalize_compaction_base(out_path)
+    if ferr:
+        return None, ferr
+    stats.update({"model": model, "thinking": thinking, "topic": topic,
+                  "instructions": instr, "rc": proc.returncode})
+    try:
+        with open(os.path.join(os.path.dirname(out_path),
+                              meeting_fs.COMPACT_BASE_STATS), "w",
+                  encoding="utf-8") as f:
+            json.dump(stats, f, ensure_ascii=False, indent=2)
+    except OSError as e:
+        # 统计写不动不影响 base 本身（报告会显示 n/a）
+        log("_", f"[warn] context-base.json 写入失败: {e}")
+    return stats, ""
 
 
 def _spawn_env(workdir):

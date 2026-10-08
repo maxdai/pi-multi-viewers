@@ -788,6 +788,58 @@ commit 是溯源记录、本节是长期引用点——不并存两份权威值�
     （含"谁都没设 → 内置默认"这条反例断言）。生效值与来源在启动时逐键打印
     （`max-meeting=20（默认值配置）`），不存在静默覆盖。
 
+24. **定向摘要 fork 模式（近端窗口 L1 + 远端定向摘要 L2）**（2026-10-08 用户提出并定）：
+    **动机（用户观察）**：过长的 session 历史会**分散 subagent 的注意力**，导致与本轮要求有偏差的
+    thinking ⇒ 要的不是"历史越多越好"，而是**适量且与主题相关**的内容。
+    **判据说明（重要）**：'偏差减少'**无法测量**（本项目至今无质量判据，e2e17 已记"缺席 ≠ 0"）
+    ⇒ 本模式的验收只看**结构事实**（上下文构成 / 规模 / 摘要覆盖度）＋**用户 dogfooding 感知**；
+    不做"先把预算调小、再观察偏差"这类**无判据实验**（用户 2026-10-08 否决该路径）。
+    **形态（模型看到三层）**：① compactionSummary（远端**定向**摘要）
+      ② 近端原始窗口（逐字、不折叠）③ 链尾 2 轮切换叙事（+ 边界条目）。
+    磁盘上另存被摘要覆盖的原始历史（**保留**、模型看不见 ⇒ 非破坏性、可审计）。
+    **依据（pi 语义，2026-10-08 读源码核实，全部带 `文件:行`）**：
+    ① 上下文构建 `core/session-manager.ts:469-511`：取叶路径上**最后一条** compaction；其**之前**
+       条目默认丢弃（除位于 `firstKeptEntryId` 之后者）；其**之后**条目**一律保留**（与锚点无关）；
+       **锚点找不到 ⇒ 不报错**，静默变成"只留摘要 + compaction 之后的条目"（良性，本模式据此设计）。
+    ② 摘要送达形态 `core/messages.ts:176-182`：`compactionSummary` → **user 角色** + 固定包装
+       `COMPACTION_SUMMARY_PREFIX`（"The conversation history before this point was compacted into
+       the following summary:"）与 `SUFFIX`（`</summary>`）。
+    ③ pi 自己的切点 `compaction.ts:446`（`findCutPoint`）= 从最新往回累加到 `keepRecentTokens`
+       （默认 **20000**，`compaction.ts:129`）；该值属**用户级** settings ⇒ **不可**由我们按场设置
+       （会影响主 pi，同决策 20 的 exposure 教训）⇒ **L1 由我们自己的裁剪实现**。
+    ④ 定向能力边界 `compaction.ts:719-720`（`customInstructions` 追加为 "Additional focus: …"）：
+       **只能定向摘要内容，不能定向选取** —— 选取始终是"按位置的前缀切"。
+       ⇒ 所以 L2 必须配 L1（否则近端仍是一大堆未过滤的原始消息）。
+    **`systemMessage` 的两层区分（本轮澄清，防误解）**：compaction 条目里的 `systemMessage` 是
+    **压缩那一刻的 prompt/工具状态快照**（`session-manager.ts:1270` 自动抓
+    `getCurrentSystemMessage(buildSessionProjection())`），因为原来的 system 条目位于边界之前、
+    会被一并丢弃 ⇒ 快照负责**补位**。它**不是** agents 的 AGENTS.md 来源：后者由**运行期重建**
+    （`agent-session.ts:1470/1700` 的 `buildSystemPrompt`/`_rebuildSystemPrompt` + 我们两条
+    `--append-system-prompt`（视角文件、work-X/AGENTS.md）+ **未传** `--no-context-files`）
+    ⇒ **剥掉快照不影响 AGENTS.md/协议/视角任务书**；去掉的是主 pi 的旧 sections 与 `toolsAdded`。
+    **实现路径（复用现有 compaction 模式，不做新的链式改写）**：
+    ① setup（`--start`，每场**一次**、三视角共享，避免三进程竞争）：复制主 session →
+       `pi --mode rpc --session <副本>` + 本项目 flag → `{"type":"compact","customInstructions":"<定向指令>"}`
+       ⇒ 得"摘要 + pi 选的锚点"（RPC 通道已实测：能对指定副本工作、只读命令不写盘）；
+    ② `meeting_fs.retarget_compaction_anchor(base, keep_tokens)`：把锚点**重设为我们自己的**近端
+       窗口首条（从尾部按 `_est_tokens` 走，值取 L1 旋钮）⇒ 之后走**现有** `mode="compaction"`
+       切片（`entries[锚点索引:]`，天然含 compaction 条目于其自然位置）⇒ **无需删除条目、无需桥接**；
+    ③ 各 agent 首唤：在 **base** 上跑 `build_fork_source(mode="compaction")` → 注入 handoff + 边界；
+    ④ 摘要原文落盘（分析目录）+ header 标注"含 LLM 摘要" + 报告一行（摘要 est / 窗口 est / 摘要模型）；
+    ⑤ 任一步失败或超时 ⇒ **回退当前 budget 行为**（可见日志、不阻断分析）。
+    **布局约束（由 ① 推得）**：`[被摘要覆盖的历史] → [锚点..近端窗口] → [compaction 条目] →
+    [handoff]`（= pi 自身的自然布局）；模型侧渲染顺序仍是"**摘要在前**"。
+    **`preface` 必须移到 compaction 之后**（否则它位于 compaction 之前会被隐藏），措辞从
+    "已按预算压缩"改为"已被摘要覆盖"。
+    **代价（诚实）**：① 摘要会带入**摘要者的框架**（缓解：指令里写"只陈述事实、不要替读者取舍排序"、
+       并保留近端原始窗口；摘要**不可复现** ⇒ 同一输入两次结果不同是已知代价，必须留档）；
+    ② 近端细节损失（窗口越小越明显；缓解：项目文件可读 + `ctx_search`）；
+    ③ 每场多一次 LLM 调用（setup 阶段，秒–分钟级；失败不阻断）。
+    **默认**：先作为**新 fork 模式**（opt-in），默认仍是 `budget`；真跑验证后由用户决定是否翻转默认。
+    **重估触发**：连续两场真跑后——用户感知无改善、或摘要明显带偏 ⇒ 回退默认 `budget`。
+    前置事实（`pi --mode rpc` 可对副本 work、`compact` 条目形状、`buildContextEntries` 语义）
+    已在 2026-10-08 零 LLM 核实，探针现场已清理。
+
 ## 四、记录项（不修；每项必带**现在就能用的观测点**）
 
 | 项 | 实测/性质（口径） | 触发条件（观测点） |
