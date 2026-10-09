@@ -662,9 +662,9 @@ def main():
     # 与 spec/startup.md（与配额三个 flag 同款，2026-10-08 扩到 fork-mode）
     parser.add_argument("--fork-mode", default=None,
                         choices=list(meeting_fs.FORK_MODES),
-                        help="fork 裁剪策略：budget=预算+折叠（默认，长会话可行）；"
-                             "summary=远端摘要（指令只覆盖 ≈53%，含 pi 自己的 split-turn 段）"
-                             "+近端原始窗口（决策 24）；"
+                        help="fork 裁剪策略：budget=预算+折叠；"
+                             "summary=远端摘要（**默认**；指令只覆盖 ≈53%%（占比），含 pi 自己的 split-turn 段）"
+                             "+近端原始窗口，背景约为 budget 的 1/3（决策 24）；"
                              "compaction=按 compaction 边界（中小会话零损失）；"
                              "full=全量（小会话/验证）")
     parser.add_argument("--fork-source", default=None,

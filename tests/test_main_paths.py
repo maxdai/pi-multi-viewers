@@ -15,6 +15,8 @@ import subprocess
 import sys
 import tempfile
 import unittest
+
+REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 from unittest import mock
 
 import meeting_fs
@@ -1177,5 +1179,28 @@ class TestReportContextLine(unittest.TestCase):
         self.assertIn("n/a", out[0])
 
 
+class TestCliHelpRenders(unittest.TestCase):
+    """两个入口的 `--help` 必须能渲染（真 subprocess 跑生产调用链）。
+
+    为什么单列一条：argparse 会对 help 串做 `%`-formatting，**字面百分号未转义
+    就抛 `ValueError`**（2026-10-09 实际踩到：帮助文本里写 `≈53%` ⇒ `--help` 崩，
+    而正常参数解析不受影响 ⇒ 单测全绿也发现不了）。这条断言就是那个盲区的守卫。
+    """
+
+    def _help(self, script):
+        r = subprocess.run([sys.executable, os.path.join(REPO, script), "--help"],
+                           capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, f"{script} --help rc={r.returncode}: {r.stderr[-500:]}")
+        self.assertNotIn("Traceback", r.stderr)
+        return r.stdout
+
+    def test_start_discussion_help(self):
+        out = self._help("start_discussion.py")
+        self.assertIn("--fork-mode", out)
+        self.assertIn("summary", out)
+
+    def test_mv_cli_help(self):
+        out = self._help("mv_cli.py")
+        self.assertIn("--start", out)
 if __name__ == "__main__":
     unittest.main()

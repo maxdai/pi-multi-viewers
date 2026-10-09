@@ -113,7 +113,7 @@ FORK_MODES = ("budget", "compaction", "summary", "full")
 # summary = 定向摘要（决策 24）：远端摘要（`DEFAULT_SUMMARY_FRONT_TOKENS` 限幅）
 # + 近端原始窗口（`SUMMARY_KEEP_TAIL_TOKENS`）——见 build_summary_input /
 # finalize_compaction_base / generate_compact_base。
-DEFAULT_FORK_MODE = "budget"
+DEFAULT_FORK_MODE = "summary"
 
 STARTUP_DEFAULTS = {            # 键名 → 内置默认（引用上方常量，不重复字面量）
     "max-meeting": DEFAULT_MAX_MEETING,

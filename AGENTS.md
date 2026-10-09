@@ -111,8 +111,12 @@ MCP 那份是**常量** `meeting_fs.BUILTIN_MCP_ENTRY = "builtin:mcp"`（pi 0.99
 **fork 容量约束（2026-09-10 实测）**：fork 携带的是 session **原始条目**
 （主 pi 实际发送的上下文由压缩层在渲染时生成，不在条目里）——长会话的
 原始条目远超模型窗口（实测 930k tokens + 384k completion 预留 > 1M，provider
-直接 400；`pi --fork` 原生命令同样超窗）。因此 **budget 是长会话唯一可行
-模式**；compaction/full 只适合中小会话；`summary` = 定向摘要 + 近端窗口（决策 24：比 budget 聚焦、比 compaction 不丢信息）（数字口径见 `docs/design.md`）。
+直接 400；`pi --fork` 原生命令同样超窗）。因此长会话只能用**有界**模式：
+**`summary` 是默认**（2026-10-09 起；远端摘要 + 近端原始窗口，实测背景 ≈26.8k est
+≈ budget 的 1/3；代价 = 每场一次 compact 调用，失败**可见回落 budget**）；
+`budget` = 纯预算裁剪（80k est）；`compaction`/`full` 只适合中小会话
+（同一主 session 实测：compaction 335k est、full 5.8M est ⇒ 长会话不可用）。
+数字口径见 `docs/design.md` §二与决策 24。
 
 **viewers/ 分支约定**：spec 的 `agents/` 目录存在 = 显式模式（优先）；
 不存在 → 项目 cwd 的 `viewers/*.md` 发现（文件名即 agent 名：中文合法，

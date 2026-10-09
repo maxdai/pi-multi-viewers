@@ -900,8 +900,16 @@ commit 是溯源记录、本节是长期引用点——不并存两份权威值�
        并保留近端原始窗口；摘要**不可复现** ⇒ 同一输入两次结果不同是已知代价，必须留档）；
     ② 近端细节损失（窗口越小越明显；缓解：项目文件可读 + `ctx_search`）；
     ③ 每场多一次 LLM 调用（setup 阶段，秒–分钟级；失败不阻断）。
-    **默认**：先作为**新 fork 模式**（opt-in），默认仍是 `budget`；真跑验证后由用户决定是否翻转默认。
-    **重估触发**：连续两场真跑后——用户感知无改善、或摘要明显带偏 ⇒ 回退默认 `budget`。
+      **默认（2026-10-09 更新：已翻转为 `summary`）**：用户裁定"先把 `summary` 作为默认
+      用一段时间看看"⇒ `meeting_fs.DEFAULT_FORK_MODE = "summary"`（唯一值声明点）。
+      依据 = **本模式唯一已实测的收益**：同一主 session 实测 fork 源 26,844 est
+      （+摘要 2,912）vs `budget` 80,129 est ⇒ **背景约为 1/3**（`compaction` 335,294 /
+      `full` 5,832,054 ⇒ 长会话不可用）。代价：每场一次 compact 调用（实测 30–60s /
+      ≈$0.0138），失败或 300s 超时**可见回落 budget**（打印一行 + 改回
+      `protocol.forkMode`），不阻断分析。回滚一条命令：
+      `mv.sh --set-default fork-mode budget`（用户级）或改回该常量（产品级）。
+      **重估触发（更新）**：试用期结束后按 per-wake usage（观测面 A6）做
+      `budget`/`summary` 对照；用户感知无改善、或摘要明显带偏 ⇒ 回退默认 `budget`。
     前置事实（`pi --mode rpc` 可对副本 work、`compact` 条目形状、`buildContextEntries` 语义）
     已在 2026-10-08 零 LLM 核实，探针现场已清理。
 

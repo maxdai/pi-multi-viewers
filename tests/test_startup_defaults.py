@@ -132,24 +132,25 @@ class TestForkModeAsStartupKey(unittest.TestCase):
         kw.setdefault("fork_source", fs_src)
         # forkMode 只在有 forkSource 时写进 protocol；summary 分支会去生成摘要
         # ⇒ 必须挡掉那次 LLM（零 LLM 测试铁律）
-        stats = {"summary_est": 1, "window_est": 1, "dropped_entries": 0,
-                 "model": "m", "keep_tail": 20000, "front_tokens": 80000,
-                 "input_entries": 1, "input_est": 1, "input_dropped": 0,
+        stats = {"summary_est": 1, "dropped_entries": 0, "model": "m",
+                 "keep_tail": 20000, "front_tokens": 80000,
+                 "input_entries": 1, "input_dropped": 0,
                  "source_est": 1, "wall_sec": 1.0}
         with mock.patch.object(meeting_loop, "generate_compact_base",
                                return_value=(stats, "")):
             setup_environment(Args(**kw), ["a", "b"], base, self.spec)
         return meeting_fs.read_protocol(meeting_fs.bare_of_base(base))
 
-    def test_default_is_budget_and_in_spec(self):
-        self.assertIn("fork-mode: budget",
+    def test_builtin_default_is_summary_and_in_spec(self):
+        """内置默认（2026-10-09 起 = summary）：无配置、无 flag 时落进 spec 与 protocol。"""
+        self.assertIn("fork-mode: summary",
                       open(spec_gen.spec_startup_path(self.spec),
                            encoding="utf-8").read())
-        self.assertEqual(self._run()["forkMode"], "budget")
+        self.assertEqual(self._run()["forkMode"], "summary")
 
     def test_config_default_is_used(self):
         meeting_fs.write_startup_config("fork-mode", "summary")
-        # spec/startup.md 里写着 budget（优先级高于配置）⇒ 先改 spec
+        # spec/startup.md 里写着内置默认（优先级高于配置）⇒ 先改 spec
         p = spec_gen.spec_startup_path(self.spec)
         open(p, "w", encoding="utf-8").write("fork-mode: summary\n")
         self.assertEqual(self._run()["forkMode"], "summary")
