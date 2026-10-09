@@ -892,7 +892,8 @@ def parse_log_nameonly(output):
 # budget 模式参数（fork 源裁剪）
 #
 # fork 源模式（**值集合与默认值的单一事实源**）：
-#   budget     —— 预算 + 折叠（默认；长会话唯一可行）
+#   summary    —— 远端摘要 + 近端原始窗口（**默认**；见 DEFAULT_FORK_MODE）
+#   budget     —— 预算 + 折叠（长会话可行）
 #   compaction —— 按 compaction 边界（中小会话，内容原样）
 #   full       —— 全量（小会话/验证）
 # 两种语义角色（勿混）：FORK_MODES 是**处理哪个模式**（分派仍用字面量）；
@@ -1242,7 +1243,7 @@ def build_fork_source(src_session, out_path, new_id, new_cwd,
     （不用 `pi --fork`：那是一份全量拷贝，且我们需在尾部注入切换叙事）。
 
     三种裁剪策略（header 的 forkSourceMode 标记可核查）：
-      budget：**预算 + 折叠**（默认）——恢复 pi 自身的压缩不变量（摘要 +
+      budget：**预算 + 折叠**——恢复 pi 自身的压缩不变量（摘要 +
         最近窗口）；**构建期**不依赖任何扩展（运行期上下文仍受环境扩展
         的渲染期裁剪影响）。为什么需要：主 pi 实际发送的上下文
         比文件条目小得多（压缩层不在条目里）——实测本会话原始条目

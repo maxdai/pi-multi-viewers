@@ -351,7 +351,7 @@ class TestForkWake(unittest.TestCase):
     def _run(self, proc, **kwargs):
         kwargs.setdefault("fork_source", self.src)
         kwargs.setdefault("fork_cwd", self.cwd_main)
-        # 本类测命令构造：模式显式取 compaction（默认 budget 会折叠/加 preface，
+        # 本类测命令构造：模式显式取 compaction（折叠类模式会改写条目/加 preface，
         # 断言对象不同）——budget 路径由 test_meeting_fs 覆盖
         kwargs.setdefault("fork_mode", "compaction")
         orig_popen = subprocess.Popen

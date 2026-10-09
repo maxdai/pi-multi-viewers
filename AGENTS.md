@@ -50,7 +50,7 @@ tests/               测试（unittest discover tests）
 
 **fork 三件套**（初始化层与 pi-agents-helper 的全部差异所在）：
 
-1. **session fork**：首唤由本地循环生成 **fork 源文件**（`meeting_fs.build_fork_source`：从主 session 按模式裁剪——默认 `budget` 预算+折叠；`summary` 定向摘要（决策 24：远端摘要+近端原始窗口）；`compaction` 按 compaction 边界；`full` 全量），再用 `pi --session <fork 源> --name <分析名>-<视角名>` 打开；后续唤醒 `--session-id <sid>` 续接（sid 存 `status-<agent>.json`，预生成 UUID）。
+1. **session fork**：首唤由本地循环生成 **fork 源文件**（`meeting_fs.build_fork_source`：从主 session 按模式裁剪——`summary` 定向摘要（**默认**，2026-10-09 起；决策 24：远端摘要+近端原始窗口）；`budget` 预算+折叠；`compaction` 按 compaction 边界；`full` 全量），再用 `pi --session <fork 源> --name <分析名>-<视角名>` 打开；后续唤醒 `--session-id <sid>` 续接（sid 存 `status-<agent>.json`，预生成 UUID）。
    - **不用 `pi --fork`**：那是全量拷贝（长会话必超窗，实测 731k/930k tokens + 384k completion 预留 > 1M），且无法在尾部注入切换叙事
    - 切换叙事（2 对"停止旧任务 → 新任务说明"对话）注入在 fork 源尾部——切断历史叙事惯性；主题取自 `protocol.json.topic`（**不**二次解析 question.md）
    - `--name` 是显示名 label（session_info entry），不劫持 id（id 归机制=UUID，名字归人）；规模/口径见 `docs/design.md`

@@ -26,7 +26,7 @@
 
 | 模式 | 做法 | 产物量级（锚见上） | 适用 |
 |---|---|---|---|
-| `budget`（默认） | 从 compaction 边界起 + 折叠（丢 thinking、旧工具输出换省略标记、长参数截断）+ 按预算从尾部保留，更早的丢弃并写「上下文说明」preface | ≈0.8k 条 / ≈0.9 MB；`est` 以**预算为上界**（preface 计入、边界回扩可
+| `budget` | 从 compaction 边界起 + 折叠（丢 thinking、旧工具输出换省略标记、长参数截断）+ 按预算从尾部保留，更早的丢弃并写「上下文说明」preface | ≈0.8k 条 / ≈0.9 MB；`est` 以**预算为上界**（preface 计入、边界回扩可
 略上浮——精确式见 §二），丢弃数记在 `forkSourceDropped` | 长会话**唯一可行** |
 | `compaction` | 从最后 compaction 的 `firstKeptEntryId` 起，内容原样（不折叠） | ≈2.9k 条 / ≈5.7 MB | 中小会话（零信息损失） |
 | `full` | 全部条目（源会话的**忠实拷贝**，含其 compaction 条目与可见性
@@ -267,7 +267,8 @@ commit 是溯源记录、本节是长期引用点——不并存两份权威值�
 3. **切换叙事**：fork 源尾部注入 2 对对话（"停止旧任务" → assistant 询问
    → 新任务说明 → assistant 确认）——用最后一段对话切断历史叙事惯性。
    主题取自 `protocol.json.topic`（**不**二次解析 question.md）。
-4. **budget 为默认模式**（长会话唯一可行；compaction/full 留作中小会话与验证）。
+4. **有界模式才是默认**（2026-10-09 起 = `summary`：远端摘要 + 近端原始窗口；`budget`
+   为纯预算裁剪、`compaction`/`full` 只适合中小会话——长会话实测 335k / 5.8M est 会超窗）。
 5. **模型引用按契约拼接**（provider + id 两字段，无条件拼接）——不按值的
    形状猜（形状启发式会把 provider 丢掉，静默解析到同名模型）。
 6. **viewers/ 稳定视角资产**：`--prepare` 快照进 `spec/agents/`（可按场改），

@@ -31,7 +31,7 @@ provider 连续失败或扩展异常时可能显著更久（历史场次里出�
 | 机制 | 说明 |
 |---|---|
 | session fork | 首唤由本地循环**生成 fork 源文件**（从主 session 裁剪/折叠，见下表），再用 `pi --session <fork 源> --name <分析名>-<视角名>` 打开——agent 携带发起分析的对话上下文（不是 `pi --fork`：那是全量拷贝且无法在尾部注入切换叙事） |
-| fork 源模式 | `--fork-mode budget`（默认）/ `summary` / `compaction` / `full`，见下表 |
+| fork 源模式 | `--fork-mode summary`（默认）/ `budget` / `compaction` / `full`，见下表 |
 | cwd = 主项目 | agent 进程直接读项目文件；work_dir 仅作消息交换区（绝对路径显式指定） |
 | 视角注入 | `--append-system-prompt` ×2（协议 + 视角任务书） |
 | 切换叙事 | fork 源尾部注入 2 对"停止旧任务 → 新任务说明"对话——显式切断历史叙事惯性 |
@@ -41,7 +41,7 @@ provider 连续失败或扩展异常时可能显著更久（历史场次里出�
 
 | 模式 | 做法 | 适用 |
 |---|---|---|
-| **budget**（默认） | 按预算（约 80k est，示意值——权威口径见 docs/design.md §二）+ 折叠：丢 thinking、长参数截断、旧工具输出换省略标记 → 从尾部保留 | 长会话**唯一可行**形态 |
+| budget | 按预算（约 80k est，示意值——权威口径见 docs/design.md §二）+ 折叠：丢 thinking、长参数截断、旧工具输出换省略标记 → 从尾部保留 | 长会话**唯一可行**形态 |
 | compaction | 从主 session 最后一个 compaction 边界起：内容原样（不折叠） | 中小会话，零信息损失 |
 | **summary** | 用 pi 自己的摘要器在主 session 的**有界副本**上生成摘要（带与主题相关的取舍指令、**不带推理**），再走 compaction 那条切片：远端=摘要、近端=原始窗口（决策 24） | 想让 agent 少被无关历史分散注意力时；比 budget 更聚焦、且近端窗口是逐字原文 |
 
@@ -124,7 +124,7 @@ ls viewers/
 
 # 每次：生成主题骨架（视角自动来自 viewers/*.md）
 scripts/mv.sh --prepare "<主题>"              # spec = question.md(+background.md)
-scripts/mv.sh --start <spec目录>              # 启动（自动挂载主 session；默认 budget 模式）
+scripts/mv.sh --start <spec目录>              # 启动（自动挂载主 session；默认 summary 模式）
 #  可选：--fork-mode budget|summary|compaction|full（见上表；一般不调）
 #  可选：--max-meeting 15 --max-rr 7 --stall-timeout 600
 #        （配额：建环境时固化进 protocol.json，之后不可改；meeting 配额是"每 agent"）
@@ -147,6 +147,7 @@ scripts/mv.sh --cleanup                       # 收尾（result.md + 报告都�
 scripts/mv.sh --viewers                       # 列出+校验当前项目 viewers/（只读；建视角时用）
 scripts/mv.sh --set-viewer <名字>             # 新建视角文件（正文从 stdin 读；只新建不覆盖）
 scripts/mv.sh --set-default [<键> <值>]       # 启动参数默认值（无参数=查看）
+scripts/mv.sh --set-default fork-mode budget # 例：把 fork 模式默认值改回 budget
 ```
 
 ## 启动参数与默认值
@@ -154,8 +155,16 @@ scripts/mv.sh --set-default [<键> <值>]       # 启动参数默认值（无参
 配额这类参数可以在**跑之前**设成默认值，之后每次生成 spec 都会沿用：
 
 ```
-/multi-viewers-config max-meeting 20      # 设默认值（等价 mv.sh --set-default max-meeting 20）
-/multi-viewers-config                     # 查看当前默认值（哪些来自配置文件、哪些是内置）
+/multi-viewers-config max-meeting 20          # 设默认值（等价 mv.sh --set-default max-meeting 20）
+/multi-viewers-config fork-mode summary       # 设 fork 模式（等价 mv.sh --set-default fork-mode summary）
+/multi-viewers-config                         # 查看当前默认值（哪些来自配置文件、哪些是内置）
+```
+命令行等价写法（不开 pi 时用）：
+
+```
+./scripts/mv.sh --set-default fork-mode summary   # 远端摘要 + 近端原始窗口
+./scripts/mv.sh --set-default fork-mode budget    # 纯预算裁剪（想回退时用这条）
+./scripts/mv.sh --set-default                    # 查看全部默认值（含来源）
 ```
 
 **取值优先级**（后者覆盖前者）：内置默认 → 你设的默认值 → `spec/startup.md`
@@ -164,8 +173,7 @@ scripts/mv.sh --set-default [<键> <值>]       # 启动参数默认值（无参
 （loop 每轮只读它，中途不可改）。
 
 可设的键：`max-meeting`（meeting 阶段每 agent 发言配额，默认 15）、
-`fork-mode`（fork 源模式：`budget`/`compaction`/`summary`/`full`，默认 `budget`——设成
-`summary` 后 `/multi-viewers` 也走定向摘要）、
+`fork-mode`（fork 源模式：`budget`/`compaction`/`summary`/`full`，**默认 `summary`**）、
 `summary-front`（`--fork-mode summary` 时会被摘要掉的**前部**规模，默认 80000；
 单位是本文档的 token est（字符/3，实测偏保守约 1.4–2×，安全方向）。窗口 =
 它 + 尾部 20000。越大 = 更多历史被摘要覆盖、也更贵（est 100k ≈ 1 分钟）；
