@@ -19,7 +19,8 @@
      （`generateTurnPrefixSummary` 签名不含 `customInstructions`）
   5. 决策 = **默认 budget + summary opt-in（即现状，零代码改动）**；不删代码，
      但保留则需"钉子"（断言 + fixture + 产物记 pi 版本）；重估条件 = 连续 3 场零使用
-- **落地**：本场提出的 A1–A8 清单已实现（commit `TODO`）；`summary` 模式本身零改动
+- **落地**：本场提出的 A1–A8 清单已实现（commit `d618d80`，538 python + 55 harness 全绿）；`summary` 模式本身零改动
+- **落地（前置）**：`fork-mode` 进启动默认值（`4176d72`，本场即用该机制起跑）
 - **备注**：本场同时是 `fork-mode` 进启动默认值（`4176d72`）后第一场；
   报告/产物核验见仓库根同名 `-report.txt`（10,513 字节，未随包）
 
