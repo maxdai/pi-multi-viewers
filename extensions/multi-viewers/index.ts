@@ -238,7 +238,10 @@ export default function register(pi: any) {
   // 零 LLM：直接调 `mv.sh --set-default`（写法与校验都在 python 侧单点实现）。
   // 语义：这里改的是**默认值**；spec/startup.md 或 --start 的显式 flag 优先。
   pi.registerCommand("multi-viewers-config", {
-    description: "查看/修改启动参数默认值（max-meeting / max-rr / stall-timeout）",
+    // 不在这里列举键与合法值：唯一事实源是 python 侧（`STARTUP_DEFAULTS` /
+    // `--set-default` 的输出）——枚举过的清单会随新增键漂移（本轮就漂过一次：
+    // 加了 summary-front / fork-mode 之后这里还只写着三个配额键）。
+    description: "查看/修改启动参数默认值（键与合法值以输出为准）",
     argumentHint: "[<键> <值>]",
     handler: async (args: string, ctx: any) => {
       const rest = args.trim().split(/\s+/).filter(Boolean);
