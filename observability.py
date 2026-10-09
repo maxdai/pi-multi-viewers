@@ -680,8 +680,14 @@ def _report_context_line(base, out):
         f"被摘要覆盖 {st.get('dropped_entries', 'n/a')} 条",
     ]
     if st.get("input_est") is not None:
-        front = f"（前部限幅 {st['front_tokens']}）" if st.get("front_tokens") is not None else ""
+        front = f"（限幅目标 {st['front_tokens']}）" if st.get("front_tokens") is not None else ""
         parts.append(f"摘要器读入 est≈{st['input_est']}{front}")
+    u = st.get("usage") or {}
+    req = (u.get("input") or 0) + (u.get("cacheRead") or 0)
+    if req:
+        parts.append(f"实际请求 {req} tokens"
+                     + (f"（输出 {u['output']}，含推理 {u.get('reasoning', 0)}）"
+                        if u.get("output") is not None else ""))
     if st.get("input_dropped"):
         src = f"（源可见 est≈{st['source_est']}）" if st.get("source_est") is not None else ""
         parts.append(f"限幅丢弃 {st['input_dropped']} 条{src}")

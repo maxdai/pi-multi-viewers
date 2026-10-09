@@ -158,7 +158,10 @@ scripts/mv.sh --set-default [<键> <值>]       # 启动参数默认值（无参
 （loop 每轮只读它，中途不可改）。
 
 可设的键：`max-meeting`（meeting 阶段每 agent 发言配额，默认 15）、
-`max-rr`（RR 轮次配额，默认 7）、`stall-timeout`（无进展超时秒数，默认 600）、`summary-front`（`--fork-mode summary` 时交给摘要器的**前部**规模，tokens est，默认 80000——越大 = 更多历史被摘要覆盖、也更贵；越小 = 更多更早条目被丢弃，丢弃数会打印并写进报告）。
+`summary-front`（`--fork-mode summary` 时会被摘要掉的**前部**规模，默认 80000；
+单位是本文档的 token est（字符/3，实测偏保守约 1.4–2×，安全方向）。窗口 =
+它 + 尾部 20000。越大 = 更多历史被摘要覆盖、也更贵（est 100k ≈ 1 分钟）；
+越小 = 更多更早条目被丢弃，丢弃数会打印并写进报告）。
 
 ## 视角文件写什么（`viewers/<视角名>.md`）
 

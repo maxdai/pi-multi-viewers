@@ -830,15 +830,35 @@ commit 是溯源记录、本节是长期引用点——不并存两份权威值�
     ③ 各 agent 首唤：在 **base** 上跑 `build_fork_source(mode="summary")` → 注入 handoff + 边界；
     ④ 摘要原文落盘（分析目录）+ header 标注 + 报告一行（摘要 est / 窗口 est / 摘要模型 / 限幅丢弃数）；
     ⑤ 任一步失败或超时 ⇒ **回退当前 budget 行为**（可见日志、不阻断分析）。
-    **实测三条（2026-10-08 LLM 验证，均已复现或已修）**：
-    ① **前部必须限幅**：主 session（37.8MB / 14,247 条）的可见集合是 356 条 / **1.34MB /
-       est≈250k tokens**，pi 的 compact 要**通读**其中 310 条 / 1.2MB / est≈208k tokens
-       —— 一次摘要调用 **>900s 没返回**（吃了 `COMPACT_TIMEOUT_SEC`）。项目文件读不完不是
-       问题，"压缩历史"这件事本身变成超长调用才是问题 ⇒ 前部 K 进启动默认值
-       （`summary-front`，默认 80000），窗口 = K + T = 100k est（实测取 107 条 / 0.43MB）。
+    **实测（2026-10-08 LLM 验证；结论全部有据，含两次自我更正）**：
+    ① **输入必须限幅**（本模式的立身之本）：主 session（38.7MB / 14,247 条）的可见
+       集合 356 条 / 1.34MB、pi 的 compact 要**通读**其中约 310 条。限幅后窗口
+       = `front` + `tail`（我们的 est），超出的更早条目如实记账（`input_dropped`）。
+    ② **规模-耗时（同一构造流程，只改窗口）**：est≈30k ⇒ **16s**、60k ⇒ **29s**、
+       100k ⇒ **56s**（可复现）。对应 **pi 记的真实请求**：60k est ⇒ 30,478 tokens、
+       100k est ⇒ 45–65k tokens ⇒ 我们的 est **偏保守约 1.4–2×**（安全方向 ✓）。
+       每次摘要成本 ≈ $0.012–0.015（output 4.7–9k、含 reasoning 0.8–4k）。
+    ③ **两次自我更正（都在同一天，写入以防重犯）**：
+       · **`contextUsage.tokens` / `tokensBefore` 不是"输入规模"**：它们 = 副本里
+         **最近一条 assistant 的 usage（真实用量）+ 其后消息的估算**
+         （`packages/ai/src/utils/estimate.ts:106`），被复制过来的 usage 记录
+         **污染**（30k 的输入也报 250k）⇒ 据此写的"按 pi 估计迭代限幅"当场被证伪
+         （4 轮复测数值不变）并**已删除**。**唯一可信的请求规模 = 摘要条目自带的
+         `usage`**（报告已附：`实际请求 N tokens（输出 …，含推理 …）`）。
+       · **三次 900s 超时是瞬时的，不是规模/provider/构造问题**：决定性复跑
+         —— 把当初超时的**同一个输入文件**原样再跑 ⇒ **56.2s 成功**
+         （input 65,331 / output 7,575）⇒ 与规模、provider、`--thinking`、
+         输入构造都无关。⇒ 处置：`COMPACT_TIMEOUT_SEC = 300`（实测正常 ≤60s；
+         挂住时封顶 5 分钟即**可见地回落 budget**，不阻断分析），并把"事件流里
+         看到了什么"留作后续诊断增强项（当前只解析 `compact` 响应）。
     ② **摘要调用的档位继承会话**（pi `_getSummarizationRequestAuth` 返回
-       `thinkingLevel: this.thinkingLevel`）——第一次验证传了 `high`，摘要器在做**高强度推理**，
-       慢上加慢 ⇒ 摘要进程固定 `--thinking off`（机械任务不需要推理）。
+       `thinkingLevel: this.thinkingLevel`）⇒ 摘要进程固定 `--thinking off`。
+       **但 off 不是处处可用**：pi 按模型的 `thinkingLevelMap` 夹取
+       （`packages/ai/src/models.ts:1224-1254`，先向更高档找、再向更低档找）——
+       `opencode-go/deepseek-v4.1-flash` 显式 `off: null` ⇒ 被夹到 `low`（实测 session
+       记 `low`，且成功产物的 usage 里 reasoning 0.8–4k ⇒ **确实还在推理**）；
+       `deepseek/deepseek-flash` 无 off 键 ⇒ **生效**（实测记 `off`，deepseek 分支发
+       `thinking:{type:"disabled"}`）。⇒ 换一个 provider 才能真正关掉推理。
     ③ **RPC 的 stdin 必须保持打开**：读端 stdin 收到 EOF 就开始退出并 **abort 正在进行的压缩**
        —— 用 `communicate()`（写完即关 stdin）时 0.8s 就返回
        `Turn prefix summarization failed: This operation was aborted`（看起来像模型/协议问题，
@@ -849,8 +869,9 @@ commit 是溯源记录、本节是长期引用点——不并存两份权威值�
     **尾部 T 的作用域**：pi 的 `keepRecentTokens` 是用户级设置（改它会波及主 pi）⇒ 我们用一个
     **cwd 级项目设置**（`<分析目录>/summary-cwd/.pi/settings.json`，pi 会 `deepMergeSettings`
     把项目设置盖在全局之上）+ 摘要进程 `cwd=` 那个目录 ⇒ **只影响这一个进程**。
-    对照组（小会话 718KB / `tokensBefore` 110k）：真 pi compact 成功，摘要 est 986 /
-    窗口 est 25702 / 锚点前 42 条被覆盖 ⇒ 机制本身成立，问题只在前部规模。
+    机制本身成立的证据（小会话对照，pi 自己 compact 成功）：摘要 est 986 /
+    窗口 est 25702 / 锚点前 42 条被覆盖。⇒ 问题从来不是"compact 能不能用"，
+    而是"喂进去多大"。
     **布局约束（由 ① 推得）**：`[被摘要覆盖的历史] → [锚点..近端窗口] → [compaction 条目] →
     [handoff]`（= pi 自身的自然布局）；模型侧渲染顺序仍是"**摘要在前**"。
     **`preface` 必须移到 compaction 之后**（否则它位于 compaction 之前会被隐藏），措辞从

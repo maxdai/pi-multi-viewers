@@ -34,14 +34,15 @@ RESULT_MD = "result.md"
 COMPACT_BASE_NAME = "context-base.jsonl"   # pi compact 过的副本（= fork 源的源）
 COMPACT_BASE_STATS = "context-base.json"   # 摘要/窗口规模的记账（报告读它）
 
-# 摘要器读多少（决策 24）。两个量（tokens est）：
+# 摘要器读多少（决策 24）。两个量（我们的 est = 字符/3，**不是** pi 的
+# `contextUsage`/`tokensBefore`——那两个被副本里的 usage 记录污染，实测 30k 输入
+# 也报 250k，故不可作判据）：
 #   front —— 会被摘要掉的前部规模（**可配**，进 STARTUP_DEFAULTS）
 #   tail  —— 交给 pi 原样保留的尾部（= pi 的 `compaction.keepRecentTokens`；
 #            我们通过 cwd 级项目设置注入同名值，作用域仅限摘要进程）
-# 为什么必须给前部设上限（2026-10-08 实测）：pi 的 compact 会通读"上一次
-# compaction 之后"的全部消息 —— 本仓主 session 上是 310 条 / 1.2MB /
-# est≈208k tokens，一次摘要 >900s 不返回。**压缩历史这件事本身不该变成
-# 一次超长调用**，所以前部由我们限幅，超出的部分如实记账（不假装覆盖）。
+# 实测规模-耗时（同一构造流程，2026-10-08）：est 30k ⇒ 16s、60k ⇒ 29s、100k ⇒ 56s。
+# 默认 front=80000 ⇒ 窗口 = 100k est ⇒ 约 1 分钟；超出的更早条目如实记账
+# （`build_summary_input` 的 dropped，不假装覆盖）。
 DEFAULT_SUMMARY_FRONT_TOKENS = 80000
 SUMMARY_KEEP_TAIL_TOKENS = 20000
 
@@ -1555,6 +1556,10 @@ def finalize_compaction_base(session_file):
     visible += entries[ci + 1:]
     stats = {
         "summary_est": _est_tokens(comp.get("summary") or ""),
+        # pi 自己记的**真实用量**（唯一可信的请求规模度量：我们的 est 只是字符估算，
+        # 实测偏保守约 1.4–2×；而 `tokensBefore`/`contextUsage` 会被副本里的 usage
+        # 记录污染，不可用）。摘要那次请求的规模 = input + cacheRead。
+        "usage": comp.get("usage"),
         "window_est": sum(_est_tokens(_entry_text(e)) for e in visible),
         "tokens_before": comp.get("tokensBefore"),
         # 口径：**被摘要覆盖的条目数** = 切点之前的条目数。锚点缺失时

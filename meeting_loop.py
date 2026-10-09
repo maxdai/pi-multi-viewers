@@ -428,7 +428,7 @@ def _build_wake_cmd(workdir, agent, sid, cfg, fork_source, fork_cwd,
 # 各 agent 的首唤都从它切出 fork 源（一次生成、三视角共享）。
 # 摘要生成的硬超时：一次模型调用（输入是会话前缀，可能很大）。超时 ⇒ 回落
 # budget（不阻断分析）——宁可退到旧行为，不可让 setup 挂住。
-COMPACT_TIMEOUT_SEC = 900
+COMPACT_TIMEOUT_SEC = 300
 # 摘要进程的工作目录（放 cwd 级项目设置：`<它>/.pi/settings.json`）——pi 把
 # 项目设置 deepMerge 到全局之上（`settings-manager.ts`），所以
 # `compaction.keepRecentTokens` 只对**这一个进程**生效，主 pi 不受影响。
@@ -456,74 +456,34 @@ def build_summary_instructions(topic):
     )
 
 
-def generate_compact_base(main_session, out_path, model, topic,
-                          front_tokens=meeting_fs.DEFAULT_SUMMARY_FRONT_TOKENS,
-                          keep_tail=meeting_fs.SUMMARY_KEEP_TAIL_TOKENS):
-    """造一份**有界**输入 → 跑 pi 自己的 compact（带定向指令）→ base session（决策 24）。
+def _rpc_request(session_file, cfg_dir, model, thinking, request, expect,
+                 timeout):
+    """跑一次 `pi --mode rpc` 的「请求 → 响应」。**唯一实现**。
 
-    为什么走 `pi --mode rpc` 而不是自己写摘要 prompt：摘要器 = pi 自己那份
-    （同一套结构化检查点 prompt + `customInstructions`），**不漂移**；RPC 通道
-    能对**指定文件**工作（2026-10-08 实测）。输入由我们自己裁出来
-    （`meeting_fs.build_summary_input`）⇒ 主 session **只读、永不被改动**。
+    为什么抽出来：compact（生成摘要）与 get_session_stats（问 pi 自己算的上下文
+    规模）需要**同一套交互**——两处各写一遍就是两份坑，而 stdin EOF 那个坑
+    （`pi` 读到 EOF 就退出并 abort 正在进行的压缩）我们已经付过一次账
+    （2026-10-08：用 `communicate()` 时 0.8s 就返回 "This operation was aborted"）。
 
-    为什么输入必须**自己限幅**（2026-10-08 实测教训）：pi 的 compact 会通读
-    "上一次 compaction 之后的全部消息"——主 session 上是 310 条 / 1.2MB /
-    est≈208k tokens，直接压 >900s 不返回。前部由我们设上限（`front_tokens`，
-    进启动默认值可调），超出的更早条目**如实记账**（stats 的 `input_dropped`），
-    不假装覆盖。
+    要点：**stdin 保持打开**（拿到响应才关）；stdout 用后台线程收（读行带超时，
+    不能阻塞在 readline 上）；输出结束（进程退出）用哨兵与"真超时"区分开。
 
-    尾部（`keep_tail`）交给 pi 原样保留：通过 cwd 级项目设置注入
-    `compaction.keepRecentTokens`（`<COMPACT_CWD_NAME>/.pi/settings.json`），
-    **作用域仅限本进程**。
-
-    为什么 `--thinking off`：摘要调用的档位**继承会话**（pi：
-    `_getSummarizationRequestAuth` 返回 `thinkingLevel: this.thinkingLevel`）——
-    第一次验证时传了 `high`，摘要器在高强度推理，慢上加慢。摘要是机械任务。
-
-    为什么**零扩展**（不带任何 `-e`）：摘要是一次纯模型调用、不需要工具；不加载
-    扩展也就不可能把 MC 的 historian 之类带进来（它只在我们显式 `-e` 时才有）。
-
-    失败/超时 ⇒ `(None, error)`，调用方**回落 budget**（不阻断分析）。
-
-    返回 `(stats, error)`；成功时另写同目录 `context-base.json`（报告读它）。
+    返回 `(event, error)`：`event` 是 `command == expect` 的那条响应。
     """
-    instr = build_summary_instructions(topic)
-    # 有界输入**就写在 base 路径上**：pi 会就地 compact 这个文件 ⇒ 产物即 base
-    # （分成"输入文件 + 产物文件"两个路径曾导致 base 根本不存在——测试当场抓到）。
-    # 输入自身的信息（窗口/丢弃数）写在它的 header 里，compact 后仍在，可核验。
-    istats, ierr = meeting_fs.build_summary_input(
-        main_session, out_path, front_tokens + keep_tail)
-    if ierr:
-        return None, ierr
-    cfg_dir = os.path.join(os.path.dirname(out_path), COMPACT_CWD_NAME)
-    os.makedirs(os.path.join(cfg_dir, ".pi"), exist_ok=True)
-    try:
-        with open(os.path.join(cfg_dir, ".pi", "settings.json"), "w",
-                  encoding="utf-8") as f:
-            json.dump({"compaction": {"keepRecentTokens": keep_tail}}, f, indent=2)
-    except OSError as e:
-        return None, f"摘要进程配置写入失败: {e}"
-    cmd = ["pi", "--mode", "rpc", "--session", out_path,
-           "--thinking", "off",
+    cmd = ["pi", "--mode", "rpc", "--session", session_file,
+           "--thinking", thinking,
            "--no-extensions", "--no-skills", "--no-prompt-templates",
            "--no-themes"]
     if model:
         cmd += ["--model", model]
-    payload = json.dumps({"id": "compact", "type": "compact",
-                          "customInstructions": instr}) + "\n"
+    payload = json.dumps(request) + "\n"
     try:
         proc = subprocess.Popen(cmd, stdin=subprocess.PIPE,
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                 text=True,
                                 env=_spawn_env(cfg_dir), cwd=cfg_dir)
     except OSError as e:
-        return None, f"摘要进程启动失败: {e}"
-    # **stdin 必须保持打开**，直到拿到响应再关：RPC 模式读到 EOF 就开始退出，
-    # 从而 abort 掉正在进行的压缩。2026-10-08 的 LLM 验证实测到这一点——
-    # 用 `communicate()`（写完即关 stdin）时 0.8s 就返回
-    # `Turn prefix summarization failed: This operation was aborted`，
-    # 看起来像"模型/协议问题"，其实是**我们提前关了它的输入**。
-    # stdout 用后台线程收集（读行带超时，不能阻塞在 readline 上）。
+        return None, f"pi rpc 进程启动失败: {e}"
     q = queue.Queue()
 
     def _pump():
@@ -532,11 +492,17 @@ def generate_compact_base(main_session, out_path, model, topic,
                 q.put(line)
         except Exception:            # 进程被杀时读管道会炸——收尾不需要它
             pass
-        q.put(None)                  # 哨兵：输出结束（进程退出）≠ 超时
+        q.put(None)                  # 哨兵：输出结束 ≠ 超时
 
     threading.Thread(target=_pump, daemon=True).start()
-    ok, detail, timed_out = False, "", False
-    deadline = time.monotonic() + COMPACT_TIMEOUT_SEC
+    try:
+        proc.stdin.write(payload)
+        proc.stdin.flush()
+    except (OSError, ValueError) as e:
+        proc.kill()
+        return None, f"请求写入失败: {e}"
+    event, detail, timed_out = None, "", False
+    deadline = time.monotonic() + timeout
     while True:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
@@ -548,8 +514,6 @@ def generate_compact_base(main_session, out_path, model, topic,
             timed_out = True
             break
         if line is None:
-            # 进程结束了却没给 compact 响应（崩溃/换协议）——不是超时，
-            # 立刻按失败收尾（否则要干等到 COMPACT_TIMEOUT_SEC 才报）
             break
         line = (line or "").strip()
         if not line.startswith("{"):
@@ -558,9 +522,9 @@ def generate_compact_base(main_session, out_path, model, topic,
             ev = json.loads(line)
         except ValueError:
             continue
-        if isinstance(ev, dict) and ev.get("command") == "compact":
-            ok = bool(ev.get("success"))
-            if not ok:
+        if isinstance(ev, dict) and ev.get("command") == expect:
+            event = ev
+            if not ev.get("success"):
                 detail = json.dumps(ev.get("error"), ensure_ascii=False)[:200]
             break
     if timed_out:
@@ -580,17 +544,88 @@ def generate_compact_base(main_session, out_path, model, topic,
     except (OSError, ValueError):
         errout = ""
     if timed_out:
-        return None, f"摘要生成超时（>{COMPACT_TIMEOUT_SEC}s）"
-    if not ok:
+        return None, f"rpc 超时（>{timeout}s，请求 {expect}）"
+    if event is None or not event.get("success"):
         tail = (errout or "").strip().replace("\n", " ")[:160]
-        return None, (f"compact 未成功（rc={proc.returncode}"
+        return None, (f"rpc 未成功（{expect}，rc={proc.returncode}"
                       f"{'，' + detail if detail else ''}"
                       f"{'，stderr: ' + tail if tail else ''}）")
+    return event, ""
+
+
+def generate_compact_base(main_session, out_path, model, topic,
+                          front_tokens=meeting_fs.DEFAULT_SUMMARY_FRONT_TOKENS,
+                          keep_tail=meeting_fs.SUMMARY_KEEP_TAIL_TOKENS):
+    """造一份**有界**输入 → 跑 pi 自己的 compact（带定向指令）→ base session（决策 24）。
+
+    为什么走 `pi --mode rpc` 而不是自己写摘要 prompt：摘要器 = pi 自己那份
+    （同一套结构化检查点 prompt + `customInstructions`），**不漂移**；RPC 通道
+    能对**指定文件**工作（2026-10-08 实测）。输入由我们自己裁出来
+    （`meeting_fs.build_summary_input`）⇒ 主 session **只读、永不被改动**。
+
+    为什么输入必须**限幅**：pi 的 compact 会通读"上一次 compaction 之后的全部
+    消息"——主 session 上那是 310 条 / 1.2MB。实测规模-耗时（同一构造流程，
+    2026-10-08）：est≈30k ⇒ **16s**、60k ⇒ **29s**、100k ⇒ **56s**（都可复现）。
+    窗口 = `front_tokens` + `keep_tail`，超出的更早条目如实记账（stats 的
+    `input_dropped`，不假装覆盖）。
+    **不要**改用 pi 的 `contextUsage`/`tokensBefore` 当判据：它们 = 最近一条
+    assistant 的 usage（真实用量）+ 其后消息的估算，被副本里复制过来的 usage
+    记录**污染**（30k 的输入也报 250k）⇒ 不是输入规模的度量（曾据此写过一版
+    迭代限幅，实测当场证伪并删除）。
+
+    尾部（`keep_tail`）交给 pi 原样保留：通过 cwd 级项目设置注入
+    `compaction.keepRecentTokens`（`<COMPACT_CWD_NAME>/.pi/settings.json`），
+    **作用域仅限本进程**（pi 用 deepMerge 把项目设置盖在全局之上）。
+
+    为什么 `--thinking off`：摘要调用的档位**继承会话**（pi：
+    `_getSummarizationRequestAuth` 返回 `thinkingLevel: this.thinkingLevel`）——
+    第一次验证时传了 `high`，摘要器在做高强度推理。注意：**不是所有 provider 都
+    支持 off**（pi 按 `thinkingLevelMap` 夹取：`opencode-go/deepseek-v4.1-flash`
+    的 `off: null` ⇒ 被夹到 `low`；`deepseek/deepseek-flash` 无 off 键 ⇒ 生效，
+    2026-10-08 实测）。
+
+    为什么**零扩展**（不带任何 `-e`）：摘要是一次纯模型调用、不需要工具；不加载
+    扩展也就不可能把 MC 的 historian 之类带进来（它只在我们显式 `-e` 时才有）。
+
+    失败/超时 ⇒ `(None, error)`，调用方**回落 budget**（不阻断分析）。
+
+    返回 `(stats, error)`；成功时另写同目录 `context-base.json`（报告读它）。
+    """
+    instr = build_summary_instructions(topic)
+    cfg_dir = os.path.join(os.path.dirname(out_path), COMPACT_CWD_NAME)
+    os.makedirs(os.path.join(cfg_dir, ".pi"), exist_ok=True)
+    try:
+        with open(os.path.join(cfg_dir, ".pi", "settings.json"), "w",
+                  encoding="utf-8") as f:
+            json.dump({"compaction": {"keepRecentTokens": keep_tail}}, f, indent=2)
+    except OSError as e:
+        return None, f"摘要进程配置写入失败: {e}"
+
+    # ---- ① 限幅：按 `_est_tokens` 裁一份有界输入（就写在 base 路径上）----
+    # 有界输入**就写在 base 路径上**：pi 会就地 compact 这个文件 ⇒ 产物即 base
+    # （分成"输入文件 + 产物文件"两个路径曾导致 base 根本不存在——测试当场抓到）。
+    # 规模口径（2026-10-08 实测，同一构造流程只改窗口）：est≈30k ⇒ 16s、60k ⇒ 29s、
+    # 100k ⇒ 56s（都可复现）。**不要**改用 pi 的 `contextUsage`/`tokensBefore` 当判据：
+    # 它们 = 副本里最近一条 assistant 的 usage（真实用量）+ 其后消息的估算，被复制
+    # 过来的 usage 记录污染（30k 输入也报 250k）⇒ 不是输入规模的度量。
+    istats, ierr = meeting_fs.build_summary_input(
+        main_session, out_path, front_tokens + keep_tail)
+    if ierr:
+        return None, ierr
+    # ---- ② 让 pi 就地压缩这份输入（唯一的 LLM 调用）----
+    ev, rerr = _rpc_request(out_path, cfg_dir, model, "off",
+                            {"id": "compact", "type": "compact",
+                             "customInstructions": instr},
+                            "compact", COMPACT_TIMEOUT_SEC)
+    if rerr:
+        return None, f"摘要生成失败: {rerr}"
+
+    # ---- ③ 整理产物（剥快照 + 统计）----
     stats, ferr = meeting_fs.finalize_compaction_base(out_path)
     if ferr:
         return None, ferr
     stats.update({"model": model, "thinking": "off", "topic": topic,
-                  "instructions": instr, "rc": proc.returncode,
+                  "instructions": instr, "rc": 0,
                   "front_tokens": front_tokens, "keep_tail": keep_tail,
                   "input_entries": istats["entries"],
                   "input_est": istats["est"],

@@ -1102,6 +1102,8 @@ class TestReportContextLine(unittest.TestCase):
                                      "dropped_entries": 42, "model": "m-x",
                                      "tokens_before": 9999, "keep_tail": 20000,
                                      "front_tokens": 80000, "input_est": 99746,
+                                     "usage": {"input": 70405, "output": 4703,
+                                               "cacheRead": 0, "reasoning": 784},
                                      "input_dropped": 282,
                                      "source_est": 296622})
         self.assertEqual(len(out), 1)
@@ -1112,7 +1114,8 @@ class TestReportContextLine(unittest.TestCase):
         self.assertIn("被摘要覆盖 42 条", line)
         self.assertIn("摘要模型 m-x", line)
         self.assertIn("（声明 20000）", line)          # 尾部声明值
-        self.assertIn("摘要器读入 est≈99746（前部限幅 80000）", line)
+        self.assertIn("摘要器读入 est≈99746（限幅目标 80000）", line)
+        self.assertIn("实际请求 70405 tokens（输出 4703，含推理 784）", line)
         self.assertIn("限幅丢弃 282 条（源可见 est≈296622）", line)
 
     def test_missing_stats_is_n_a(self):

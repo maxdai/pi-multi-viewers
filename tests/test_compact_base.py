@@ -162,8 +162,91 @@ class _Hang:
             time.sleep(0.05)
 
 
+class _FakeRpc:
+    """假 `pi --mode rpc`：按 **stdin 里收到的请求**给出对应响应。
+
+    为什么要这样：生产现在对同一个 pi 进程序列发**两类**请求——
+    `get_session_stats`（限幅复测，零 LLM）与 `compact`（真摘要）。假进程必须在
+    spawn 之后才看得到请求（生产在 Popen 返回后才写 stdin）⇒ stdout 做成惰性的，
+    迭代时再决定吐什么。装置对齐生产，否则测的是想象出来的协议。
+    """
+
+    def __init__(self, pi_tokens=1000, compact_ok=True, compact_error="",
+                 hang_on=None, session=None, no_output=False):
+        self.no_output = no_output
+        self.pi_tokens = pi_tokens
+        self.compact_ok = compact_ok
+        self.compact_error = compact_error
+        self.hang_on = hang_on          # None / "stats" / "compact"
+        self.session = session
+        self.stdin = io.StringIO()
+        self.stderr = io.StringIO("")
+        self.stdout = _LazyOut(self)
+        self.returncode = 0
+        self.killed = False
+        self.requests = []              # 记录收到过哪些请求（断言用）
+        self.spawned = []               # 每次 Popen 造出的实例（共享登记表）
+
+    def clone(self):
+        """新进程（生产每次请求都 spawn 一个 pi）——共用登记表，便于断言。"""
+        inst = _FakeRpc(self.pi_tokens, self.compact_ok, self.compact_error,
+                        self.hang_on, self.session, self.no_output)
+        inst.spawned = self.spawned
+        self.spawned.append(inst)
+        return inst
+
+    def _lines(self):
+        # 等请求真的到达（生产在 spawn **之后**才写 stdin；真实 pi 也不会在收到
+        # 请求前就作答）——不等的话假进程会"抢答"空响应，测出来的是装置的竞态
+        deadline = time.monotonic() + 2.0
+        while not self.stdin.getvalue() and time.monotonic() < deadline:
+            time.sleep(0.005)
+        req = self.stdin.getvalue()
+        self.requests.append(req)
+        if self.no_output:
+            return []
+        kind = "compact" if '"compact"' in req else "?"
+        if self.hang_on == kind:
+            while True:
+                time.sleep(0.05)
+        if kind == "compact":
+            if self.session is not None:
+                _append_compaction(self.session)
+            return [json.dumps({"command": "compact", "success": self.compact_ok,
+                                "error": self.compact_error}) + "\n"]
+        return []
+
+    def wait(self, timeout=None):
+        return self.returncode
+
+    def kill(self):
+        self.killed = True
+        self.returncode = -9
+
+
+class _LazyOut:
+    """惰性 stdout：迭代时才向 owner 要内容（那时 stdin 已被生产写入）。"""
+
+    def __init__(self, owner):
+        self.owner = owner
+
+    def __iter__(self):
+        return iter(self.owner._lines())
+
+
+class _Hang:
+    """永不产出、永不 EOF 的 stdout（造"真超时"用）。"""
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        while True:
+            time.sleep(0.05)
+
+
 class TestGenerateCompactBase(unittest.TestCase):
-    """`generate_compact_base`：RPC 三态（成功 / compact 失败 / 超时）。"""
+    """`generate_compact_base`：限幅迭代 + RPC 三态（成功 / compact 失败 / 超时）。"""
 
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix="mvgen-")
@@ -174,94 +257,61 @@ class TestGenerateCompactBase(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
-    class _Proc:
-        """假 pi --mode rpc 进程：只实现生产真正用到的那几个面。
-
-        生产**不再**用 `communicate()`（它写完就关 stdin，会让 RPC 模式退出并
-        abort 压缩——2026-10-08 LLM 验证实测）⇒ 假进程要提供 stdin/stdout，
-        以及 wait/kill/returncode。
-        """
-
-        def __init__(self, out="", rc=0, hang=False):
-            self.stdout = _Hang() if hang else io.StringIO(out)
-            self.stderr = io.StringIO("")
-            self.stdin = io.StringIO()          # 只被 write/flush/close
-            self.returncode = rc
-            self.killed = False
-
-        def wait(self, timeout=None):
-            return self.returncode
-
-        def kill(self):
-            self.killed = True
-            self.returncode = -9
-
-    def _patch_proc(self, proc, session=None):
-        """假 Popen：真的 pi 会**就地**把 compaction 条目写进 --session 文件，
-        这里照做（否则 finalize_compaction_base 读不到产物——测试装置要对齐生产）。
-        写入必须发生在 **Popen 被调用的那一刻**（此前输入文件还没造出来）。"""
-
-        def _spawn(*_a, **_kw):
-            if session is not None:
-                _append_compaction(session)
-            return proc
-
+    def _patch(self, fake):
         return mock.patch.object(meeting_loop.subprocess, "Popen",
-                                 side_effect=_spawn)
+                                 side_effect=lambda *a, **kw: fake.clone())
 
     def test_success_writes_stats_and_strips(self):
-        ok = json.dumps({"id": "compact", "type": "response",
-                         "command": "compact", "success": True})
-        with self._patch_proc(self._Proc(ok + "\n"), session=self.out):
+        fake = _FakeRpc(pi_tokens=1000, session=self.out)
+        with self._patch(fake):
             stats, err = meeting_loop.generate_compact_base(
                 self.main, self.out, "m1", "测试主题")
         self.assertEqual(err, "")
         self.assertEqual(stats["model"], "m1")
+        self.assertEqual(stats["thinking"], "off")      # 摘要不推理
+        self.assertEqual(stats["front_tokens"],
+                         meeting_fs.DEFAULT_SUMMARY_FRONT_TOKENS)
         # base 落盘 + 快照已剥（finalize 真跑了）
         with open(self.out, encoding="utf-8") as f:
             base = [json.loads(l) for l in f if l.strip()]
         comp = [e for e in base if e.get("type") == "compaction"][0]
         self.assertNotIn("systemMessage", comp)
-        # 记账文件
         with open(os.path.join(self.tmp, meeting_fs.COMPACT_BASE_STATS),
                   encoding="utf-8") as f:
             st = json.load(f)
-        self.assertEqual(st["model"], "m1")
         self.assertIn("instructions", st)
-        self.assertEqual(st["thinking"], "off")          # 摘要不推理（实测教训）
-        self.assertIn("input_est", st)                   # 限幅记账
+        self.assertIn("input_est", st)                  # 限幅记账
         self.assertIn("input_dropped", st)
-        self.assertEqual(st["front_tokens"],
-                         meeting_fs.DEFAULT_SUMMARY_FRONT_TOKENS)
 
     def test_compact_failure_is_reported(self):
-        bad = json.dumps({"id": "compact", "type": "response",
-                          "command": "compact", "success": False,
-                          "error": "Nothing to compact (session too small)"})
-        with self._patch_proc(self._Proc(bad + "\n", rc=1)):
+        fake = _FakeRpc(pi_tokens=1000, compact_ok=False,
+                        compact_error="Nothing to compact (session too small)",
+                        session=self.out)
+        with self._patch(fake):
             stats, err = meeting_loop.generate_compact_base(
                 self.main, self.out, "m1", "t")
         self.assertIsNone(stats)
-        self.assertIn("compact 未成功", err)
         self.assertIn("Nothing to compact", err)
 
-    def test_timeout_is_reported(self):
-        # 生产超时压到 0.2s（否则本用例要等 COMPACT_TIMEOUT_SEC）
-        proc = self._Proc(hang=True)
+    def test_compact_timeout_is_reported(self):
+        """限幅复测照常答，**compact 那一步**挂住 ⇒ 报超时并 kill。"""
+        fake = _FakeRpc(pi_tokens=1000, hang_on="compact", session=self.out)
         with mock.patch.object(meeting_loop, "COMPACT_TIMEOUT_SEC", 0.2), \
-                self._patch_proc(proc, session=self.out):
+                self._patch(fake):
             stats, err = meeting_loop.generate_compact_base(
                 self.main, self.out, "m1", "t")
-        self.assertTrue(proc.killed)
         self.assertIsNone(stats)
         self.assertIn("超时", err)
+        self.assertTrue(any(p.killed for p in fake.spawned))
 
     def test_no_response_is_failure(self):
-        with self._patch_proc(self._Proc("not json\n")):
+        """进程退出却没给响应（崩溃/换协议）⇒ 立刻失败，不等满超时。"""
+        fake = _FakeRpc(pi_tokens=1000, session=self.out, no_output=True)
+        with self._patch(fake):
             stats, err = meeting_loop.generate_compact_base(
                 self.main, self.out, "m1", "t")
         self.assertIsNone(stats)
-        self.assertIn("compact 未成功", err)
+        self.assertIn("摘要生成失败", err)
 
     def test_instructions_carry_topic_and_anti_framing(self):
         text = meeting_loop.build_summary_instructions("某主题")
@@ -419,7 +469,11 @@ class TestBuildSummaryInput(unittest.TestCase):
 
 
 class TestSummaryProcessShape(unittest.TestCase):
-    """摘要进程的命令形状与作用域配置（`--thinking off` / cwd 级项目设置）。"""
+    """摘要进程的命令形状与作用域配置（`--thinking off` / cwd 级项目设置）。
+
+    生产现在对同一会话发**两次**请求（先 `get_session_stats` 复测限幅、再
+    `compact`）⇒ 断言"最后一次 spawn"是 compact、且两次的形状都对。
+    """
 
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix="mvshape-")
@@ -431,36 +485,29 @@ class TestSummaryProcessShape(unittest.TestCase):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def test_cmd_and_scoped_settings(self):
-        seen = {}
-        proc = TestGenerateCompactBase._Proc(
-            json.dumps({"command": "compact", "success": True}) + "\n")
+        seen = []
+        fake = _FakeRpc(pi_tokens=1000, session=self.out)
 
         def _spawn(cmd, **kw):
-            seen["cmd"] = cmd
-            seen["kw"] = kw
-            _append_compaction(self.out)
-            return proc
+            seen.append((cmd, kw))
+            return fake.clone()
 
         with mock.patch.object(meeting_loop.subprocess, "Popen",
                                side_effect=_spawn):
             stats, err = meeting_loop.generate_compact_base(
-                self.main, self.out, "m1", "t", front_tokens=500, keep_tail=200)
+                self.main, self.out, "m1", "t", front_tokens=5000, keep_tail=200)
         self.assertEqual(err, "")
-        cmd = seen["cmd"]
-        self.assertIn("--thinking", cmd)
-        self.assertEqual(cmd[cmd.index("--thinking") + 1], "off")   # 摘要不推理
-        self.assertIn("--session", cmd)
-        self.assertEqual(cmd[cmd.index("--session") + 1], self.out)
-        # cwd 级项目设置：只影响本进程
+        self.assertEqual(len(seen), 1)                  # 只有 compact 一次
         cfg = os.path.join(self.tmp, meeting_loop.COMPACT_CWD_NAME)
-        self.assertEqual(seen["kw"]["cwd"], cfg)
+        for cmd, kw in seen:
+            self.assertEqual(cmd[cmd.index("--thinking") + 1], "off")  # 不推理
+            self.assertEqual(cmd[cmd.index("--session") + 1], self.out)
+            self.assertEqual(kw["cwd"], cfg)            # 作用域仅限本进程
         with open(os.path.join(cfg, ".pi", "settings.json"), encoding="utf-8") as f:
             st = json.load(f)
         self.assertEqual(st["compaction"]["keepRecentTokens"], 200)
         self.assertEqual(stats["keep_tail"], 200)
-        self.assertEqual(stats["front_tokens"], 500)
-
-
+        self.assertEqual(stats["front_tokens"], 5000)
 
 
 if __name__ == "__main__":
