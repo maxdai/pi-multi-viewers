@@ -69,10 +69,12 @@ class TestFinalizeCompactionBase(unittest.TestCase):
         self.assertNotIn("systemMessage", comp)
         # ② 统计：摘要 600 字符 / 窗口 m3+m4 = 600 字符（est = 字符/3）
         self.assertEqual(stats["summary_est"], 200)
-        self.assertEqual(stats["window_est"], 200)
         self.assertEqual(stats["dropped_entries"], 4)   # m0..m3（锚点 m3 的索引）
         self.assertEqual(stats["anchor"], "m3")
-        self.assertEqual(stats["tokens_before"], 999)
+        self.assertNotIn("tokens_before", stats)        # A3：污染字段已删
+        self.assertNotIn("window_est", stats)           # A3：与 fork header 同值
+        self.assertNotIn("input_est", stats)            # A3：一次性诊断已完成
+        self.assertIsNone(stats["usage"])                 # 该 fixture 无 usage 字段
 
     def test_entry_count_and_anchor_unchanged(self):
         """不删条目、不改锚点——远端历史留在文件里（可审计、可被工具读）。"""
@@ -101,8 +103,7 @@ class TestFinalizeCompactionBase(unittest.TestCase):
         _write_session(self.path, anchor="zzz")
         stats, err = meeting_fs.finalize_compaction_base(self.path)
         self.assertEqual(err, "")
-        self.assertEqual(stats["window_est"], 0)
-        self.assertEqual(stats["dropped_entries"], 6)
+        self.assertEqual(stats["dropped_entries"], 6)   # 锚点缺失 ⇒ 全部计入
 
 
 class TestSummaryForkMode(unittest.TestCase):
@@ -128,8 +129,8 @@ class TestSummaryForkMode(unittest.TestCase):
         # 锚点起（含 compaction 条目本身）= m3, m4, c1
         self.assertEqual([e["id"] for e in out[1:]], ["m3", "m4", "c1"])
         # 指纹：有 est、无 dropped（丢弃发生在 base 生成那步，账记在别处）
-        self.assertIn("forkSourceTokensEst", header)
-        self.assertNotIn("forkSourceDropped", header)
+        self.assertIn("forkBaseTokensEst", header)      # A8：改名
+        self.assertNotIn("forkBaseDroppedEntries", header)
 
     def test_keyword_in_domain(self):
         self.assertIn("summary", meeting_fs.FORK_MODES)
@@ -280,7 +281,7 @@ class TestGenerateCompactBase(unittest.TestCase):
                   encoding="utf-8") as f:
             st = json.load(f)
         self.assertIn("instructions", st)
-        self.assertIn("input_est", st)                  # 限幅记账
+        self.assertNotIn("input_est", st)               # A3：已删（限幅记账看报告）
         self.assertIn("input_dropped", st)
 
     def test_compact_failure_is_reported(self):

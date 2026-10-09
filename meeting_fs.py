@@ -990,8 +990,10 @@ def read_fork_stats(path):
         return {}
     return {
         "mode": hdr.get("forkSourceMode") or "",
-        "est": hdr.get("forkSourceTokensEst"),
-        "dropped": hdr.get("forkSourceDropped"),
+        "est": hdr.get("forkBaseTokensEst",
+                       hdr.get("forkSourceTokensEst")),        # 旧名回退（一行）
+        "dropped": hdr.get("forkBaseDroppedEntries",
+                           hdr.get("forkSourceDropped")),
     }
 
 
@@ -1177,7 +1179,7 @@ def _budget_entries(entries, keep_tokens, summary=""):
     在规范化后施加（顺序不可换——est 必须反映最终产物）。
 
     返回 **(preface 文本, kept 条目, 预算丢弃数, 规范化移除数)**——两个
-    计数分开回报，因为 header 的 `forkSourceDropped` 是两者之和（不变量
+    计数分开回报，因为 header 的 `forkBaseDroppedEntries` 是两者之和（不变量
     I5 记账闭合），而 preface 文本只描述预算省略部分。
     """
     # ① fold：折叠（最近 _TOOL_RESULT_KEEP 条工具输出保留全文）
@@ -1284,10 +1286,10 @@ def build_fork_source(src_session, out_path, new_id, new_cwd,
          自身**语义一致（源里有什么 compaction 就有什么可见性边界），
          我们不做窗口构造，也不改写历史。
       I5 记账闭合：源保留区条目数 = 产物非 preface 条目数 +
-         `forkSourceDropped`（= 预算丢弃数 + 规范化移除数）
+         `forkBaseDroppedEntries`（= 预算丢弃数 + 规范化移除数）
 
     产物 header 自描述（单一来源）：forkSourceMode /
-    forkSourceTokensEst（估算基准，**不预测请求规模**）/ forkSourceDropped。
+    forkBaseTokensEst（估算基准，**不预测请求规模**）/ forkBaseDroppedEntries。
     keep_tokens：budget 的预算（默认 BUDGET_KEEP_TOKENS）。
     返回 (entries_written, error)。
     """
@@ -1391,16 +1393,18 @@ def build_fork_source(src_session, out_path, new_id, new_cwd,
         "parentSession": src_session,
         "forkSourceMode": mode,
     }
-    if mode in ("budget", "summary"):
-        # 产物侧指纹（口径见设计文档「规模口径」）：对**最终产物**统一
-        # 计算（单一测点）；不预测请求规模。
-        # summary **不写** forkSourceDropped：本模式的"丢弃"发生在 base 生成
-        # 那一步（条目已被摘要覆盖，记账在 context-base.json），本函数这一层
-        # 没有丢任何东西。
-        new_header["forkSourceTokensEst"] = sum(
-            _est_tokens(_entry_text(e)) for e in body)
-        if mode == "budget":
-            new_header["forkSourceDropped"] = dropped_total
+    # 产物侧指纹（口径见设计文档「观测面契约」，A8）：对**最终产物**统一计算
+    # （单一测点）；**不预测请求规模**。契约四件事：口径 = 字符/3 粗估、
+    # **不含摘要文本**（`_entry_text(compaction)=''`）、时点 = 构建时、
+    # **不是成本口径**（真实用量见 session 条目 / 事件流的 usage）。
+    # 旧名 `forkSourceTokensEst` 被读成"请求规模"（实测差 1.36×）⇒ 改名；
+    # 四种模式统一写（报告据此对**所有**模式打读数）。
+    new_header["forkBaseTokensEst"] = sum(
+        _est_tokens(_entry_text(e)) for e in body)
+    if mode == "budget":
+        # 丢弃数只有 budget 有：summary 的丢弃记账在 base 生成那一步
+        # （context-base.json），compaction/full 不丢条目。
+        new_header["forkBaseDroppedEntries"] = dropped_total
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     with open(out_path, "w", encoding="utf-8") as f:
         f.write(json.dumps(new_header, ensure_ascii=False) + "\n")
@@ -1541,8 +1545,8 @@ def finalize_compaction_base(session_file):
     摘要器，都超出本轮范围（决策 24「重估触发」里记着）。
 
     参数 `session_file` 原地改写（唯一改动 = 剥快照）。
-    返回 (stats, error)；stats 键：summary_est / window_est / tokens_before /
-    dropped_entries / anchor / compaction_id（`model` 由调用方回填）。
+    返回 (stats, error)；stats 键：summary_est / dropped_entries / anchor /
+    usage / compaction_id（`model` / `wall_sec` 由调用方回填）。
     """
     try:
         with open(session_file, encoding="utf-8") as f:
@@ -1569,12 +1573,15 @@ def finalize_compaction_base(session_file):
     visible += entries[ci + 1:]
     stats = {
         "summary_est": _est_tokens(comp.get("summary") or ""),
+        # A3：曾在此并列 window_est / tokens_before / input_est——三者的读数都能从
+        # 别处拿到（窗口 est = fork 源 header 的 forkBaseTokensEst，同一测点；
+        # tokens_before 已被证实是副本里复制过来的 usage、不是本输入的规模；
+        # input_est 只是"est vs 真实 usage"的一次性校准）。平行字段会让读者误以为
+        # 它们各自独立 ⇒ 删。
         # pi 自己记的**真实用量**（唯一可信的请求规模度量：我们的 est 只是字符估算，
         # 实测偏保守约 1.4–2×；而 `tokensBefore`/`contextUsage` 会被副本里的 usage
         # 记录污染，不可用）。摘要那次请求的规模 = input + cacheRead。
         "usage": comp.get("usage"),
-        "window_est": sum(_est_tokens(_entry_text(e)) for e in visible),
-        "tokens_before": comp.get("tokensBefore"),
         # 口径：**被摘要覆盖的条目数** = 切点之前的条目数。锚点缺失时
         # pi 的可见集合不含任何"切点之前"的原始条目 ⇒ 取 compaction 的位置。
         "dropped_entries": ci if ai is None else ai,

@@ -983,5 +983,49 @@ class TestExtensionPolicy(unittest.TestCase):
             self.assertIn("pi-magic-context", err)
 
 
+class TestWakeUsage(unittest.TestCase):
+    """A6：从事件流取本次唤醒的真实用量（缺失 = None ⇒ 报告写 n/a，不当 0）。"""
+
+    def test_sums_multiple_message_end(self):
+        ev = "\n".join([
+            '{"type":"message_start","message":{"role":"assistant"}}',
+            '{"type":"message_end","message":{"role":"assistant","usage":'
+            '{"input":100,"output":20,"cacheRead":50,"reasoning":5}}}',
+            '不是 JSON 的行',
+            '{"type":"message_end","message":{"role":"assistant","usage":'
+            '{"input":30,"output":7,"cacheRead":0,"reasoning":0}}}',
+        ])
+        u = meeting_loop._wake_usage(ev)
+        self.assertEqual(u["calls"], 2)          # 工具循环 ⇒ 多条，求和
+        self.assertEqual(u["input"], 130)
+        self.assertEqual(u["output"], 27)
+        self.assertEqual(u["cacheRead"], 50)
+        self.assertEqual(u["reasoning"], 5)
+
+    def test_missing_is_none_not_zero(self):
+        for text in ("", "hello", '{"type":"message_start"}', None):
+            self.assertIsNone(meeting_loop._wake_usage(text))
+
+    def test_log_wake_done_writes_usage_fields(self):
+        class _R:
+            returncode = 0
+            stdout = ('{"type":"message_end","message":{"usage":'
+                      '{"input":9,"output":3,"cacheRead":1,"reasoning":1}}}')
+
+        with mock.patch.object(meeting_loop, "log") as lg:
+            meeting_loop._log_wake_done("甲", "sid-1", _R(), 1234)
+        line = lg.call_args[0][1]
+        self.assertIn("elapsed_ms=1234 rc=0", line)
+        self.assertIn("usage_calls=1 usage_in=9", line)
+        self.assertIn("usage_out=3", line)
+
+    def test_log_wake_done_marks_na_when_absent(self):
+        class _R:
+            returncode = 0
+            stdout = ""
+
+        with mock.patch.object(meeting_loop, "log") as lg:
+            meeting_loop._log_wake_done("甲", "sid-1", _R(), 1)
+        self.assertIn("usage=n/a", lg.call_args[0][1])
 if __name__ == "__main__":
     unittest.main()

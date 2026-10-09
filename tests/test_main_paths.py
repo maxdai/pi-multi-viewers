@@ -610,6 +610,30 @@ class TestBuildReport(unittest.TestCase):
             # 第 2 次唤醒窗口内没有 session 事件 → 不冒充 0，计"未分解"
             self.assertIn("未分解 1 次", txt)
             self.assertNotIn("恒等校验", txt)      # 不误报时间源问题
+            # A6：逐唤醒 usage——两条唤醒都**没有** usage 字段 ⇒ 一律 n/a，
+            # 合计按"0/2 唤有读数"如实措辞（缺测 ≠ 0）
+            self.assertIn("usage n/a", txt)
+            self.assertIn("usage 合计 n/a（所有唤醒都无读数）", txt)
+
+    def test_wake_table_usage_from_event_stream(self):
+        """A6：唤醒行带 usage 字段 ⇒ 单行读数 + 合计只对"有读数"的唤醒求和。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            base = self._env(tmp, commits=[("a/0001", "message", "meeting")])
+            with open(os.path.join(base, "loop-a.log"), "w") as f:
+                f.write("[2026-09-11T20:09:00.000] a: 唤醒 pi (session=s1)\n")
+                f.write("[2026-09-11T20:11:00.000] a: pi 完成（session=s1 "
+                        "elapsed_ms=120000 rc=0 usage_calls=3 usage_in=1200 "
+                        "usage_cache_read=400 usage_out=300 usage_reasoning=50）\n")
+                f.write("[2026-09-11T20:12:00.000] a: 唤醒 pi (session=s1)\n")
+                f.write("[2026-09-11T20:12:30.000] a: pi 完成（session=s1 "
+                        "elapsed_ms=30000 rc=0 usage=n/a）\n")
+            import observability
+            txt = "\n".join(observability.build_report(base))
+            self.assertIn("usage in 1200 out 300 calls 3", txt)
+            self.assertIn("usage n/a", txt)
+            # 合计：只算有的那条（1/2 唤有读数），不把 n/a 当 0 也不摊派
+            self.assertIn("usage 合计（1/2 唤有读数）in 1200 cacheRead 400 "
+                          "out 300（含推理 50）calls 3", txt)
 
     def test_termination_consensus_with_pass(self):
         """有 pass 消息 → 终止原因判为共识（只报事实与计数）。"""
@@ -1076,16 +1100,30 @@ class TestFindCurrentDir(unittest.TestCase):
 
 
 class TestReportContextLine(unittest.TestCase):
-    """报告「上下文」行（决策 24 的 summary 模式）——非该模式不打印。"""
+    """报告「上下文」行：**所有模式都打**（A4），且口径按 A1–A5 呈现。
+
+    取数两处：base 记账（`context-base.json`，摘要侧）+ fork 源 header
+    （`forkBaseTokensEst`，背景基础文本，**四模式统一写**）。
+    """
 
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix="mvctx-")
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
 
-    def _line(self, mode, stats=None):
+    def _line(self, mode, stats=None, fork=None):
+        """fork = (est, dropped) 时写一个带新键的 fork 源文件并指进 protocol。"""
         out = []
-        with mock.patch.object(meeting_fs, "read_protocol",
-                               return_value={"forkMode": mode}):
+        proto = {"forkMode": mode}
+        if fork is not None:
+            fp = os.path.join(self.tmp, "fork.jsonl")
+            hdr = {"type": "session", "forkSourceMode": mode,
+                   "forkBaseTokensEst": fork[0]}
+            if fork[1] is not None:
+                hdr["forkBaseDroppedEntries"] = fork[1]
+            with open(fp, "w", encoding="utf-8") as f:
+                f.write(json.dumps(hdr) + "\n")
+            proto["forkSource"] = fp
+        with mock.patch.object(meeting_fs, "read_protocol", return_value=proto):
             if stats is not None:
                 with open(os.path.join(self.tmp, meeting_fs.COMPACT_BASE_STATS),
                           "w", encoding="utf-8") as f:
@@ -1093,30 +1131,45 @@ class TestReportContextLine(unittest.TestCase):
             observability._report_context_line(self.tmp, out)
         return out
 
-    def test_silent_for_other_modes(self):
-        self.assertEqual(self._line("budget"), [])
-        self.assertEqual(self._line(None), [])
+    def test_all_modes_get_a_line(self):
+        # A4：此前只对 summary 打印（数据已在、只缺打印）
+        self.assertIn("预算裁剪", self._line("budget", fork=(26700, 1234))[0])
+        self.assertIn("背景 est≈26700", self._line("budget", fork=(26700, 1234))[0])
+        self.assertIn("丢弃 1234 条", self._line("budget", fork=(26700, 1234))[0])
+        self.assertIn("全量", self._line("full", fork=(26700, None))[0])
+        self.assertIn("按 compaction 边界",
+                      self._line("compaction", fork=(26700, None))[0])
+        self.assertEqual(len(self._line(None)), 1)      # 未知模式也给一行（不静默）
 
     def test_prints_structure_for_summary(self):
-        out = self._line("summary", {"summary_est": 1234, "window_est": 567,
-                                     "dropped_entries": 42, "model": "m-x",
-                                     "tokens_before": 9999, "keep_tail": 20000,
-                                     "front_tokens": 80000, "input_est": 99746,
-                                     "usage": {"input": 70405, "output": 4703,
-                                               "cacheRead": 0, "reasoning": 784},
-                                     "input_dropped": 282,
-                                     "source_est": 296622})
+        out = self._line("summary",
+                         {"summary_est": 1234, "dropped_entries": 42,
+                          "model": "m-x", "keep_tail": 20000,
+                          "front_tokens": 80000, "wall_sec": 38.0,
+                          "usage": {"input": 70405, "output": 4703,
+                                    "cacheRead": 0, "reasoning": 784},
+                          "input_dropped": 282, "source_est": 296622},
+                         fork=(26844, None))
         self.assertEqual(len(out), 1)
         line = out[0]
         self.assertIn("定向摘要", line)
-        self.assertIn("摘要 est≈1234", line)
-        self.assertIn("窗口 est≈567", line)
+        # A2：背景 = 摘要 ＋ 窗口，读数处相加、各自标口径
+        self.assertIn("背景 = 摘要 est≈1234 + 窗口 est≈26844（各自字符/3、不含对方）", line)
         self.assertIn("被摘要覆盖 42 条", line)
         self.assertIn("摘要模型 m-x", line)
-        self.assertIn("（声明 20000）", line)          # 尾部声明值
-        self.assertIn("摘要器读入 est≈99746（限幅目标 80000）", line)
+        # A1：限幅目标 = 前部 + 尾部（此前只印前部）
+        self.assertIn("限幅目标 前部 80000 + 尾部 20000 = 100000", line)
         self.assertIn("实际请求 70405 tokens（输出 4703，含推理 784）", line)
+        self.assertIn("生成 38.0s", line)                # A5
         self.assertIn("限幅丢弃 282 条（源可见 est≈296622）", line)
+        # A3：三个平行字段不再出现
+        for gone in ("window_est", "tokens_before", "input_est", "摘要器读入"):
+            self.assertNotIn(gone, line)
+
+    def test_missing_fork_stats_falls_back_to_na(self):
+        out = self._line("summary", {"summary_est": 1, "dropped_entries": 0},
+                         fork=None)
+        self.assertIn("窗口 est n/a", out[0])
 
     def test_missing_stats_is_n_a(self):
         out = self._line("summary", None)

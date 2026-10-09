@@ -733,7 +733,7 @@ class TestForkSourceInvariants(unittest.TestCase):
                 1 for e in body
                 if e.get("id") and "[上下文说明]" in json.dumps(e, ensure_ascii=False))
             self.assertEqual(window_n,
-                             len(body) - preface_n + hdr["forkSourceDropped"])
+                             len(body) - preface_n + hdr["forkBaseDroppedEntries"])
 
     # ---- P2：窗口含 compaction → 产物无 compaction（否则 replay 丢前缀）----
     def test_p2_no_compaction_in_budget_product(self):
@@ -795,7 +795,7 @@ class TestForkSourceInvariants(unittest.TestCase):
             preface_n = 1 if "[上下文说明]" in json.dumps(body[0], ensure_ascii=False) else 0
             window_n = 3                     # 源无 compaction → 窗口 = 全部
             self.assertEqual(window_n,
-                             len(body) - preface_n + hdr["forkSourceDropped"])
+                             len(body) - preface_n + hdr["forkBaseDroppedEntries"])
 
     def test_accounting_no_double_count_scenario_c(self):
         """场景 C：big / 孤儿 r2（无前置 toolCall）→ 孤儿丢弃且只计一次。"""
@@ -813,7 +813,7 @@ class TestForkSourceInvariants(unittest.TestCase):
             self.assertIsNone(err)
             hdr, body = (lambda L: (L[0], L[1:]))(self._read(out))
             preface_n = 1 if "[内容已省略]" not in json.dumps(body[0], ensure_ascii=False) else 0
-            self.assertEqual(2, len(body) + hdr["forkSourceDropped"])
+            self.assertEqual(2, len(body) + hdr["forkBaseDroppedEntries"])
 
     # ---- P3：分派与值集合的结构耦合 ----
     def test_p3_new_mode_value_fails_loud(self):
@@ -843,14 +843,17 @@ class TestForkSourceInvariants(unittest.TestCase):
                 self.assertIsNone(err)
                 outs[mode] = self._read(out)
             # budget：有预算指纹与丢弃数
-            self.assertIn("forkSourceTokensEst", outs["budget"][0])
-            self.assertIn("forkSourceDropped", outs["budget"][0])
+            self.assertIn("forkBaseTokensEst", outs["budget"][0])
+            self.assertIn("forkBaseDroppedEntries", outs["budget"][0])
             # compaction：包含 compaction 条目（自然位置）且无预算指纹
-            self.assertNotIn("forkSourceTokensEst", outs["compaction"][0])
+            # A4：est 四模式统一写（同一测点）；丢弃数只有 budget 有
+            self.assertIn("forkBaseTokensEst", outs["compaction"][0])
+            self.assertNotIn("forkBaseDroppedEntries", outs["compaction"][0])
             self.assertTrue([e for e in outs["compaction"][1:]
                              if e.get("type") == "compaction"])
             # full：首条 = 源首条（m0），且无折叠/无预算指纹
-            self.assertNotIn("forkSourceTokensEst", outs["full"][0])
+            self.assertIn("forkBaseTokensEst", outs["full"][0])
+            self.assertNotIn("forkBaseDroppedEntries", outs["full"][0])
             self.assertEqual(outs["full"][1]["id"], "m0")
 
 
@@ -950,14 +953,14 @@ class TestActiveForkSource(unittest.TestCase):
             self.assertIsNone(err)
             lines = [json.loads(x) for x in open(out)]
             self.assertEqual(lines[0]["forkSourceMode"], "budget")
-            self.assertLessEqual(lines[0]["forkSourceTokensEst"], 10000)
+            self.assertLessEqual(lines[0]["forkBaseTokensEst"], 10000)
             kept = [e for e in lines[1:] if e.get("type") == "message"]
             self.assertLess(len(kept), 11)              # 确实裁掉了旧条目
             self.assertIn("m9", kept[-1]["id"])         # 最近一条必留
             preface = kept[0]["message"]["content"][0]["text"]
             self.assertIn("已省略", preface)             # 省略说明
             self.assertIn("早期摘要", preface)           # compaction 摘要带上
-            self.assertGreater(lines[0]["forkSourceDropped"], 0)   # 丢弃数可核查
+            self.assertGreater(lines[0]["forkBaseDroppedEntries"], 0)   # 丢弃数可核查
             # P4：保留区首条 parentId 接回 preface（一条链）
             self.assertEqual(kept[1]["parentId"], kept[0]["id"])
 

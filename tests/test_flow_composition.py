@@ -343,7 +343,8 @@ class TestSummaryModeSetup(unittest.TestCase):
         stats = {"summary_est": 200, "window_est": 100, "dropped_entries": 4,
                  "model": "m1", "keep_tail": 20000, "input_entries": 107,
                  "input_est": 99746, "input_dropped": 282,
-                 "source_est": 296622, "front_tokens": 80000}
+                 "source_est": 296622, "front_tokens": 80000,
+                 "wall_sec": 38.0}
         with mock.patch.object(meeting_loop, "generate_compact_base",
                                return_value=(stats, "")) as gen:
             sd.setup_environment(self._args("summary", "/main.jsonl"),

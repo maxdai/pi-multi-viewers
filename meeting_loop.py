@@ -438,6 +438,11 @@ COMPACT_CWD_NAME = "summary-cwd"
 def build_summary_instructions(topic):
     """定向摘要的 `customInstructions`（单一措辞来源）。
 
+    **覆盖面（2026-10-09 实测，别读成"整份摘要都按我们的口径"）**：pi 的 compaction
+    产出两段——**历史段**（吃这条指令）＋**拆分轮段**（`Turn Context (split turn)`，
+    由 `generateTurnPrefixSummary` 生成，签名里**没有** `customInstructions`）。
+    本场实测两段字符数 4,605 / 8,737 ⇒ 这条指令覆盖 **≈53%**。
+
     为什么这么写（决策 24）：pi 把 `customInstructions` 追加成
     "Additional focus: …"（`core/compaction/compaction.ts:719-720`）——它
     **只影响摘要内容**，不影响"哪些消息进摘要"（那是按位置的前缀切）。所以这段
@@ -613,10 +618,13 @@ def generate_compact_base(main_session, out_path, model, topic,
     if ierr:
         return None, ierr
     # ---- ② 让 pi 就地压缩这份输入（唯一的 LLM 调用）----
+    # A5：**这一段的墙钟**入账（此前只能靠时间戳反推——报告与 setup 打印都要它）
+    _t0 = time.monotonic()
     ev, rerr = _rpc_request(out_path, cfg_dir, model, "off",
                             {"id": "compact", "type": "compact",
                              "customInstructions": instr},
                             "compact", COMPACT_TIMEOUT_SEC)
+    wall_sec = round(time.monotonic() - _t0, 1)
     if rerr:
         return None, f"摘要生成失败: {rerr}"
 
@@ -627,8 +635,8 @@ def generate_compact_base(main_session, out_path, model, topic,
     stats.update({"model": model, "thinking": "off", "topic": topic,
                   "instructions": instr, "rc": 0,
                   "front_tokens": front_tokens, "keep_tail": keep_tail,
+                  "wall_sec": wall_sec,
                   "input_entries": istats["entries"],
-                  "input_est": istats["est"],
                   "input_dropped": istats["dropped"],
                   "source_est": istats["source_est"]})
     try:
@@ -784,6 +792,40 @@ def wake_llm(workdir, agent, prompt,
     return new_sid, r.returncode
 
 
+def _wake_usage(stdout):
+    """从 pi 的 `--mode json` **事件流**里取本次唤醒的真实用量（A6）。
+
+    为什么从这里取：唤醒路径本来就全量缓冲了 stdout（唯一消费者是 session 头兜底
+    解析），事件流自带每条 assistant 的 usage ⇒ **零新增采集、零新状态、零游标**。
+    约束（评审给定）：① 缺失 ⇒ `None`（写 `usage=n/a`，**不写 0**）；② 一次唤醒
+    可能有多条 `message_end`（工具循环）⇒ **求和**并记 `calls=N`；③ 标"pi 原生
+    usage"，与我们的 est **不可混算**（口径不同，禁止相加）。
+    """
+    tot, calls = {}, 0
+    for line in (stdout or "").splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            ev = json.loads(line)
+        except ValueError:
+            continue
+        if ev.get("type") != "message_end":
+            continue
+        u = (ev.get("message") or {}).get("usage") or ev.get("usage")
+        if not isinstance(u, dict):
+            continue
+        calls += 1
+        for k in ("input", "output", "cacheRead", "cacheWrite", "reasoning"):
+            v = u.get(k)
+            if isinstance(v, (int, float)):
+                tot[k] = tot.get(k, 0) + v
+    if not calls:
+        return None
+    tot["calls"] = calls
+    return tot
+
+
 def _log_wake_done(agent, sid, r, elapsed_ms):
     """唤醒完成行（登记字段 + ISO8601 时间戳）。
 
@@ -793,8 +835,16 @@ def _log_wake_done(agent, sid, r, elapsed_ms):
     时间戳升级为 ISO8601（含日期）：秒级 `HH:MM:SS` 无法跨天 join，也无法
     与 session/commit 时间对齐（§3.5-P10）。
     """
+    u = _wake_usage(getattr(r, "stdout", "") or "")
+    if u is None:
+        usage_txt = "usage=n/a"          # 缺失 = 缺测（不是 0）
+    else:
+        usage_txt = (f"usage_calls={u['calls']} usage_in={u.get('input')} "
+                     f"usage_cache_read={u.get('cacheRead')} "
+                     f"usage_out={u.get('output')} "
+                     f"usage_reasoning={u.get('reasoning')}")
     log(agent, f"pi 完成（session={sid} elapsed_ms={elapsed_ms} "
-               f"rc={r.returncode}）")
+               f"rc={r.returncode} {usage_txt}）")
 
 
 def _read_perspective_brief(workdir, agent):

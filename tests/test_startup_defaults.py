@@ -135,7 +135,7 @@ class TestForkModeAsStartupKey(unittest.TestCase):
         stats = {"summary_est": 1, "window_est": 1, "dropped_entries": 0,
                  "model": "m", "keep_tail": 20000, "front_tokens": 80000,
                  "input_entries": 1, "input_est": 1, "input_dropped": 0,
-                 "source_est": 1}
+                 "source_est": 1, "wall_sec": 1.0}
         with mock.patch.object(meeting_loop, "generate_compact_base",
                                return_value=(stats, "")):
             setup_environment(Args(**kw), ["a", "b"], base, self.spec)

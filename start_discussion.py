@@ -399,10 +399,14 @@ def setup_environment(args, participants, base, spec_dir=None,
                 json.dump(_proto, _f, indent=2, ensure_ascii=False)
         else:
             print(f"[summary] 定向摘要就绪：摘要 est≈{_stats['summary_est']} ｜ "
-                  f"窗口 est≈{_stats['window_est']}（尾部声明 {_stats['keep_tail']}）"
-                  f" ｜ 摘要器读了 {_stats['input_entries']} 条/est≈{_stats['input_est']}"
-                  f" ｜ 前部限幅丢弃 {_stats['input_dropped']} 条（源可见 est≈{_stats['source_est']}）"
-                  f" ｜ 模型 {_stats.get('model') or '(默认)'}")
+                  f"限幅目标 前部 {_stats['front_tokens']} + 尾部 {_stats['keep_tail']}"
+                  f" = {_stats['front_tokens'] + _stats['keep_tail']}"
+                  f"（摘要器读入 {_stats['input_entries']} 条）"
+                  f" ｜ 前部限幅丢弃 {_stats['input_dropped']} 条"
+                  f"（源可见 est≈{_stats['source_est']}）"
+                  f" ｜ 生成 {_stats['wall_sec']}s"
+                  f" ｜ 模型 {_stats.get('model') or '(默认)'}"
+                  "（详细构成见报告「上下文」行）")
 
     with open(os.path.join(wa, "question.md"), "w") as f:
         if spec_question is not None:
@@ -659,7 +663,8 @@ def main():
     parser.add_argument("--fork-mode", default=None,
                         choices=list(meeting_fs.FORK_MODES),
                         help="fork 裁剪策略：budget=预算+折叠（默认，长会话可行）；"
-                             "summary=定向摘要（远端摘要+近端原始窗口；决策 24）；"
+                             "summary=远端摘要（指令只覆盖 ≈53%，含 pi 自己的 split-turn 段）"
+                             "+近端原始窗口（决策 24）；"
                              "compaction=按 compaction 边界（中小会话零损失）；"
                              "full=全量（小会话/验证）")
     parser.add_argument("--fork-source", default=None,

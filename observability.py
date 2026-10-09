@@ -446,6 +446,18 @@ def _report_levels_line(base, agents):
     return f"档位：声明 {d_txt}（{detail}）| 生效 {e_txt} | {same}"
 
 
+def _usage_txt(u):
+    """一次唤醒的 pi 原生 usage 文本（A6）。缺失 ⇒ `n/a`——**不写 0**。
+
+    口径提醒：这是 pi 记的**真实用量**（事件流 `message_end`），与我们的
+    `_est_tokens`（字符/3 粗估）**不同源、不可相加**。
+    """
+    if not u:
+        return "n/a"
+    return (f"in {u.get('in', 'n/a')} out {u.get('out', 'n/a')}"
+            f" calls {u.get('calls', 'n/a')}")
+
+
 def _dur(sec):
     """人类可读时长（口径由调用方在同一行标注——进程跨度/墙钟/间隔）。"""
     sec = int(sec)
@@ -484,13 +496,24 @@ def _parse_wake_windows(base, agent):
         epoch = time.mktime(dt.timetuple()) + dt.microsecond / 1e6
         body = m.group(2)
         if body.startswith("唤醒 pi"):
-            cur = [epoch, None, 0, 0, 0]
+            cur = [epoch, None, 0, 0, 0]           # + usage（A6，见下）
         elif cur is not None and body.startswith("pi 完成"):
             mm = re.search(r"elapsed_ms=(\d+) rc=(-?\d+)", body)
+            # A6：本次唤醒的**真实用量**（pi 原生 usage，来自已缓冲的事件流；与我们
+            # 的 est 口径不同，禁止相加）。字段缺失 ⇒ 留 None（报告写 n/a，不当 0）
+            usage = {}
+            for fld, key in (("usage_in", "in"), ("usage_out", "out"),
+                             ("usage_cache_read", "cache_read"),
+                             ("usage_reasoning", "reasoning"),
+                             ("usage_calls", "calls")):
+                mu = re.search(rf"{fld}=(-?\d+)", body)
+                if mu:
+                    usage[key] = int(mu.group(1))
             if mm:
                 cur[1] = epoch
                 cur[2] = int(mm.group(1))
                 cur[3] = int(mm.group(2))
+                cur.append(usage)
                 wakes.append(tuple(cur))
             cur = None
         elif cur is not None and "无产出" in body and "重试" in body:
@@ -529,11 +552,12 @@ def _wake_rows(base, agent, commits):
         return []
     events = _agent_event_roles(base, agent)
     rows = []
-    for i, (t0, t1, ms, rc, retries) in enumerate(wakes, 1):
+    for i, (t0, t1, ms, rc, retries, usage) in enumerate(wakes, 1):
         t1 = t1 or (t0 + ms / 1000)
         row = {"n": i, "spawn": t0, "exit": t1, "ms": ms, "rc": rc,
                "retries": retries, "rounds": 0, "d_assist": 0.0,
-               "d_tool": 0.0, "first": None, "last": None, "commit": None}
+               "d_tool": 0.0, "first": None, "last": None, "commit": None,
+               "usage": usage or {}}
         prev = None
         for t, role in events:
             if not (t0 - 2 <= t <= t1 + 2):
@@ -590,14 +614,32 @@ def _report_wake_table(base, agents, out):
                 f" 内{_dur(row['last'] - row['first']) if row['first'] else 'n/a':>7}"
                 f" 收尾{post:4.1f}s | 往返 {row['rounds']:>2}"
                 f" | Δ助手 {_dur(row['d_assist']):>6} Δ工具 {_dur(row['d_tool']):>6}"
+                # A6：pi 原生 usage（来自本次唤醒的事件流；缺失写 n/a，不冒充 0）
+                f" | usage {_usage_txt(row.get('usage'))}"
                 f" | commit {commit}{retry}"
                 + ("  rc≠0" if row["rc"] else ""))
         total = sum(x["ms"] for x in rows) / 1000
+        # usage 合计：**只对有的唤醒求和**（n/a 按缺测跳过，不进合计）
+        agg = {k: 0 for k in ("in", "out", "cache_read", "reasoning", "calls")}
+        have = 0
+        for x in rows:
+            u = x.get("usage") or {}
+            if not u:
+                continue
+            have += 1
+            for k in agg:
+                if isinstance(u.get(k), int):
+                    agg[k] += u[k]
+        usage_sum = (f" | usage 合计（{have}/{len(rows)} 唤有读数）in {agg['in']}"
+                     f" cacheRead {agg['cache_read']} out {agg['out']}"
+                     f"（含推理 {agg['reasoning']}）calls {agg['calls']}"
+                     if have else " | usage 合计 n/a（所有唤醒都无读数）")
         out.append(f"  {agent} 合计：{len(rows)} 唤 | 跨度 {_dur(total)} = "
                    f"启动前 {_dur(start)} + 事件内 {_dur(inner)} + 收尾 {_dur(tail)}"
                    f" | 平均 {total / len(rows):.1f}s"
                    f" | 往返 {sum(x['rounds'] for x in rows)}"
                    f" | retry {sum(x['retries'] for x in rows)}"
+                   + usage_sum
                    + (f" | 未分解 {no_ev} 次（无 session 事件）" if no_ev else ""))
         # 对账恒等式（e2e23 分析产出）：**仅有事件的那部分**应满足
         # Σ(启动+事件内+收尾) = Σ进程跨度；差>2s 说明时间源没对齐
@@ -650,48 +692,72 @@ def _report_termination(base, agents, out):
 
 
 def _report_context_line(base, out):
-    """fork 上下文构成（决策 24 的 summary 模式）。
+    """fork 上下文构成（决策 24；**对所有模式生效**——A4）。
 
-    取数：`protocol.json.forkMode`（声明）+ `<base>/<COMPACT_BASE_STATS>`（setup
-    生成时写的记账，fail-open）。为什么需要：summary 模式的全部价值在"**远端被
-    摘要、近端是原始窗口**"这个结构上——而本项目**没有质量判据**（决策 24
-    「判据说明」），事后唯一能核的就是**结构事实**：摘要多大、窗口多大、多少条
-    被摘要覆盖、用的哪个模型。非 summary 模式不打印本行（不制造噪音）。
+    为什么要这一行：本项目**没有质量判据**，事后唯一能核的是**结构事实**——
+    背景有多大、由什么构成、多少历史进了摘要 / 被丢弃、那次摘要真实请求多大。
+    取数（两处，各有单一来源）：
+      · `<base>/<COMPACT_BASE_STATS>`（setup 生成时的记账，fail-open）——摘要侧；
+      · fork 源 header（`protocol.forkSource` → `read_fork_stats`，O(1) 读首行）
+        ——背景基础文本的 est（`forkBaseTokensEst`，**四模式统一写**）。
+    口径纪律（A2/A8）：**背景 = 摘要 est ＋ 窗口 est**，两项**各自标口径、读数处
+    相加**（不新增"第四口径"字段、不预计算总数——实时 est 会随 agent 运行增长，
+    写下来即过期）；`est` 一律是字符/3 粗估，**不是**成本口径，与 pi 的 usage 不可混算。
     """
     proto = meeting_fs.read_protocol(meeting_fs.bare_of_base(base))
-    if proto.get("forkMode") != "summary":
-        return
-    try:
-        with open(os.path.join(base, meeting_fs.COMPACT_BASE_STATS),
-                  encoding="utf-8") as f:
-            st = json.load(f)
-    except (OSError, ValueError):
-        out.append("上下文：定向摘要 ｜ 记账不可读"
-                   f"（{meeting_fs.COMPACT_BASE_STATS} 缺失/损坏）→ n/a")
-        return
-    # 结构事实（决策 24 的验收面）：远端摘要多大 / 近端窗口多大 / **摘要器实际读了
-    # 多少**（前部限幅后）/ 有多少更早条目被限幅丢弃。后者是"我们没有假装覆盖"的
-    # 凭证——数字必须出现，否则报告会给人"整段历史都被摘要过了"的错觉。
-    parts = [
-        "上下文：定向摘要",
-        f"摘要 est≈{st.get('summary_est', 'n/a')}",
-        f"窗口 est≈{st.get('window_est', 'n/a')}"
-        + (f"（声明 {st['keep_tail']}）" if st.get("keep_tail") is not None else ""),
-        f"被摘要覆盖 {st.get('dropped_entries', 'n/a')} 条",
-    ]
-    if st.get("input_est") is not None:
-        front = f"（限幅目标 {st['front_tokens']}）" if st.get("front_tokens") is not None else ""
-        parts.append(f"摘要器读入 est≈{st['input_est']}{front}")
-    u = st.get("usage") or {}
-    req = (u.get("input") or 0) + (u.get("cacheRead") or 0)
-    if req:
-        parts.append(f"实际请求 {req} tokens"
-                     + (f"（输出 {u['output']}，含推理 {u.get('reasoning', 0)}）"
-                        if u.get("output") is not None else ""))
-    if st.get("input_dropped"):
-        src = f"（源可见 est≈{st['source_est']}）" if st.get("source_est") is not None else ""
-        parts.append(f"限幅丢弃 {st['input_dropped']} 条{src}")
-    parts.append(f"摘要模型 {st.get('model') or '(默认)'}")
+    mode = proto.get("forkMode") or meeting_fs.DEFAULT_FORK_MODE
+    # 背景基础文本（四模式统一；读不到就省略该段，不编数）
+    bg = None
+    fsrc = proto.get("forkSource")
+    if fsrc:
+        fstats = meeting_fs.read_fork_stats(fsrc)
+        bg = fstats.get("est")
+        dropped = fstats.get("dropped")
+    else:
+        dropped = None
+    parts = []
+    if mode == "summary":
+        parts.append("上下文：定向摘要")
+        try:
+            with open(os.path.join(base, meeting_fs.COMPACT_BASE_STATS),
+                      encoding="utf-8") as f:
+                st = json.load(f)
+        except (OSError, ValueError):
+            out.append("上下文：定向摘要 ｜ 记账不可读"
+                       f"（{meeting_fs.COMPACT_BASE_STATS} 缺失/损坏）→ n/a")
+            return
+        summ = st.get("summary_est", "n/a")
+        if bg is not None:
+            parts.append(f"背景 = 摘要 est≈{summ} + 窗口 est≈{bg}"
+                         "（各自字符/3、不含对方）")
+        else:
+            parts.append(f"背景 = 摘要 est≈{summ} + 窗口 est n/a")
+        parts.append(f"被摘要覆盖 {st.get('dropped_entries', 'n/a')} 条")
+        if st.get("input_dropped"):
+            src = (f"（源可见 est≈{st['source_est']}）"
+                   if st.get("source_est") is not None else "")
+            parts.append(f"限幅丢弃 {st['input_dropped']} 条{src}")
+        if st.get("front_tokens") is not None and st.get("keep_tail") is not None:
+            # A1：真限幅 = 前部 + 尾部（此前只印前部，读者会低估上限）
+            parts.append(f"限幅目标 前部 {st['front_tokens']} + 尾部 {st['keep_tail']}"
+                         f" = {st['front_tokens'] + st['keep_tail']}")
+        u = st.get("usage") or {}
+        req = (u.get("input") or 0) + (u.get("cacheRead") or 0)
+        if req:
+            parts.append(f"实际请求 {req} tokens"
+                         + (f"（输出 {u['output']}，含推理 {u.get('reasoning', 0)}）"
+                            if u.get("output") is not None else ""))
+        if st.get("wall_sec") is not None:
+            parts.append(f"生成 {st['wall_sec']}s")          # A5
+        parts.append(f"摘要模型 {st.get('model') or '(默认)'}")
+    else:
+        label = {"budget": "预算裁剪", "compaction": "按 compaction 边界",
+                 "full": "全量"}.get(mode, mode)
+        parts.append(f"上下文：{label}")
+        if bg is not None:
+            parts.append(f"背景 est≈{bg}（字符/3，不含摘要文本）")
+        if dropped is not None:
+            parts.append(f"丢弃 {dropped} 条")
     out.append(" ｜ ".join(parts))
 
 
