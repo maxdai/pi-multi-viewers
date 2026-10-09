@@ -517,6 +517,18 @@ console.log("=== /multi-viewers-config ===");
   check("sid 注入", cs[0]?.sid === SID, cs[0]);
 }
 {
+  // 枚举键（fork-mode）同样原样转发——扩展不解释值，校验全在 python 单点实现
+  scen({ "out.1": "已设默认值: fork-mode = summary（/tmp/agent/multi-viewers.json）\n" });
+  const calls: Call[] = [];
+  await CFG.handler("fork-mode summary", mockCtx(calls));
+  const cs = cliCalls();
+  check(
+    "fork-mode 原样转发",
+    cs.length === 1 && cs[0].argv.includes("fork-mode") && cs[0].argv.includes("summary"),
+    cs,
+  );
+}
+{
   scen({ "out.1": "默认值配置文件: /tmp/agent/multi-viewers.json（尚未创建）\n  max-meeting = 15（内置默认）\n" });
   const calls: Call[] = [];
   await CFG.handler("", mockCtx(calls));
