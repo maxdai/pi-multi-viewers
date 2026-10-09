@@ -403,8 +403,10 @@ _SPEC_STARTUP_HEADER = (
     "# （相当于\"特别指定\"）。删除某行 = 该键回落到默认值配置。\n"
     "# 合法键：max-meeting（meeting 每 agent 发言配额）、max-rr（RR 轮次配额）、\n"
     "#         stall-timeout（无进展超时秒数）、summary-front（定向摘要的前部规模，\n"
-    "#         tokens est，默认 %d）。值必须是 ≥1 的整数。\n"
-    % meeting_fs.DEFAULT_SUMMARY_FRONT_TOKENS
+    "#         tokens est，默认 %d）——这三个是 ≥1 的整数；\n"
+    "#         fork-mode（fork 源模式：%s，默认 %s）是枚举。\n"
+    % (meeting_fs.DEFAULT_SUMMARY_FRONT_TOKENS,
+       "/".join(meeting_fs.FORK_MODES), meeting_fs.DEFAULT_FORK_MODE)
 )
 
 

@@ -158,6 +158,8 @@ scripts/mv.sh --set-default [<键> <值>]       # 启动参数默认值（无参
 （loop 每轮只读它，中途不可改）。
 
 可设的键：`max-meeting`（meeting 阶段每 agent 发言配额，默认 15）、
+`fork-mode`（fork 源模式：`budget`/`compaction`/`summary`/`full`，默认 `budget`——设成
+`summary` 后 `/multi-viewers` 也走定向摘要）、
 `summary-front`（`--fork-mode summary` 时会被摘要掉的**前部**规模，默认 80000；
 单位是本文档的 token est（字符/3，实测偏保守约 1.4–2×，安全方向）。窗口 =
 它 + 尾部 20000。越大 = 更多历史被摘要覆盖、也更贵（est 100k ≈ 1 分钟）；

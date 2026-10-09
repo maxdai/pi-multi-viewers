@@ -108,6 +108,13 @@ DEFAULT_THINKING = "max"
 # 复用 `pi_agent_dir()` 单一实现，测试靠改该环境变量重定向（不新增测试专用开关）。
 # 形状：`{"max-meeting": 20, "max-rr": 10, "stall-timeout": 600}`
 # （键名与 CLI flag 同名，少一层映射）。
+# fork 源模式（`STARTUP_DEFAULTS` 的 `fork-mode` 引用它）——
+FORK_MODES = ("budget", "compaction", "summary", "full")
+# summary = 定向摘要（决策 24）：远端摘要（`DEFAULT_SUMMARY_FRONT_TOKENS` 限幅）
+# + 近端原始窗口（`SUMMARY_KEEP_TAIL_TOKENS`）——见 build_summary_input /
+# finalize_compaction_base / generate_compact_base。
+DEFAULT_FORK_MODE = "budget"
+
 STARTUP_DEFAULTS = {            # 键名 → 内置默认（引用上方常量，不重复字面量）
     "max-meeting": DEFAULT_MAX_MEETING,
     "max-rr": DEFAULT_MAX_RR,
@@ -115,7 +122,14 @@ STARTUP_DEFAULTS = {            # 键名 → 内置默认（引用上方常量�
     # 定向摘要（forkMode=summary）的前部规模：越大 = 更多历史被摘要覆盖、
     # 也更贵（摘要器要通读这么多）；越小 = 更多更早条目被丢弃。
     "summary-front": DEFAULT_SUMMARY_FRONT_TOKENS,
+    # fork 源模式（budget/summary/compaction/full）——**唯一一个字符串键**：
+    # 让 `/multi-viewers`（extension 只跑 `--start <spec>`，不带 flag）也能用上
+    # summary 模式（2026-10-08 用户要求）。
+    "fork-mode": DEFAULT_FORK_MODE,
 }
+
+# 值域：哪些键是"枚举"而不是"正整数"（校验的**单一实现**在下方 parse_startup_kv）
+STARTUP_ENUM_KEYS = {"fork-mode": FORK_MODES}
 
 
 def startup_config_path(agent_dir=None):
@@ -141,18 +155,12 @@ def read_startup_config(agent_dir=None):
         return {}, f"{path} 顶层不是对象"
     out, unknown = {}, []
     for k, v in raw.items():
-        if k not in STARTUP_DEFAULTS:
+        # 校验复用**同一实现**（此前这里自己写了一遍 int 校验，两处口径会漂）
+        val, err = parse_startup_kv(k, v)
+        if err:
             unknown.append(k)
             continue
-        try:
-            n = int(v)
-        except (TypeError, ValueError):
-            unknown.append(k)
-            continue
-        if n < 1:
-            unknown.append(k)
-            continue
-        out[k] = n
+        out[k] = val
     warn = f"{path} 里这些键被忽略（未知或非法）：{', '.join(unknown)}" if unknown else ""
     return out, warn
 
@@ -176,10 +184,20 @@ def write_startup_config(key, value, agent_dir=None):
 
 
 def parse_startup_kv(key, raw):
-    """校验 `--set-default <key> <value>` 的入参 → (value, error)。"""
+    """校验启动参数的 `key: value` → (value, error)。**唯一实现**。
+
+    三个调用点共用：`--set-default`、`spec/startup.md` 的读取、用户级配置的读取
+    （此前配置读取自己写了一遍 int 校验 ⇒ 两处口径；现在只有这一处）。
+    两类键：**枚举**（`STARTUP_ENUM_KEYS`，如 fork-mode）与**正整数**（配额）。
+    """
     if key not in STARTUP_DEFAULTS:
         return None, (f"未知的键 {key!r}——合法键："
                       + "、".join(STARTUP_DEFAULTS))
+    if key in STARTUP_ENUM_KEYS:
+        allowed = STARTUP_ENUM_KEYS[key]
+        if raw not in allowed:
+            return None, f"{key} 必须是 {'/'.join(allowed)} 之一，收到 {raw!r}"
+        return raw, ""
     try:
         n = int(raw)
     except (TypeError, ValueError):
@@ -935,11 +953,6 @@ BUILTIN_MCP_ENTRY = "builtin:mcp"
 # 同样是常量：名字由 pi 注册，无需解析（零第三方依赖）。
 BUILTIN_CODEMODE_ENTRY = "builtin:codemode"
 
-FORK_MODES = ("budget", "compaction", "summary", "full")
-# summary = 定向摘要（决策 24）：远端摘要（`DEFAULT_SUMMARY_FRONT_TOKENS` 限幅）
-# + 近端原始窗口（`SUMMARY_KEEP_TAIL_TOKENS`）——见 build_summary_input /
-# finalize_compaction_base / generate_compact_base。
-DEFAULT_FORK_MODE = "budget"
 #
 # 版本守卫：值域校验在 build_fork_source 入口（open 之前）做——非法值
 # 与历史值（改名前的 active/curated）一律报错，绝不静默落到"混合分支"

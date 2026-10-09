@@ -355,7 +355,9 @@ def setup_environment(args, participants, base, spec_dir=None,
     startup, startup_src, startup_notes = spec_gen.resolve_startup(
         {"max-meeting": args.max_meeting, "max-rr": args.max_rr,
          "stall-timeout": args.stall_timeout,
-         "summary-front": getattr(args, "summary_front", None)},
+         "summary-front": getattr(args, "summary_front", None),
+         # fork 源模式也走同一套优先级（让 `/multi-viewers` 不带 flag 也能用 summary）
+         "fork-mode": getattr(args, "fork_mode", None)},
         spec_dir=spec_dir)
     for _n in startup_notes:
         print(f"[startup] {_n}")
@@ -368,7 +370,7 @@ def setup_environment(args, participants, base, spec_dir=None,
                                startup["stall-timeout"],
                                fork_source=getattr(args, "fork_source", None),
                                fork_cwd=os.getcwd(),
-                               fork_mode=getattr(args, "fork_mode", meeting_fs.DEFAULT_FORK_MODE)),
+                               fork_mode=startup["fork-mode"]),
                   f, indent=2, ensure_ascii=False)
     # ---- 定向摘要 base（决策 24）：forkMode=summary 时**在 setup 生成一次** ----
     # 为什么在 setup 而不是各 loop 的首唤里：三 loop 是独立进程，各自生成会
@@ -378,7 +380,7 @@ def setup_environment(args, participants, base, spec_dir=None,
     # 运行期真用哪个模式，protocol 里就写哪个），并打印可见警告；base 不存在时
     # loop 也会可见地回落（双保险，都不静默）。
     # 位置：必须在 setup commit **之前**（loop 读的是 bare HEAD:protocol.json）。
-    if getattr(args, "fork_mode", None) == "summary" \
+    if startup["fork-mode"] == "summary" \
             and getattr(args, "fork_source", None):
         _m0, _v0 = models.get(participants[0], (None, None))
         _stats, _err = meeting_loop.generate_compact_base(
@@ -466,8 +468,10 @@ def setup_environment(args, participants, base, spec_dir=None,
     rw = args.result_writer or participants[-1]
     print(f"[setup] 环境就绪: {base}（{len(participants)} agents: {', '.join(participants)}）")
     # 生效值 + **来源**一并打印（用户 2026-09-27 的疑虑：默认值有没有被静默覆盖）
-    q = " · ".join(f"{k}={startup[k]}（{startup_src[k]}）" for k in meeting_fs.STARTUP_DEFAULTS)
+    q = " · ".join(f"{k}={startup[k]}（{startup_src[k]}）"
+                   for k in meeting_fs.STARTUP_DEFAULTS if k != "fork-mode")
     print(f"[setup] resultWriter={rw}, 配额 {q}, "
+            f"forkMode={startup['fork-mode']}（{startup_src['fork-mode']}）, "
           f"立场={'有' if (args.stances or spec_dir) else '无'}, "
           f"extensionPolicy={args.extension_policy}")
 
@@ -650,7 +654,9 @@ def main():
                         help="生成 spec 骨架到 DIR（如 --spec-gen myspec/；不需 --dir）")
     parser.add_argument("--spec", default=None,
                         help="讨论规格目录（内容源：question/background/agents，优先于 CLI 内容参数）")
-    parser.add_argument("--fork-mode", default=meeting_fs.DEFAULT_FORK_MODE,
+    # 默认 None：区分"没指定"与"显式给了默认值"——否则会静默覆盖用户设的默认值
+    # 与 spec/startup.md（与配额三个 flag 同款，2026-10-08 扩到 fork-mode）
+    parser.add_argument("--fork-mode", default=None,
                         choices=list(meeting_fs.FORK_MODES),
                         help="fork 裁剪策略：budget=预算+折叠（默认，长会话可行）；"
                              "summary=定向摘要（远端摘要+近端原始窗口；决策 24）；"
