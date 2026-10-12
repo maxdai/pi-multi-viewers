@@ -862,6 +862,8 @@ class TestStartDiscussionMain(unittest.TestCase):
                     sd.main()
         self.assertIn("[status] done", out)
         self.assertIn("[result] /x-result.md", out)
+        # [dir]：消费端要拼"带目录"的可复制命令（`!!` 无 sid，省略目录必失败）
+        self.assertIn("[dir] /x", out)
 
     def test_main_status_running_no_result_path(self):
         import start_discussion as sd
@@ -874,6 +876,8 @@ class TestStartDiscussionMain(unittest.TestCase):
                                 side_effect=lambda *a, **k: out.append(a[0])):
                     sd.main()
         self.assertFalse([l for l in out if l.startswith("[result]")])
+        # 非 done 也给目录（stopped 分支的清理提示要靠它）
+        self.assertTrue([l for l in out if l.startswith("[dir] ")])
 
     def _wait_with_state(self, tmp, state):
         """--wait 在给定 check_status 下的终态输出（真实 subprocess 太重，

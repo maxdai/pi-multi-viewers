@@ -146,10 +146,41 @@ export default function register(pi: any) {
         return;
       }
       if (state === "stopped") {
+        // 无 result.md（未启动/中断）⇒ 清理**什么都保不住**（`_preserve_result_md`
+        // 无源），删目录 = 丢掉唯一的分析现场（bare 里的全部消息）⇒ 这是**破坏性
+        // 且无产物**的操作：给明确原因 + 一次 confirm 门禁，由用户决定
+        // （2026-10-09 用户拍板：与 done/stalled 同款体验，不要求手敲命令）。
+        const dir = grab(st.output, "[dir] ");
         ctx.ui.notify(
-          "分析已结束但未生成结果（状态 stopped）。" +
-            "要清理请自行运行 `" + MV_SH + " --cleanup`。",
+          "分析已结束但**未生成结果**（状态 stopped）——清理不会留下任何产物" +
+            "（消息与 bare 仓库都会被删除）。",
           "warning",
+        );
+        if (!dir) {
+          ctx.ui.notify(
+            "（`--status` 未给出目录，无法安全清理——请显式传目录：`" +
+              MV_SH + " --cleanup <目录>`）",
+            "warning",
+          );
+          return;
+        }
+        const ok = await ctx.ui.confirm(
+          "确认清理？",
+          `将删除 ${dir}；该分析没有 result.md，清理后不可恢复。`,
+        );
+        if (!ok) {
+          ctx.ui.notify("已取消清理（分析目录保留）。", "info");
+          return;
+        }
+        const clean = await runCli(["--cleanup", dir], ctx.cwd, sid);
+        if (clean.rc !== 0) {
+          ctx.ui.notify(`清理失败：\n${clean.output}`, "error");
+          return;
+        }
+        ctx.ui.setWidget("multi-viewers", undefined);
+        ctx.ui.notify(
+          `${clean.output}\n\n（该分析没有结果文件，无摘要可取。）`,
+          "success",
         );
         return;
       }
@@ -185,7 +216,11 @@ export default function register(pi: any) {
         ctx.ui.notify("已取消收尾（分析目录保留）。", "info");
         return;
       }
-      const clean = await runCli(["--cleanup"], ctx.cwd, sid);
+      // 目录来自 `--status` 的 [dir] 标记：显式传 ⇒ 不依赖 sid、命令可复制
+      const dir = grab(st.output, "[dir] ");
+      const clean = await runCli(
+        dir ? ["--cleanup", dir] : ["--cleanup"], ctx.cwd, sid,
+      );
       if (clean.rc !== 0) {
         ctx.ui.notify(`收尾失败：\n${clean.output}`, "error");
         return;

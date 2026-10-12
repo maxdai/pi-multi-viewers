@@ -254,7 +254,7 @@ loop、状态从 git 共享事实推导、单一事实源 = protocol.json、无�
 - **当前形态**：prompt × 1（multi-viewers-setup 建视角）+ extension × 1（一单元注册四命令）
   ——一个扩展单元内注册四命令（`multi-viewers` 分析 / `multi-viewers-finish` 收尾 /
   `multi-viewers-say` 插话 / `multi-viewers-config` 启动参数默认值）；前两个靠 CLI
-  机器标记行取值（`[prepare] spec=` / `[start] dir=` / `[start] watch=` / `[status]`），
+  机器标记行取值（`[prepare] spec=` / `[start] dir=` / `[start] watch=` / `[status]` / `[dir]`），
   say 与 config 零 LLM 直接转发给 `human_sayer.py` / `mv_cli`；
   扩展层测试：`tests/extension_harness.ts`（真扩展代码 + 假 python3 装置，零 LLM；
   `run_tests.sh` 自动带上——缺 bun 可见跳过、`MV_REQUIRE_BUN=1` 严格）。

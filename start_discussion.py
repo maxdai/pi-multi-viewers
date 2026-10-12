@@ -743,6 +743,11 @@ def main():
     if args.status:
         st = check_status(base)
         print(f"[status] {st}")
+        # 目录一并给出（机器标记）：消费端（扩展）要在**提示里拼出带目录的命令**
+        # ——`!!` 手敲时环境里没有 PI_SESSION_ID（`session.executeBash` 不注入），
+        # 省略目录的命令复制过去必然失败；带目录才可复制执行（stopped 分支的
+        # "清理"提示就靠它）。
+        print(f"[dir] {os.path.abspath(base)}")
         if st == "done":
             # 产物路径一并给出：目录可省略后（自动发现），调用方**无法**
             # 自己拼出 `<目录>-result.md`——路径由机制提供，不经 LLM 记忆

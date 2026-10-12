@@ -359,7 +359,9 @@ console.log("=== /multi-viewers-finish ===");
 }
 {
   scen({
-    "out.1": "[status] done\n[result] /tmp/mv-harness/work/x-result.md\n",
+    "out.1":
+      "[status] done\n[dir] /tmp/mv-harness/work/x\n" +
+      "[result] /tmp/mv-harness/work/x-result.md\n",
     "out.2": "结果已保存到 /tmp/mv-harness/work/x-result.md\n== 分析报告 ==\n提交 5\n",
   });
   const calls: Call[] = [];
@@ -370,6 +372,13 @@ console.log("=== /multi-viewers-finish ===");
     calls,
   );
   check("done 文案含 result 路径", String(calls[0].args).includes("x-result.md"), calls[0].args);
+  // 新契约：拿到 [dir] ⇒ cleanup **显式传目录**（不依赖 sid、命令可复制）
+  const cleanCall = cliCalls().find((c) => c.argv.includes("--cleanup"));
+  check(
+    "done → cleanup 显式带目录",
+    cleanCall?.argv.includes("/tmp/mv-harness/work/x") === true,
+    cleanCall,
+  );
   {
     const w = calls.filter((c) => c.kind === "setWidget");
     check(
@@ -433,14 +442,50 @@ console.log("=== /multi-viewers-finish ===");
   check("stalled 也只在确认后 cleanup 一次", cliCalls().filter((c) => c.argv.includes("--cleanup")).length === 1, cliCalls());
 }
 {
+  // stopped = 无 result.md（未启动/中断）⇒ 清理什么都保不住：给原因 + confirm 门禁
+  scen({ "out.1": "[status] stopped\n[dir] /tmp/mv-harness/work/s\n", "out.2": "已删除 x\n" });
+  const calls: Call[] = [];
+  await FIN.handler("", mockCtx(calls, true));
+  check(
+    "stopped+确认 → warning（说明无产物）→confirm→cleanup（显式目录）→清面板→success",
+    eq(kinds(calls), ["notify:warning", "confirm", "setWidget", "notify:success"]),
+    calls,
+  );
+  const warn = String(calls[0].args);
+  check("stopped 文案说明清理不留产物", warn.includes("不会留下任何产物"), warn);
+  const cleanCall = cliCalls().find((c) => c.argv.includes("--cleanup"));
+  check(
+    "stopped 清理带目录且只一次",
+    cleanCall?.argv.includes("/tmp/mv-harness/work/s") === true &&
+      cliCalls().filter((c) => c.argv.includes("--cleanup")).length === 1,
+    cliCalls(),
+  );
+  check("stopped 成功后不再提示手敲命令",
+    !String(calls[3].args).includes("请自行运行"), calls[3].args);
+}
+{
+  // stopped + 用户取消 ⇒ 保留目录、不 cleanup
+  scen({ "out.1": "[status] stopped\n[dir] /tmp/mv-harness/work/s\n" });
+  const calls: Call[] = [];
+  await FIN.handler("", mockCtx(calls, false));
+  check(
+    "stopped+取消 → warning→confirm→info，不 cleanup",
+    eq(kinds(calls), ["notify:warning", "confirm", "notify:info"]) && !hasCleanup(cliCalls()),
+    calls,
+  );
+}
+{
+  // stopped 但缺 [dir] ⇒ 不猜目录，提示显式传（旧 CLI/异常产物）
   scen({ "out.1": "[status] stopped\n" });
   const calls: Call[] = [];
   await FIN.handler("", mockCtx(calls, true));
   check(
-    "stopped → warning，不 cleanup",
-    eq(kinds(calls), ["notify:warning"]) && !hasCleanup(cliCalls()),
+    "stopped 缺 [dir] → warning + warning（显式传目录出路），不 cleanup",
+    eq(kinds(calls), ["notify:warning", "notify:warning"]) && !hasCleanup(cliCalls()),
     calls,
   );
+  check("缺目录出路是带目录的显式命令",
+    String(calls[1].args).includes("--cleanup <目录>"), calls[1].args);
 }
 {
   scen({ "out.1": "[status] not-exists\n" });

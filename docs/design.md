@@ -717,13 +717,19 @@ commit 是溯源记录、本节是长期引用点——不并存两份权威值�
     确认 → cleanup。**为什么**：prompt 靠 LLM 逐步执行，每步都可能漏（实测：观看
     命令漏传 2 次、失败判据曾靠读中文报错文本、目录路径曾靠 LLM 记忆）；代码执行
     则天然不遗漏。**与 CLI 的契约 = 机器标记行**（`[prepare] spec=` / `[start] dir=` /
-    `[start] watch=` / `[status]` / `[result]`），扩展不解析人类文案——文案可变，
+    `[start] watch=` / `[status]` / `[dir]` / `[result]`），扩展不解析人类文案——文案可变，
     标记不可消失（`tests/test_mv_cli.py::TestMachineMarkers` 锁住）。**边界**：spec
     内容起草仍是真 LLM 工作（任务类型/产出形态），故为**两段式**——骨架零 LLM，
     起草/摘要走普通对话；门禁取消则保留 spec，用户编辑后自行 `mv.sh --start`。
     **收尾状态语义（2026-09-25 评审）**：`running` 等待；`done | stalled` 并流进
     "notify → confirm → cleanup"（照 running 处理会让用户等一个永不到来的收尾）；
-    `stopped` 只提示手动清理。**状态定义以 `observability.check_status` 为单一
+    `stopped` 走**同款形态**但语义更重：该状态**没有 result.md** ⇒ 清理什么都保不住
+      （`_preserve_result_md` 无源），删目录 = 丢掉唯一的分析现场 ⇒ 文案明说"不会留下任何
+      产物"，再经 `ui.confirm` 由用户决定（2026-10-09 用户拍板：与 done/stalled 同款体验，
+      不要求手敲命令；缺 `[dir]` 则不猜目录、给出显式命令出路）。`[dir]` 标记的理由：
+      扩展要在提示里拼**带目录**的可复制命令——`!!` 手敲时环境里没有 `PI_SESSION_ID`
+      （`session.executeBash` 不注入，实测），省略目录的命令复制过去必然失败。
+      **状态定义以 `observability.check_status` 为单一
     事实源**（`stalled` = 有 result.md、无 concluded、loop 均不存活）——此处不复述其判据。
     `stalled` 用独立文案（其 result 由清理时保存，不复用 done 的"已留存"路径文案）；扩展是唯一守卫
     （CLI 的 cleanup 无状态防护）。**本轮明确不做**（防翻案）：`--json` 输出模式、
