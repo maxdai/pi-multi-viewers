@@ -59,6 +59,45 @@ const OBSERVABILITY = path.join(PACKAGE_ROOT, "observability.py");
  *  按此常量给绝对路径（评审 B2：出路必须可执行）。 */
 export const MV_SH = `bash ${PACKAGE_ROOT}/scripts/mv.sh`;
 
+/** 实时观看命令（唯一构造点）。`--follow` = 增量显示直到分析结束、结束时自动附
+ *  报告——这是唯一"实时 + 零上下文"的用户通道（输出走 pi 自己的 bash 显示）。
+ *  绝对路径 + 显式目录：`!!` 手敲时环境里没有 `PI_SESSION_ID`，省略目录必然失败。 */
+export function followCommand(dir: string, pkgRoot: string = PACKAGE_ROOT): string {
+  return `python3 "${path.join(pkgRoot, "human_viewer.py")}" "${dir}" --follow`;
+}
+
+/** 本地 shell 执行后端（pi 的 `BashOperations` 形状：单个 `exec`）。
+ *
+ *  为什么要它：`pi.on("user_bash")` 的 `{operations}` 分支要求我们自己提供执行
+ *  方式——但输出仍由 pi 累加/渲染（`onData` 回调），所以**流式与显示语义与普通
+ *  `!!` 完全一致**，只是把命令换成我们展开后的真实命令。
+ *
+ *  走 `bash -lc`（与 pi 自己的本地实现同款），`signal` 中止 → SIGTERM 子进程。
+ *  导出仅供测试直调（用无害命令验流式与退出码；不触碰真实 viewer）。 */
+export function localShellOps(): {
+  exec: (
+    command: string,
+    cwd: string,
+    options: { onData: (data: Buffer) => void; signal?: AbortSignal },
+  ) => Promise<{ exitCode: number | null }>;
+} {
+  return {
+    exec: (command, cwd, options) =>
+      new Promise((resolve) => {
+        const proc = spawn("bash", ["-lc", command], { cwd, env: process.env });
+        const onAbort = () => proc.kill("SIGTERM");
+        options.signal?.addEventListener("abort", onAbort, { once: true });
+        proc.stdout.on("data", (d: Buffer) => options.onData(d));
+        proc.stderr.on("data", (d: Buffer) => options.onData(d));
+        proc.on("error", () => resolve({ exitCode: 1 }));
+        proc.on("close", (code, signal) => {
+          options.signal?.removeEventListener("abort", onAbort);
+          resolve({ exitCode: code ?? (signal ? 128 : 1) });
+        });
+      }),
+  };
+}
+
 /** 跑一次子进程并收输出。三处调用点的差异全部显式化（合并前是三份样板）：
  *  `sid`/`sessionFile` 决定是否注入 `PI_SESSION_ID` / `PI_SESSION_FILE`——它们是
  *  目录命名、`--find-dir` 与 fork 源解析的钥匙；`PI_SESSION_FILE` 是**精确路径**

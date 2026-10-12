@@ -133,7 +133,9 @@ scripts/mv.sh --start <spec目录>              # 启动（自动挂载主 sessi
 #        all = 走 pi 默认发现。MCP 那份是内置、恒在；MC 那份缺了则可见降级）
 #  高级：--agents "a,b" 起一次性视角（不建 viewers/ 时用；prompt 入口不传它）
 
-# 观看：--start 会输出可直接执行的 !! 流式观看命令（复制执行）
+# 观看（在 pi 会话里）：输入 !!pmv-follow —— 扩展把这条「口令」展开成真实观看命令
+#        （用 sid 自动定位当前分析目录；流式显示、不进 LLM 上下文；
+#         也可 !!pmv-follow <目录> 显式指定；完整命令仍由 --start 输出、可复制执行）
 scripts/mv.sh --view                          # 一次性增量查看（主 pi 记录 HEAD 作下轮 --since）
 #  --follow 会打印【状态】(meeting/all-freezing/round-robin/concluded)
 #         与【进度】(meeting 消耗/上限 ｜ freezing 集合 ｜ rr → 下一位)

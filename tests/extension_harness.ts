@@ -32,7 +32,7 @@ const SID = "testsid";
 const SFILE = "/tmp/mv-harness/main.jsonl";
 
 // ---- 假 python3（每次调用记一行 sid+argv，并按队列回放输出/退出码）----
-const FAKE = `#!/usr/bin/env bash
+const FAKE = `#!/bin/sh
 D="\${FAKE_DIR:?}"
 n=$(cat "$D/n" 2>/dev/null || echo 0); n=$((n+1)); echo "$n" > "$D/n"
   printf 'sid=%s sfile=%s :: %s\n' "\${PI_SESSION_ID:-(unset)}" "\${PI_SESSION_FILE:-(unset)}" "$*" >> "$D/calls"
@@ -50,11 +50,14 @@ type Cli = { sid: string; sfile: string; argv: string };
 let currentCalls: Call[] = [];
 
 function mockPi() {
+  const handlers: Record<string, any> = {};
   const commands: Record<string, any> = {};
   return {
+    handlers,
     commands,
     pi: {
       registerCommand: (n: string, o: any) => (commands[n] = o),
+      on: (ev: string, h: any) => ((handlers[ev] = h), () => {}),
       sendMessage: (msg: any, opts: any) =>
         currentCalls.push({ kind: "sendMessage", args: { msg, opts } }),
     },
@@ -130,13 +133,23 @@ rmSync("/tmp/mv-harness", { recursive: true, force: true });
 mkdirSync(BIN, { recursive: true });
 mkdirSync(WORK, { recursive: true });
 writeFileSync(`${BIN}/python3`, FAKE);
+// 假 bash：记录被执行的命令行（验证 `!!pmv-follow` 展开成了什么），不真跑
+writeFileSync(
+  `${BIN}/bash`,
+  `#!/bin/sh
+D="$FAKE_DIR"
+echo "$*" >> "$D/bashexec"
+exit 0
+`,
+);
+(await import("node:child_process")).execSync(`chmod +x ${BIN}/bash`);
 (await import("node:child_process")).execSync(`chmod +x ${BIN}/python3`);
 process.env.PATH = `${BIN}:${process.env.PATH}`;
 process.env.FAKE_DIR = SCEN;
 
 const mod: any = await import(EXT);
 const shared: any = await import(SHARED);
-const { commands, pi } = mockPi();
+const { commands, handlers, pi } = mockPi();
 mod.default(pi);
 const MV = commands["multi-viewers"];
 const FIN = commands["multi-viewers-finish"];
@@ -549,6 +562,89 @@ console.log("=== /multi-viewers-say ===");
     eq(kinds(calls), ["notify:error"]) && String(calls[0].args).includes("scripts/mv.sh --say"),
     calls,
   );
+}
+
+console.log("=== !!pmv-follow（user_bash 宏）===");
+{
+  const UB = handlers["user_bash"];
+  check("注册 user_bash 处理器", typeof UB === "function", Object.keys(handlers));
+
+  // 1 不匹配的命令一律不接管（最关键：绝不吞掉用户其它命令）
+  for (const cmd of ["git status", "mv a b", "pmv-followx", "x pmv-follow", "pmv-follow a b"]) {
+    const r = await UB({ command: cmd, excludeFromContext: true }, mockCtx([]));
+    check(`不接管（交回 pi）: ${cmd}`, r === undefined, r);
+  }
+
+  // 2 单个 `!`（输出会进上下文）⇒ 拒绝并提示用 `!!`
+  {
+    scen({});
+    const calls: Call[] = [];
+    const r = await UB({ command: "pmv-follow", excludeFromContext: false }, mockCtx(calls));
+    check(
+      "!pmv-follow → 拒绝并提示改用 !!",
+      !!r?.result && r.result.exitCode === 1 && String(r.result.output).includes("!!pmv-follow"),
+      r,
+    );
+    check("!pmv-follow 不跑任何 CLI", cliCalls().length === 0, cliCalls());
+  }
+
+  // 3 find-dir 命中 ⇒ operations（带 sid）；exec 跑的是展开后的真实命令
+  {
+    scen({ "out.1": "/tmp/mv-harness/work/ana\n" });
+    const r = await UB({ command: "pmv-follow", excludeFromContext: true }, mockCtx([]));
+    check(
+      "命中目录 → 返回 operations.exec",
+      !!r?.operations && typeof r.operations.exec === "function",
+      r && Object.keys(r),
+    );
+    check(
+      "先经 --find-dir 定位（带 sid）",
+      cliCalls()[0]?.argv.includes("--find-dir") && cliCalls()[0]?.sid === SID,
+      cliCalls(),
+    );
+    const res = await r.operations.exec("pmv-follow", WORK, { onData: () => {} });
+    const execLines = readFileSync(`${SCEN}/bashexec`, "utf8").trim().split("\n");
+    const execd = execLines[execLines.length - 1];
+    check(
+      "exec 跑展开后的真实命令（viewer + 目录 + --follow）",
+      /human_viewer\.py" "\/tmp\/mv-harness\/work\/ana" --follow$/.test(execd),
+      execd,
+    );
+    check("exec 退出码透传", res.exitCode === 0, res);
+  }
+
+  // 4 显式目录 ⇒ 不调 --find-dir
+  {
+    scen({});
+    const r = await UB({ command: "pmv-follow /tmp/x/ana", excludeFromContext: true }, mockCtx([]));
+    check("显式目录 → operations（零 CLI 调用）", !!r?.operations && cliCalls().length === 0, cliCalls());
+  }
+
+  // 5 无分析目录 ⇒ 可见失败（非零退出码 + 可执行出路）
+  {
+    scen({ "out.1": "错误: 未找到本 session 的分析目录\n", "rc.1": 1 });
+    const r = await UB({ command: "pmv-follow", excludeFromContext: true }, mockCtx([]));
+    check(
+      "无目录 → result 非零 + 出路可执行",
+      !!r?.result && r.result.exitCode !== 0 && String(r.result.output).includes("pmv-follow <目录>"),
+      r,
+    );
+  }
+}
+
+console.log("=== followCommand / localShellOps ===");
+{
+  const cmd = shared.followCommand("/tmp/d", "/pkg");
+  check("followCommand 形状", cmd === 'python3 "/pkg/human_viewer.py" "/tmp/d" --follow', cmd);
+  // 直测 localShellOps 时把假 bash 移出 PATH（否则"假 bash"会截走、测不到真实行为）
+  const savedPath = process.env.PATH ?? "";
+  process.env.PATH = savedPath.split(":").filter((p: string) => p !== BIN).join(":");
+  let out = "";
+  const r = await shared.localShellOps().exec("echo harness-ok; exit 3", WORK, {
+    onData: (d: any) => (out += d.toString()),
+  });
+  process.env.PATH = savedPath;
+  check("exec 流式 onData + 退出码透传", out.includes("harness-ok") && r.exitCode === 3, { out, r });
 }
 
 console.log("=== /multi-viewers-config ===");

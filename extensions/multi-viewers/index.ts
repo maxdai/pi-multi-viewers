@@ -27,13 +27,26 @@
 
 import {
   findCurrentDir,
+  followCommand,
   grab,
+  localShellOps,
   MV_SH,
   runCli,
   runSayer,
   specListing,
   stripQuotes,
 } from "./shared.ts";
+
+/** 观看口令：用户在 `!!` 后面敲的词（`!!pmv-follow`）。
+ *
+ *  **它不是脚本**（磁盘上不存在同名文件）——而是一条"宏"：`!!` 执行前 pi 会问扩展
+ *  （`user_bash` 事件，TUI 与 pi-web 都发），我们认出这个口令后**把命令展开成真实
+ *  命令行**（含 sid 定位出的分析目录），输出仍走 pi 自己的 bash 显示（流式、`!!`
+ *  ⇒ 不进 LLM 上下文）。扩展不在/没认出 ⇒ shell 会报 `command not found`（可见失败）。
+ *
+ *  为什么不用真脚本：真脚本要进 PATH 或写长路径 ⇒ 又回到"复制长命令"的问题。
+ */
+const FOLLOW_TOKEN = "pmv-follow";
 
 export default function register(pi: any) {
   // ---------------------------------------------------------------- 分析入口
@@ -114,13 +127,14 @@ export default function register(pi: any) {
       // 主 pi 的 magic-context 待办面板用的就是它）。
       ctx.ui.setWidget("multi-viewers", [
         `多视角分析进行中：${dir}`,
-        `观看（复制执行，不进 LLM）：${watch}`,
+        `观看：输入 !!${FOLLOW_TOKEN}（自动定位本会话的分析目录，不进 LLM）`,
+        `也可复制：${watch}`,
         `插话 /multi-viewers-say <文本>　收尾 /multi-viewers-finish`,
       ]);
       ctx.ui.notify(
         `分析已启动：${dir}\n` +
-          "观看（复制执行；TUI 下已预填进输入框）:\n" +
-          `${watch}\n` +
+          `观看：输入 !!${FOLLOW_TOKEN}（本会话自动定位当前分析目录）\n` +
+          `也可复制执行（TUI 下已预填进输入框）：${watch}\n` +
           "插话：/multi-viewers-say <文本>　收尾：/multi-viewers-finish",
         "success",
       );
@@ -291,5 +305,52 @@ export default function register(pi: any) {
         rc === 0 ? "success" : "error",
       );
     },
+  });
+
+  // ------------------------------------------------------- `!!pmv-follow`（宏）
+  pi.on("user_bash", async (event: any, ctx: any) => {
+    const raw = String(event?.command ?? "").trim();
+    // 严格匹配：`pmv-follow` 或 `pmv-follow <目录>`。**不匹配一律 return undefined**
+    // （交给 pi 自己的实现）——绝不能吞掉用户其它命令（测试专门锁这条）。
+    const m = raw.match(/^pmv-follow(?:\s+(\S+))?$/);
+    if (!m) return undefined;
+
+    // 单个 `!`（输出会进 LLM 上下文）⇒ 拒绝并提示：`--follow` 是分钟级长输出，
+    // 进上下文没有意义（用户 2026-10-10 拍板 A）。
+    if (!event.excludeFromContext) {
+      return {
+        result: {
+          output: `请用 !!${FOLLOW_TOKEN}（两个感叹号）——观看输出很长，不该进 LLM 上下文。`,
+          exitCode: 1,
+          cancelled: false,
+          truncated: false,
+        },
+      };
+    }
+
+    const dir = m[1] ? m[1] : await findCurrentDir(ctx.cwd, ctx.sessionManager.getSessionId());
+    if (!dir) {
+      return {
+        result: {
+          output:
+            "没有正在进行的分析（本 session 下找不到唯一的 mv-<sid>-* 目录）。\n" +
+            `出路：显式指定目录 —— !!${FOLLOW_TOKEN} <目录>；` +
+            `或查看状态 —— ${MV_SH} --status <目录>`,
+          exitCode: 1,
+          cancelled: false,
+          truncated: false,
+        },
+      };
+    }
+    // 展开成真实命令；执行仍由 pi 驱动（我们只提供 exec 后端）⇒ 流式与显示不变。
+    const real = followCommand(dir);
+    return {
+      operations: {
+        exec: (command: string, cwd: string, opts: any) => {
+          void command; // 忽略 pi 传来的原始口令，跑展开后的真实命令
+          return localShellOps().exec(real, cwd, opts);
+        },
+      },
+    };
   });
 }

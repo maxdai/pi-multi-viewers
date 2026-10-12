@@ -31,7 +31,8 @@ scripts/check-residue.sh  残留检查（session/进程/目录三类；增删 sc
 scripts/archive-result.sh  归档 result.md（机械部分：逐字复制+校验/存档头骨架/索引行/删源副本）
 mv_cli.py            命令行实现（prepare/start/status/report/wait/cleanup/view/say/viewers/set-viewer）
 extensions/multi-viewers/  【单一扩展单元】index.ts = 四命令 + shared.ts = 助手
-                           /multi-viewers 分析入口（prepare→暂停点弹窗→start→预填+打印观看命令）
+                           /multi-viewers 分析入口（prepare→暂停点弹窗→start→交付观看
+                             + `!!pmv-follow` 宏：user_bash 事件把口令展开成真实观看命令
                            /multi-viewers-finish 收尾（status→确认→cleanup）
                            /multi-viewers-say 插话（零 LLM，直接 spawn human_sayer.py）
                              /multi-viewers-config 启动参数默认值（零 LLM，调 --set-default）

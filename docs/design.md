@@ -736,6 +736,19 @@ commit 是溯源记录、本节是长期引用点——不并存两份权威值�
     resume 新命令面、env 回退配置、`runCli` 超时、启动路径继续优化（已在 1–2s 地板）、
     给 stalled 加第三种动作。**契约例外**：扩展作为包内第一方消费者**直连**
     `mv_cli.py`（实测 shim 61ms vs 直连 58–66ms，性能上零差异；按契约一致性记例外一行）。
+    **观看短口令 `!!pmv-follow`（2026-10-10）**：用户不必复制长命令——扩展注册
+    `pi.on("user_bash")`，把严格匹配的口令（`pmv-follow` / `pmv-follow <目录>`）**展开成
+    真实命令**（`human_viewer.py <dir> --follow`，目录用 sid 现查），并返回 `{operations}`
+    （自定义执行后端）⇒ **输出仍由 pi 累加/渲染**（`onData`），流式与 `!!` 语义不变、不进
+    上下文。**为什么不做 slash 命令**：命令处理器拿不到任何 bash 执行入口
+    （`ExtensionCommandContext` 无此能力；`executeTool` 只在 tool 上下文且需活跃 tool
+    call），而 slash 命令的可见通道只有 notify / sendMessage / widget ⇒ 分钟级**实时**输出
+    无处安放（pi-web 不渲染组件、`setEditorText` 是空实现）——**bash 通道是唯一
+    「实时 ∩ 零上下文」的显示面**。`!pmv-follow`（单叹号 ⇒ 会进上下文）**拒绝**并提示改用
+    `!!`；不匹配的命令**一律不接管**（交回 pi 的实现）——两条都有 harness 断言（含
+    「绝不吞掉其它命令」）。它是"宏"不是脚本：磁盘上无同名文件，扩展缺席时 shell 报
+    `command not found`（可见失败）。
+
     **建视角流程（`/multi-viewers-setup`，仍是 prompt）**：机械部分下移到
     `mv.sh --set-viewer <名字>`（正文从 stdin 读）——**命名规则 / 不覆盖已有 / 空正文拒绝 /
     写完校验并回显**四条由命令保证（此前是 prompt 里给 LLM 的纪律，会漏）；prompt 只负责
