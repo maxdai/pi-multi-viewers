@@ -180,7 +180,7 @@ class TestCurrentSessionFile(unittest.TestCase):
                                     .endswith("a_AAA.jsonl"))
 
     def test_fallback_last_when_no_sid(self):
-        """无 sid → 目录内字典序最后（与旧兜底同规则）。"""
+        """无 sid 且 **mtime 相同** → 字典序最后（确定性的 tiebreak，非主判据）。"""
         import start_discussion as sd
         with tempfile.TemporaryDirectory() as tmp:
             sdir = self._fake_sessions(tmp, ["a_AAA.jsonl", "b_ZZZ.jsonl"])
@@ -190,6 +190,37 @@ class TestCurrentSessionFile(unittest.TestCase):
                                        return_value=sdir):
                     self.assertTrue(sd.current_session_file()
                                     .endswith("b_ZZZ.jsonl"))
+
+    def test_fallback_prefers_newest_mtime(self):
+        """无 sid → 取 **mtime 最新**（与 pi 的 findMostRecentSession 同规则）。
+
+        反例构造：名字序与 mtime 序**相反**（`a_new` 新、`z_old` 旧）——
+        旧实现（字典序最后）会取到 `z_old`（错），故该用例有判别力。
+        """
+        import start_discussion as sd
+        with tempfile.TemporaryDirectory() as tmp:
+            sdir = self._fake_sessions(tmp, ["a_new.jsonl", "z_old.jsonl"])
+            os.utime(os.path.join(sdir, "a_new.jsonl"), (2_000_000_000, 2_000_000_000))
+            os.utime(os.path.join(sdir, "z_old.jsonl"), (1_000_000_000, 1_000_000_000))
+            with mock.patch.dict(os.environ, {
+                    "PI_SESSION_FILE": "", "PI_SESSION_ID": ""}):
+                with mock.patch.object(spec_gen, "pi_sessions_dir",
+                                       return_value=sdir):
+                    self.assertTrue(sd.current_session_file()
+                                    .endswith("a_new.jsonl"))
+
+    def test_sessions_dir_env_override(self):
+        """`PI_CODING_AGENT_SESSION_DIR` 是 pi 的 session 目录覆盖（精确目录，
+        不再拼 cwd 编码；`session-manager.ts:1906`）——我们认它，否则会去默认
+        目录找，轻则找不到、重则在旧 session 里静默取错。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.dict(os.environ,
+                                 {"PI_CODING_AGENT_SESSION_DIR": tmp}):
+                self.assertEqual(spec_gen.pi_sessions_dir("/some/proj"), tmp)
+            with mock.patch.dict(os.environ,
+                                 {"PI_CODING_AGENT_SESSION_DIR": ""}):
+                self.assertTrue(spec_gen.pi_sessions_dir("/some/proj")
+                                .endswith(os.path.join("sessions", "--some-proj--")))
 
     def test_session_file_env_wins(self):
         """PI_SESSION_FILE（pi 直接给的路径）最精确，优先。"""

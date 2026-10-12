@@ -29,12 +29,13 @@ const BIN = "/tmp/mv-harness/bin";
 const SCEN = "/tmp/mv-harness/scen";
 const WORK = "/tmp/mv-harness/work";
 const SID = "testsid";
+const SFILE = "/tmp/mv-harness/main.jsonl";
 
 // ---- 假 python3（每次调用记一行 sid+argv，并按队列回放输出/退出码）----
 const FAKE = `#!/usr/bin/env bash
 D="\${FAKE_DIR:?}"
 n=$(cat "$D/n" 2>/dev/null || echo 0); n=$((n+1)); echo "$n" > "$D/n"
-printf 'sid=%s :: %s\\n' "\${PI_SESSION_ID:-(unset)}" "$*" >> "$D/calls"
+  printf 'sid=%s sfile=%s :: %s\n' "\${PI_SESSION_ID:-(unset)}" "\${PI_SESSION_FILE:-(unset)}" "$*" >> "$D/calls"
 out="$D/out.$n"; rc_file="$D/rc.$n"
 [ -f "$out" ] && cat "$out"
 [ -f "$rc_file" ] && exit "$(cat "$rc_file")"
@@ -42,7 +43,7 @@ exit 0
 `;
 
 type Call = { kind: string; args: any };
-type Cli = { sid: string; argv: string };
+type Cli = { sid: string; sfile: string; argv: string };
 
 // 当前场景的日志数组：mockCtx 每次切换（pi.sendMessage 与 ctx.ui.* 写**同一份**日志，
 // 于是"四通道顺序"可以一次精确断言——评审 ③ 的单一日志要求）。
@@ -64,7 +65,10 @@ function mockCtx(calls: Call[], answer?: any) {
   currentCalls = calls;
   return {
     cwd: WORK,
-    sessionManager: { getSessionId: () => SID },
+      sessionManager: {
+        getSessionId: () => SID,
+        getSessionFile: () => SFILE,
+      },
     ui: {
       notify: (m: string, l?: string) => calls.push({ kind: `notify:${l}`, args: m }),
       select: async (t: string, o: string[]) => {
@@ -99,8 +103,10 @@ function cliCalls(): Cli[] {
     .split("\n")
     .filter(Boolean)
     .map((l) => {
-      const [sid, argv] = l.split(" :: ");
-      return { sid: sid.replace(/^sid=/, ""), argv: argv ?? "" };
+        const [meta, argv] = l.split(" :: ");
+        const sid = (meta ?? "").match(/sid=([^ ]*)/)?.[1] ?? "";
+        const sfile = (meta ?? "").match(/sfile=([^ ]*)/)?.[1] ?? "";
+        return { sid, sfile, argv: argv ?? "" };
     });
 }
 
@@ -176,6 +182,7 @@ console.log("=== /multi-viewers ===");
   const cs = cliCalls();
   check("引号剥离：主题不带引号进 CLI", !!cs[0]?.argv.includes("--prepare 审阅 主题 只提意见"), cs);
   check("sid 注入（prepare）", cs[0]?.sid === SID, cs[0]);
+  check("PI_SESSION_FILE 注入（prepare）", cs[0]?.sfile === SFILE, cs[0]);
 }
 {
   scen({ "out.1": "[spec-gen] 错误: 没有可用视角\n", "rc.1": 1 });
@@ -265,6 +272,7 @@ console.log("=== /multi-viewers ===");
     );
   }
   check("sid 注入（start）", cliCalls()[1]?.sid === SID, cliCalls()[1]);
+  check("PI_SESSION_FILE 注入（start）", cliCalls()[1]?.sfile === SFILE, cliCalls()[1]);
   check("第 2 次调用 = --start <spec>", cliCalls()[1]?.argv.includes("--start /tmp/mv-harness/work/mv-spec-2"), cliCalls());
   // 消息流持久留痕通道（pi-web 渲染为折叠块；用户要求「message 流中也能显示」）
   {

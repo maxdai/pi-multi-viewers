@@ -969,6 +969,18 @@ fork 机制建立在 pi 的 **session jsonl 文件**上——这是**外部契�
 | 语义（**只复刻这三处**） | ① replay 起点 = 路径上最后一个 `compaction` 的 `firstKeptEntryId`；② 可见集合 = 该锚点之后的条目（`_normalize_entries` 据此移除窗口内 compaction 并桥接 `parentId`，不变量 I4）；③ **上下文 = 从 leaf 沿 `parentId` 上溯**、遇缺失父节点**静默停止**（`buildContextEntries`/`buildSessionPath`）⇒ 删除条目必须桥接（`_bridge_parents`；2026-10-03 发现 tlc 剔除漏桥接时可达 65/13454 条） |
 | 条目类型 | `compaction`（读/移除）、`thinking_level_change`（剔除继承值，否则 pi 不写本场生效值）、`session_info.name`、`custom_message`（我们的边界条目） |
 
+**会话目录与环境变量（2026-10-09 核对，`session-manager.ts:1906` + `main.ts:688-691`）**：
+pi 的目录 = `sessionDir ? normalizePath(sessionDir) : <agent 目录>/sessions/<cwd 编码>`；
+`sessionDir` 有三个来源：`--session-dir` flag → `PI_CODING_AGENT_SESSION_DIR` env →
+settings 的 `sessionDir`，且**覆盖值是精确目录**（不再拼 cwd 编码；pi 改用
+"session header 的 cwd 过滤"区分）。我们：认 **env** 那条（`spec_gen.pi_sessions_dir`）；
+flag 与 settings 两条是**已知边界**（进程外看不到）——命中时我们会在默认目录找，
+找不到就响亮报错（`--start` 的 fork 源解析），不会静默取错（同一目录里若还留着
+历史 session，兜底取"最近活跃"是已知残余风险）。另：`PI_SESSION_FILE`（pi 的 bash
+工具注入）与扩展注入的 `ctx.sessionManager.getSessionFile()` 是**最精确入口**——
+`current_session_file()` 首选它；无它时按 sid 匹配文件名，最后才按 **mtime 最新**
+（与 pi 的 `findMostRecentSession` 同规则；此前是字典序，已对齐）。
+
 **触碰面**（适配范围；口径 = 函数体行数，2026-09-22 摸底）：`meeting_fs` 456 行
 （真正格式耦合 ≈300：`build_fork_source` + `_normalize_entries`）· `meeting_loop` 141 ·
 `spec_gen` 66 · `observability` 33。

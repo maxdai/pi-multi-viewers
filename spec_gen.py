@@ -121,6 +121,16 @@ def pi_sessions_dir(cwd):
     _detect_pi_model_thinking 与 resolve_fork_source 两处字面量重复，
     AGENTS.md 明言"编码错一根横线 = 静默解析不到"——风险点不应复制。
     """
+    # pi 的目录选择（`session-manager.ts:1906`）：
+    #   `sessionDir ? normalizePath(sessionDir) : getDefaultSessionDir(cwd)`
+    # 其中 sessionDir 来自三处（`main.ts:688-691`）：`--session-dir` flag /
+    # `PI_CODING_AGENT_SESSION_DIR` env / settings 的 `sessionDir`。**覆盖值是
+    # 精确目录**（不再拼 cwd 编码；pi 改用"按 session header 的 cwd 过滤"来区分）。
+    # 我们只认 env 那一条（进程外唯一可见的）——另两条是**已知边界**（见
+    # `docs/design.md` 六）：命中时我们会去默认目录找，找不到就响亮报错。
+    override = os.environ.get("PI_CODING_AGENT_SESSION_DIR") or ""
+    if override:
+        return os.path.expanduser(override)
     enc = "--" + cwd.strip("/").replace("/", "-") + "--"
     return os.path.join(meeting_fs.pi_agent_dir(), "sessions", enc)
 
@@ -140,17 +150,41 @@ def current_session_file():
         return sf
     sdir = pi_sessions_dir(os.getcwd())
     try:
-        cands = sorted(f for f in os.listdir(sdir) if f.endswith(".jsonl"))
+        cands = [f for f in os.listdir(sdir) if f.endswith(".jsonl")]
     except OSError:
         cands = []
     if not cands:
         return ""
     sid = os.environ.get("PI_SESSION_ID") or ""
     if sid:
-        hits = [f for f in cands if sid in f]
+        hits = [os.path.join(sdir, f) for f in cands if sid in f]
         if hits:
-            return os.path.join(sdir, hits[-1])
-    return os.path.join(sdir, cands[-1])
+            return _newest_by_mtime(hits)
+    return _newest_by_mtime([os.path.join(sdir, f) for f in cands])
+
+
+def _newest_by_mtime(paths):
+    """按 **mtime** 取最新——与 pi 的 `findMostRecentSession` 同规则
+    （`session-manager.ts:749-757` 按 `mtimeMs` 降序）。
+
+    为什么不用字典序（此前实现）：文件名带 ISO 时间戳时两者通常一致，但补写过的
+    文件、时钟回拨、跨工具写入都会让"字典序最后"≠"最近活跃"——pi 自己认的是
+    mtime，我们跟它对齐（唯一实现，两处调用共用）。
+    stat 失败（竞态删除）⇒ 跳过该文件；全部失败 ⇒ 退回字典序（可见的保守解）。
+    """
+    best, best_m = "", -1.0
+    for p in paths:
+        try:
+            m = os.stat(p).st_mtime
+        except OSError:
+            continue
+        # 同 mtime（常见：同一次批量写入）⇒ 按名字序取后者：保持确定性，
+        # 也与"旧兜底"的可见行为一致（避免 listdir 顺序带来的不确定）
+        if m > best_m or (m == best_m and p > best):
+            best, best_m = p, m
+    if best:
+        return best
+    return sorted(paths)[-1] if paths else ""
 
 
 def resolve_fork_source():

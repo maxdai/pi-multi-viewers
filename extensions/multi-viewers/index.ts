@@ -50,10 +50,13 @@ export default function register(pi: any) {
         return;
       }
       const sid = ctx.sessionManager.getSessionId();
+      // 精确路径（优先于"按 sid 匹配文件名"）：python 侧 current_session_file()
+      // 首选 PI_SESSION_FILE——省掉一层猜测，也让 `--fork-source` 的来源无歧义。
+      const sfile = ctx.sessionManager.getSessionFile();
       const cwd = ctx.cwd;
 
       // ① 生成 spec（零 LLM：question.md 首行就是主题原文）
-      const prep = await runCli(["--prepare", topic], cwd, sid);
+      const prep = await runCli(["--prepare", topic], cwd, sid, sfile);
       const specDir = grab(prep.output, "[prepare] spec=");
       if (prep.rc !== 0 || !specDir) {
         ctx.ui.notify(
@@ -81,7 +84,7 @@ export default function register(pi: any) {
       }
 
       // ③ 启动（环境创建 + 拉起 loop；spec 会被消费删除——CLI 的既定行为）
-      const start = await runCli(["--start", specDir], cwd, sid);
+      const start = await runCli(["--start", specDir], cwd, sid, sfile);
       const watch = grab(start.output, "[start] watch=");
       const dir = grab(start.output, "[start] dir=");
       if (start.rc !== 0 || !watch || !dir) {

@@ -60,16 +60,18 @@ const OBSERVABILITY = path.join(PACKAGE_ROOT, "observability.py");
 export const MV_SH = `bash ${PACKAGE_ROOT}/scripts/mv.sh`;
 
 /** 跑一次子进程并收输出。三处调用点的差异全部显式化（合并前是三份样板）：
- *  `sid` 决定是否注入 PI_SESSION_ID（目录名与 find-dir 的唯一钥匙）；
+ *  `sid`/`sessionFile` 决定是否注入 `PI_SESSION_ID` / `PI_SESSION_FILE`——它们是
+ *  目录命名、`--find-dir` 与 fork 源解析的钥匙；`PI_SESSION_FILE` 是**精确路径**
+ *  （优先于"按 sid 匹配文件名"，省掉一层猜测）；
  *  `mergeStderr` 决定 stderr 是否并进同一缓冲（不并时必须 resume 掉，否则管道满阻塞）。 */
 function capture(
   args: string[],
-  opts: { cwd?: string; sid?: string; mergeStderr?: boolean } = {},
+  opts: { cwd?: string; sid?: string; sessionFile?: string; mergeStderr?: boolean } = {},
 ): Promise<{ code: number; output: string }> {
   return new Promise((resolve) => {
-    const env = opts.sid
-      ? { ...process.env, PI_SESSION_ID: opts.sid }
-      : process.env;
+    const env = { ...process.env };
+    if (opts.sid) env.PI_SESSION_ID = opts.sid;
+    if (opts.sessionFile) env.PI_SESSION_FILE = opts.sessionFile;
     const proc = spawn("python3", args, {
       cwd: opts.cwd,
       env,
@@ -92,8 +94,10 @@ export async function runCli(
   args: string[],
   cwd: string,
   sid: string,
+  sessionFile?: string,
 ): Promise<{ rc: number; output: string }> {
-  const r = await capture([CLI, ...args], { cwd, sid, mergeStderr: true });
+  const r = await capture([CLI, ...args],
+                          { cwd, sid, sessionFile, mergeStderr: true });
   return { rc: r.code, output: r.output.trim() };
 }
 

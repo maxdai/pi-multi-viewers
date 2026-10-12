@@ -103,7 +103,7 @@ MCP 那份是**常量** `meeting_fs.BUILTIN_MCP_ENTRY = "builtin:mcp"`（pi 0.99
 
 **主 pi 完全不受影响**（只改我们 spawn 的 agent 进程命令行；主 pi 的 MC/历史学家照常）。
 
-**关键约定**：pi sessions 目录编码 = `--` + 去首尾斜杠内斜杠换 `-` + `--`
+**关键约定**：pi sessions 目录编码 = `--` + 去首尾斜杠内斜杠换 `-` + `--`（目录可被 `PI_CODING_AGENT_SESSION_DIR` / `--session-dir` / settings 覆盖——见 `docs/design.md` 六）
 （`/tmp` → `--tmp--`；wrapper 解析 fork 源依赖它，编码错一根横线 = 静默
 解析不到——已加显式报错）。**fork-only fail-fast**：缺 fork 源 = 明确报错
 （loop/start/wrapper 三层），无静默退化（无上下文的视角分析违背产品本质）。
