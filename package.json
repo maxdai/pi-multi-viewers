@@ -24,6 +24,7 @@
     "docs/design.md",
     "docs/durable-subagent-rebuild.md",
     "docs/test-methodology.md",
+    "docs/release.md",
     "docs/examples",
     "docs/reviews"
   ],
