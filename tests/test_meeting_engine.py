@@ -712,5 +712,77 @@ class TestFinalize(unittest.TestCase):
             shutil.rmtree(tmp, ignore_errors=True)
 
 
+class TestPollSleepSeconds(unittest.TestCase):
+    """轮询等待时长：抖动不得把 sleep 变成负数（否则 ValueError ⇒ 测试偶发失败）。"""
+
+    def test_negative_jitter_is_clamped_to_zero(self):
+        import meeting_engine as me
+        # 抖动取到 -JITTER（比 poll_interval 大）⇒ 旧写法为负 ⇒ 这里必须回到 0
+        with mock.patch.object(me.random, "uniform", return_value=-me.JITTER):
+            self.assertEqual(me._poll_sleep_seconds(0.1), 0.0)
+            self.assertEqual(me._poll_sleep_seconds(0.05), 0.0)
+
+    def test_positive_jitter_is_kept(self):
+        import meeting_engine as me
+        with mock.patch.object(me.random, "uniform", return_value=me.JITTER):
+            self.assertAlmostEqual(
+                me._poll_sleep_seconds(2.0), 2.0 + me.JITTER, places=6)
+
+    def test_never_negative_over_samples(self):
+        import meeting_engine as me
+        for interval in (0.0, 0.05, 0.1, 0.3, 2.0, 10.0):
+            for _ in range(200):
+                self.assertGreaterEqual(me._poll_sleep_seconds(interval), 0.0)
+
+    def test_jitter_expression_lives_only_in_the_helper(self):
+        """调用点锁：`random.uniform` 只允许出现在 `_poll_sleep_seconds` 内。
+
+        防的是"有人在热循环里再写一遍裸抖动表达式"（正是产生负 sleep 的写法）。
+        用 AST 定位**直接包含**该调用的函数——字符串检查会被 docstring 里的
+        说明文字误伤（本测试第一版就踩了）。
+        """
+        import ast
+        import inspect
+        import meeting_engine as me
+
+        tree = ast.parse(inspect.getsource(me))
+
+        class V(ast.NodeVisitor):
+            def __init__(self):
+                self.stack = []
+                self.holders = set()
+
+            def visit_FunctionDef(self, node):
+                self.stack.append(node.name)
+                self.generic_visit(node)
+                self.stack.pop()
+
+            def visit_Call(self, node):
+                f = node.func
+                if (isinstance(f, ast.Attribute) and f.attr == "uniform"
+                        and isinstance(f.value, ast.Name)
+                        and f.value.id == "random"):
+                    self.holders.add(self.stack[-1] if self.stack else "<module>")
+                self.generic_visit(node)
+
+        v = V()
+        v.visit(tree)
+        self.assertEqual(v.holders, {"_poll_sleep_seconds"}, v.holders)
+
+    def test_loop_sleeps_via_helper(self):
+        """`agent_loop` 内的 sleep 必须经 helper（值域被夹过的那个）。"""
+        import ast
+        import inspect
+        import meeting_engine as me
+
+        tree = ast.parse(inspect.getsource(me))
+        holder = next((n for n in ast.walk(tree)
+                       if isinstance(n, ast.FunctionDef)
+                       and n.name == "agent_loop"), None)
+        self.assertIsNotNone(holder, "未找到 agent_loop")
+        names = {n.func.id for n in ast.walk(holder)
+                 if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
+        self.assertIn("_poll_sleep_seconds", names, names)
+
 if __name__ == "__main__":
     unittest.main()

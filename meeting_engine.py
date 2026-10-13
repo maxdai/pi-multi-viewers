@@ -49,6 +49,16 @@ from meeting_core import (
 )
 POLL_INTERVAL = 2.0
 JITTER = 0.3
+
+
+def _poll_sleep_seconds(poll_interval):
+    """轮询等待时长（带抖动）。**下界夹到 0**：抖动是绝对值（`JITTER`），
+    当 `poll_interval` 比它小时（测试常把间隔传成 0.05–0.1）表达式会变负，
+    而 `time.sleep(负值)` 抛 ValueError——被异常边界吞成一条日志、循环照常
+    继续，但会让时序敏感的测试偶发失败（2026-10-13 定位：一次全量里 1 次
+    `ValueError: sleep length must be non-negative`）。生产默认 2.0s 碰不到。
+    """
+    return max(0.0, poll_interval + random.uniform(-JITTER, JITTER))
 MAX_RETRY = 3
 
 
@@ -751,7 +761,7 @@ def agent_loop(workdir, agent, responder,
                 continue
             # 无新消息（非唯一未冻结者）→ 等待（L2：化简，先 freezing 后 sleep）
             if not triggered:
-                time.sleep(poll_interval + random.uniform(-JITTER, JITTER))
+                time.sleep(_poll_sleep_seconds(poll_interval))
                 continue
 
             # ⑤.4 发言锁：我最后是 freezing → 锁（不发 message，等 RR）
