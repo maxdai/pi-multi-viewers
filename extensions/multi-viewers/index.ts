@@ -333,7 +333,7 @@ export default function register(pi: any) {
       return {
         result: {
           output:
-            "没有正在进行的分析（本 session 下找不到唯一的 mv-<sid>-* 目录）。\n" +
+            "没有正在进行的分析（按 `mv-<sid>-*` 找不到本 session 的分析目录）。\n" +
             `出路：显式指定目录 —— !!${FOLLOW_TOKEN} <目录>；` +
             `或查看状态 —— ${MV_SH} --status <目录>`,
           exitCode: 1,

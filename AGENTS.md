@@ -29,7 +29,8 @@ scripts/mv.sh        稳定入口 shim（exec mv_cli.py；路径被 prompt/READM
 scripts/pi-probe.sh  LLM 探针（跑 pi + 登记新 session → 残留检查器可追溯）
 scripts/check-residue.sh  残留检查（session/进程/目录三类；增删 scripts/ 时同步本节）
 scripts/archive-result.sh  归档 result.md（机械部分：逐字复制+校验/存档头骨架/索引行/删源副本）
-mv_cli.py            命令行实现（prepare/start/status/report/wait/cleanup/view/say/viewers/set-viewer）
+mv_cli.py            命令行实现（prepare/start/status/report/wait/cleanup/view/say/viewers/
+                     set-viewer/set-default）
 extensions/multi-viewers/  【单一扩展单元】index.ts = 四命令 + shared.ts = 助手
                            /multi-viewers 分析入口（prepare→暂停点弹窗→start→交付观看
                              + `!!pmv-follow` 宏：user_bash 事件把口令展开成真实观看命令
@@ -41,6 +42,7 @@ prompts/multi-viewers-setup.md  /multi-viewers-setup 建视角入口（建议→
                            # 那四条本来写进 prompt 的纪律（命名/不覆盖/非空/校验）改由命令保证
 docs/design.md       设计文档（fork 源模式与规模口径 + 决策记录）
 docs/durable-subagent-rebuild.md  durable subagent 重构的**可行性提要**（非计划；触发条件固定后再议）
+docs/test-methodology.md  测试方法论条目的仓库（制度与方法细节，AGENTS 不逐条同步）
 package.json         npm 包 pi-multi-viewers（pi.prompts 注册；**版本号唯一事实源**）
 templates/           AGENTS.md.tpl / agent.md.tpl / gitignore.tpl / spec-readme.md.tpl
 viewers/             示例视角（效率/简单/铁律——仅是形态示例，视角内容由用户按需自定）
@@ -52,7 +54,7 @@ tests/               测试（unittest discover tests）
 **fork 三件套**（初始化层与 pi-agents-helper 的全部差异所在）：
 
 1. **session fork**：首唤由本地循环生成 **fork 源文件**（`meeting_fs.build_fork_source`：从主 session 按模式裁剪——`summary` 定向摘要（**默认**，2026-10-09 起；决策 24：远端摘要+近端原始窗口）；`budget` 预算+折叠；`compaction` 按 compaction 边界；`full` 全量），再用 `pi --session <fork 源> --name <分析名>-<视角名>` 打开；后续唤醒 `--session-id <sid>` 续接（sid 存 `status-<agent>.json`，预生成 UUID）。
-   - **不用 `pi --fork`**：那是全量拷贝（长会话必超窗，实测 731k/930k tokens + 384k completion 预留 > 1M），且无法在尾部注入切换叙事
+   - **不用 `pi --fork`**：那是全量拷贝（长会话必超窗，实测 930k tokens + 384k completion 预留 > 1M），且无法在尾部注入切换叙事
    - 切换叙事（2 对"停止旧任务 → 新任务说明"对话）注入在 fork 源尾部——切断历史叙事惯性；主题取自 `protocol.json.topic`（**不**二次解析 question.md）
    - `--name` 是显示名 label（session_info entry），不劫持 id（id 归机制=UUID，名字归人）；规模/口径见 `docs/design.md`
 2. **cwd = 主项目**（forkCwd）：agent 直接读项目文件；work_dir 仅消息交换
@@ -88,8 +90,8 @@ tests/               测试（unittest discover tests）
 MC 自己的 `context.db` #916；上限**可调**：主 pi 抬到 131072 后首跑即成功、输出 36954 ✓）。
 （旧引的 445.9s / 447s 两笔属 2026-09-13 装置有缺陷的探针，已**退出证据位**——
 撤回记录见 `docs/design.md` 决策 20 证据段，本文件不复述。）
-零扩展**真场实测**：每次唤醒约 48–82s、收尾≈0%、historian 0 次（墙钟随唤醒数变动，
-区间与测点见 docs/design.md §二）。
+零扩展**真场实测**：收尾 ≈0%、historian 0 次（唤醒跨度与各场次数字见
+`docs/design.md` §二——本文件不复述区间，避免抄本漂移）。
 **mc-tools 档的实测**：MC 的 entry = **工具注册 + 两个生命周期钩子**（开/关 DB），
 **无** historian/压缩执行钩子 → historian **0**（真场：e2e24 0/3、e2e25 0）；
 `ctx_search` 实测可用 ✓；成本**未测得显著差异**（受控探针 n 小、组内方差>组间差 ✗；
@@ -198,6 +200,9 @@ loop、状态从 git 共享事实推导、单一事实源 = protocol.json、无�
 **进度单一事实源**：API 清单文档状态列（待测/已测/审阅/已修/复测）——
 任何时候打开清单即知进度；会话中断/重启由 AGENTS.md + 清单恢复。
 
+> 注（2026-10-12 核查）：该清单属**上游/本项目早期**形态，**不在本仓库**；本项目
+> 当前测试面以 `tests/` + `tests/run_tests.sh` 为准。
+
 **拼接点盲区教训**（pi-agents-helper 实测教训，同样适用）：测试覆盖不能
 只到函数级——main()/__main__/CLI 分发等**调用链拼接点**是独立盲区（mock
 打不到 runpy 的 __main__ 新模块）。API 清单必须显式包含拼接点，测试用
@@ -255,10 +260,11 @@ loop、状态从 git 共享事实推导、单一事实源 = protocol.json、无�
 
 ## 安装/发版状态（2026-09-11）
 
-- **当前形态**：prompt × 1（multi-viewers-setup 建视角）+ extension × 1（一单元注册四命令）
+- **当前形态**：prompt × 1（multi-viewers-setup 建视角）+ extension × 1（一单元注册四命令
+  + 一个 `user_bash` 宏 `!!pmv-follow`）
   ——一个扩展单元内注册四命令（`multi-viewers` 分析 / `multi-viewers-finish` 收尾 /
   `multi-viewers-say` 插话 / `multi-viewers-config` 启动参数默认值）；前两个靠 CLI
-  机器标记行取值（`[prepare] spec=` / `[start] dir=` / `[start] watch=` / `[status]` / `[dir]`），
+  机器标记行取值（`[prepare] spec=` / `[start] dir=` / `[start] watch=` / `[status]` / `[dir]` / `[result]`），
   say 与 config 零 LLM 直接转发给 `human_sayer.py` / `mv_cli`；
   扩展层测试：`tests/extension_harness.ts`（真扩展代码 + 假 python3 装置，零 LLM；
   `run_tests.sh` 自动带上——缺 bun 可见跳过、`MV_REQUIRE_BUN=1` 严格）。
