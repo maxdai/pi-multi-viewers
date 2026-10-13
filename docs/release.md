@@ -30,7 +30,14 @@
    `curl -s -o /dev/null -w '%{http_code}\n' https://registry.npmjs.org/<pkg>/<version>`
    ⇒ `200`。
 7. **真实安装冒烟**：临时目录装刚发布的版本（`npm install <pkg>@<version>`），从安装位置跑一次 CLI / 核对关键产物（不跑全量测试——见 `docs/test-methodology.md` #19「验证分层」）。
-8. **打 tag 并推送**（`vX.Y.Z`），核对本地 = `origin/main` = 远程（`git ls-remote`），工作区干净。
+8. **打 tag（annotated）并推送**——tag 本身带发布要点：
+   ```bash
+   git tag -a vX.Y.Z -m "X.Y.Z：<一句要点>" && git push origin vX.Y.Z
+   ```
+   · 为什么用 annotated（`-a`）：要点随 tag 走（`git show vX.Y.Z` 即可回顾该版内容）。
+   · 历史不统一（v0.10.0 是 annotated，v0.10.5–v0.10.7 是 lightweight）⇒ 从本约定
+     起统一 annotated；**旧 tag 不回改**（重写已发布的 tag 是破坏性操作）。
+   · 随后核对本地 = `origin/main` = 远程实际（`git ls-remote`），工作区干净。
 9. **残留复核**：`bash scripts/check-residue.sh`（session / 进程 / 目录三类）。
 
 ## 三、registry 传播滞后：**别把「读不到」当「没发成功」**
