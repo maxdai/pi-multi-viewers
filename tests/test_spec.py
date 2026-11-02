@@ -832,5 +832,26 @@ class TestHistorySection(unittest.TestCase):
         """降级到零扩展时不留空指引（否则 agents 找一个不存在的工具）。"""
         self.assertNotIn("需要项目历史时", self._render("mc-tools", False))
 
+class TestMessageClarityRule(unittest.TestCase):
+    """协议里的「用彼此能对上的词」：跨视角表述准确性要求（2026-10-27 用户定）。
+
+    为什么需要：各视角的上下文（fork 源 + 视角任务书）不同 ⇒ 词汇不共享；
+    自造的缩写/隐喻会让别的视角"看着像懂了"。这条锁三件事：**首次出现给定义**、
+    **指代具体到可检索物**、"只读这条消息能否复述"这个判据——防止有人删掉它。
+    """
+
+    def test_rule_present_with_anchors(self):
+        import spec_gen
+        args = mock.MagicMock()
+        args.background = None
+        out = spec_gen.gen_agents_md(args, "a", ["a", "b"],
+                                     main_pi_cwd="/root/x",
+                                     extension_policy="none")
+        self.assertIn("用彼此能对上的词", out)
+        self.assertIn("首次出现时就地给一句定义", out)   # 自造词必须定义
+        self.assertIn("只读你这条消息", out)             # 判据
+        self.assertIn("同样适用于 `summary`", out)       # 摘要也算
+
+
 if __name__ == "__main__":
     unittest.main()
