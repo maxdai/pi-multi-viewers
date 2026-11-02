@@ -224,6 +224,13 @@ def follow(base, bare, agents, max_meeting=None,
             _write_cursor(base, head)
             since = head
         if done:
+            # 收尾时**再对一次游标**。不变式：退出时游标 = 退出那一刻的 HEAD。
+            # 原因：上面这次 incremental 读 HEAD 之后可能又有提交落下（done 判据
+            # 本身就可能由新提交带来的结果成立）⇒ 差一条会让重启重放一条已看过的
+            # 消息（良性但语义不干净，也让"游标==最终HEAD"无法被断言）。
+            head2 = git_head(bare)
+            if head2 != since:
+                _write_cursor(base, head2)
             print(f"【分析已结束】result.md: {result_path(base)}",
                   flush=True)
             _print_report(base)

@@ -7,12 +7,16 @@
 4. viewer：增量输出（--since）、消息格式化、状态/done 检测
 """
 
+import contextlib
+import io
 import os
 import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
+
+import human_viewer
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -269,6 +273,31 @@ class TestViewer(unittest.TestCase):
         mode2, _, _, done2, _p = incremental(bare, ["a", "b"], None)
         self.assertEqual(mode2, "concluded")
         self.assertTrue(done2)          # 两条件齐 → 完成
+
+    def test_follow_resyncs_cursor_at_exit(self):
+        """退出时游标 = **退出那一刻**的 HEAD（即便最后一次读取看到的是旧 HEAD）。
+
+        确定性构造：把 `incremental` 打桩成"读到旧 head 且已完成"，而 bare 里已有
+        一条更新的提交 ⇒ 没有收尾补写就会落后一条（旧实现**必失败**，不依赖时序）。
+        """
+        from unittest import mock as _mock
+        from human_viewer import follow, _read_cursor
+        base, bare, wd = self._env("viewer-cursor-resync")
+        write_msg(wd["a"], "a/0001.md",
+                  {"from": "a", "type": "message", "mode": "meeting",
+                   "seen_at": "", "to": "all"}, "旧提交")
+        old_head = run_git(bare, "rev-parse", "HEAD").stdout.strip()
+        # 之后又落一条（模拟"读完 HEAD 之后才提交"的窗口）
+        self._write_result(wd["a"])
+        new_head = run_git(bare, "rev-parse", "HEAD").stdout.strip()
+        self.assertNotEqual(old_head, new_head)
+
+        stale = ("concluded", [], old_head, True,
+                 "冻结 0/2 ｜ 配额 0/7 ｜ 阶段 concluded")
+        with _mock.patch.object(human_viewer, "incremental", return_value=stale):
+            with contextlib.redirect_stdout(io.StringIO()):
+                follow(base, bare, ["a", "b"], poll_interval=0.01)
+        self.assertEqual(_read_cursor(base), new_head)
 
     def test_follow_cursor(self):
         """--follow 游标：增量后写游标，重启从游标继续。"""
